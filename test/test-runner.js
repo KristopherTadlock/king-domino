@@ -1,1 +1,1 @@
-import * as testExample from "/test/test-example.js";
+import * as testExample from '/test/test-example.js';
