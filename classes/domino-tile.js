@@ -1,4 +1,5 @@
 import { Landscapes } from "/classes/landscapes.js";
+import { Edges, EdgeOffset } from "/classes/edges.js";
 
 export class DominoTile {
   topEdge = null;
@@ -7,7 +8,7 @@ export class DominoTile {
   leftEdge = null;
   #calculating = false; //used when computing the score. A caculating flag says this tile has already been visited
   x; // the tile offset from castle. Positive is to the right, negative left
-  y; // the tile offset from cast. Positive is above, negative below
+  y; // the tile offset from castle. Positive is above, negative below
 
   /**
    * Generates a domino tile
@@ -17,6 +18,49 @@ export class DominoTile {
   constructor(landscape, crowns) {
     this.landscape = landscape;
     this.crowns = crowns;
+  }
+
+
+  /**
+   * Connects two dominos together
+   * @param {DominoTile} tile - The tile to connect to
+   * @param {Edges} edge - the edge to connect the tile
+   */
+  connectToEdge(tile, edge) {
+    switch(edge) {
+        case Edges.TOP:
+            this.topEdge = tile;
+            tile.bottomEdge = this;
+            tile.setOffset(
+                this.x + EdgeOffset.TOP.x,
+                this.y + EdgeOffset.TOP.y
+            );
+            break;
+        case Edges.BOTTOM:
+            this.bottomEdge = tile;
+            tile.topEdge = this;
+            tile.setOffset(
+                this.x + EdgeOffset.BOTTOM.x,
+                this.y + EdgeOffset.BOTTOM.y
+            );
+            break;
+        case Edges.LEFT:
+            this.leftEdge = tile;
+            tile.rightEdge = this;
+            tile.setOffset(
+                this.x + EdgeOffset.LEFT.x,
+                this.y + EdgeOffset.LEFT.y
+            );
+            break;
+        case Edges.RIGHT:
+            this.rightEdge = tile;
+            tile.leftEdge = this;
+            tile.setOffset(
+                this.x + EdgeOffset.RIGHT.x,
+                this.y + EdgeOffset.RIGHT.y
+            );
+            break;
+    }
   }
 
   setOffset(x, y) {
@@ -88,15 +132,21 @@ export class DominoTile {
 
   /**
    * Splits an array of edges. Filters out nulls and vistied edges.
-   * @param {Array.<{number}>} edges tile edges
+   * @param {Array.<{DominoTile}>} edges tile edges
    * @param {Landscapes} landscape landscape type of the tile
-   * @returns {Array.{<Array.<{Landscapes}>}>} Array partitioned by edges that match the given landscape type and those that are of a different type
+   * @returns {Array.{<Array.<{DominoTile}>}>} Array partitioned by edges that match the given landscape type and those that are of a different type
    */
   static partitionByLandscapes(edges, landscape) {
-    sameLandscape = [];
-    diffLandscape = [];
+    const sameLandscape = [];
+    const diffLandscape = [];
     edges.filter((edge) => !!edge && !edge.getHasVisited())
-    .forEach(edge => edge.landscape === landscape);
+    .forEach(edge => {
+        if (edge.landscape === landscape) {
+            sameLandscape.push(edge);
+        } else {
+            diffLandscape.push(edge);
+        }
+    });
     return [sameLandscape, diffLandscape];
   }
 }
