@@ -1,7 +1,7 @@
-import { it, assert } from '/test/test-framework.js';
-import { DominoTile } from "/classes/domino-tile.js";
-import { Landscapes } from "/classes/landscapes.js";
-import { Edges, EdgeOffset } from "/classes/edges.js";
+import { it, assert } from './test-framework.js';
+import { DominoTile } from "./../classes/domino-tile.js";
+import { Landscapes } from "./../classes/landscapes.js";
+import { Edges, EdgeOffset } from "./../classes/edges.js";
 
 /** Test constructor */
 (function() {
@@ -49,17 +49,14 @@ import { Edges, EdgeOffset } from "/classes/edges.js";
         )
     );
     const result = DominoTile.partitionByLandscapes(edges, Landscapes.FOREST);
-    it('should have two partitions', () => {
-        assert(result.length === 2);
-    });
     it('should have two of same landscape', () => {
-        assert(result[0].length === 2);
+        assert(result.matched.length === 2);
     });
     it('should have same landscape type of Forest', () => {
-        assert(result[0][0].landscape === Landscapes.FOREST);
+        assert(result.matched[0].landscape === Landscapes.FOREST);
     });
     it('should have have four total edges', () => {
-        assert(result[0].length + result[1].length === 4);
+        assert(result.matched.length + result.diff.length === 4);
     });
     edges = [];
     edges.push(new DominoTile(
@@ -76,10 +73,10 @@ import { Edges, EdgeOffset } from "/classes/edges.js";
     edges.push(null);
     const result2 = DominoTile.partitionByLandscapes(edges, Landscapes.FOREST);
     it('should have have empty diff landscapes', () => {
-        assert(result2[1].length === 0);
+        assert(result2.diff.length === 0);
     });
     it('should have have two total edges', () => {
-        assert(result2[0].length + result2[1].length === 2);
+        assert(result2.matched.length + result2.diff.length === 2);
     });
 })();
 

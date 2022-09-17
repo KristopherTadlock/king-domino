@@ -1,5 +1,5 @@
-import { Landscapes } from "/classes/landscapes.js";
-import { Edges, EdgeOffset } from "/classes/edges.js";
+import { Landscapes } from "./landscapes.js";
+import { Edges, EdgeOffset } from "./edges.js";
 
 export class DominoTile {
   topEdge = null;
@@ -7,8 +7,8 @@ export class DominoTile {
   rightEdge = null;
   leftEdge = null;
   #calculating = false; //used when computing the score. A caculating flag says this tile has already been visited
-  x; // the tile offset from castle. Positive is to the right, negative left
-  y; // the tile offset from castle. Positive is above, negative below
+  x = 0; // the tile offset from castle. Positive is to the right, negative left
+  y = 0; // the tile offset from castle. Positive is above, negative below
 
   /**
    * Generates a domino tile
@@ -19,7 +19,6 @@ export class DominoTile {
     this.landscape = landscape;
     this.crowns = crowns;
   }
-
 
   /**
    * Connects two dominos together
@@ -98,23 +97,24 @@ export class DominoTile {
   }
 
   /**
-   * Rotates all tiles attached to this one 90 degrees.
+   * Rotates all tiles attached to this one 90 degrees clockwise.
    * If this tile is part of a free domino, rotate the domino.
    * If this tile is part of a gameboard, rotate the gameboard.
    */
   rotate() {
     if (this.#calculating) return;
     this.#calculating = true;
+    let right, bottom, left, top;
     [right, bottom, left, top] = [
       this.rightEdge,
       this.bottomEdge,
       this.leftEdge,
       this.topEdge,
     ];
-    this.rightEdge = bottom;
-    this.bottomEdge = left;
-    this.leftEdge = top;
-    this.topEdge = right;
+    this.rightEdge = top;
+    this.bottomEdge = right;
+    this.leftEdge = bottom;
+    this.topEdge = left;
     [right, bottom, left, top]
       .filter((edge) => !!edge && !edge.getHasVisited())
       .forEach((edge) => {
@@ -132,9 +132,9 @@ export class DominoTile {
 
   /**
    * Splits an array of edges. Filters out nulls and vistied edges.
-   * @param {Array.<{DominoTile}>} edges tile edges
+   * @param {Array<DominoTile>} edges tile edges
    * @param {Landscapes} landscape landscape type of the tile
-   * @returns {Array.{<Array.<{DominoTile}>}>} Array partitioned by edges that match the given landscape type and those that are of a different type
+   * @returns {{matched: <Array<DominoTile>, diff: <Array<DominoTile>}} Array partitioned by edges that match the given landscape type and those that are of a different type
    */
   static partitionByLandscapes(edges, landscape) {
     const sameLandscape = [];
@@ -147,6 +147,9 @@ export class DominoTile {
             diffLandscape.push(edge);
         }
     });
-    return [sameLandscape, diffLandscape];
+    return { 
+        matched: sameLandscape, 
+        diff: diffLandscape
+    };
   }
 }
