@@ -1,14 +1,35 @@
 import { Landscapes } from "./landscapes.js";
 import { Edges, EdgeOffset } from "./edges.js";
 
+/**
+ * Represents the smallest unit on a gameboard. 
+ * A domino tile has a landscape type and zero or more crowns.
+ * A domino tile can be connected to other tiles by its four edges. 
+ * A tile's placement is given by its x and y offsets relative to the castle.
+ */
 export class DominoTile {
+  /** @type {DominoTile} */
   topEdge = null;
+  /** @type {DominoTile} */
   bottomEdge = null;
+  /** @type {DominoTile} */
   rightEdge = null;
+  /** @type {DominoTile} */
   leftEdge = null;
-  #calculating = false; //used when computing the score. A caculating flag says this tile has already been visited
-  x = 0; // the tile offset from castle. Positive is to the right, negative left
-  y = 0; // the tile offset from castle. Positive is above, negative below
+  /** 
+   * @type {boolean} 
+   * A caculating flag marks the tile as visited. 
+   * Used when reccursively calculating scores
+   */
+  #calculating = false;
+  /** The tile's horizontal offset from castle. 
+   * Positive is to the right, negative left 
+  */
+  x = 0; 
+  /** The tile's vertical offset from castle. 
+   * Positive is to the right, negative left 
+  */
+  y = 0;
 
   /**
    * Generates a domino tile
@@ -98,8 +119,8 @@ export class DominoTile {
 
   /**
    * Rotates all tiles attached to this one 90 degrees clockwise.
-   * If this tile is part of a free domino, rotate the domino.
-   * If this tile is part of a gameboard, rotate the gameboard.
+   * If this tile is part of a free domino, rotates the domino.
+   * If this tile is part of a gameboard, rotates the gameboard.
    */
   rotate() {
     if (this.#calculating) return;
@@ -124,17 +145,20 @@ export class DominoTile {
   }
 
   /**
-   * @returns {boolean} . When recursing through each tile, this is set to true if the tile has already been visited, else false.
+   * @returns {boolean} When recursing through each tile, this is set to true 
+   * if the tile has already been visited, else false.
    */
   getHasVisited() {
     return this.#calculating;
   }
 
   /**
-   * Splits an array of edges. Filters out nulls and vistied edges.
+   * Splits an array of edges. Filters out nulls and visited edges.
    * @param {Array<DominoTile>} edges tile edges
    * @param {Landscapes} landscape landscape type of the tile
-   * @returns {{matched: <Array<DominoTile>, diff: <Array<DominoTile>}} Array partitioned by edges that match the given landscape type and those that are of a different type
+   * @returns {{matched: <Array<DominoTile>, diff: <Array<DominoTile>}} 
+   * Array partitioned by edges that match the given landscape type and those that 
+   * are of a different type
    */
   static partitionByLandscapes(edges, landscape) {
     const sameLandscape = [];

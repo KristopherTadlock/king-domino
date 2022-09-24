@@ -1,7 +1,8 @@
-import { it, assert } from '/test/test-framework.js';
-import { Domino, DominoEnd } from "/classes/domino.js";
-import { DominoTile } from "/classes/domino-tile.js";
-import { Landscapes } from "/classes/landscapes.js";
+import { it, assert } from './test-framework.js';
+import { Domino, DominoEnd } from "../classes/domino.js";
+import { DominoTile } from "../classes/domino-tile.js";
+import { Landscapes } from "../classes/landscapes.js";
+import { Edges } from '../classes/edges.js';
 
 /** Test constructor */
 (function() {
@@ -21,7 +22,7 @@ import { Landscapes } from "/classes/landscapes.js";
         assert(domino.rightEnd === dominoTileRight);
     });
     it('should have number set', () => {
-        assert(domino.number === 10);
+        assert(domino.number === 10); 
     });
     it('should have tiles connected', () => {
         assert(domino.leftEnd.rightEdge === dominoTileRight);
@@ -44,30 +45,40 @@ import { Landscapes } from "/classes/landscapes.js";
         assert(domino.orientation === 0);
         assert(domino.leftEnd.rightEdge === dominoTileRight);
         assert(domino.rightEnd.leftEdge === dominoTileLeft);
+        assert(domino.getConnectedEdge(DominoEnd.LEFT) === Edges.RIGHT);
+        assert(domino.getConnectedEdge(DominoEnd.RIGHT) === Edges.LEFT);
     });
     domino.rotate();
     it('should have orientation 90', () => {
         assert(domino.orientation === 90);
         assert(domino.leftEnd.bottomEdge === dominoTileRight);
         assert(domino.rightEnd.topEdge === dominoTileLeft);
+        assert(domino.getConnectedEdge(DominoEnd.LEFT) === Edges.BOTTOM);
+        assert(domino.getConnectedEdge(DominoEnd.RIGHT) === Edges.TOP);
     });
     domino.rotate();
     it('should have orientation 180', () => {
         assert(domino.orientation === 180);
         assert(domino.leftEnd.leftEdge === dominoTileRight);
         assert(domino.rightEnd.rightEdge === dominoTileLeft);
+        assert(domino.getConnectedEdge(DominoEnd.LEFT) === Edges.LEFT);
+        assert(domino.getConnectedEdge(DominoEnd.RIGHT) === Edges.RIGHT);
     });
     domino.rotate();
     it('should have orientation 270', () => {
         assert(domino.orientation === 270);
         assert(domino.leftEnd.topEdge === dominoTileRight);
         assert(domino.rightEnd.bottomEdge === dominoTileLeft);
+        assert(domino.getConnectedEdge(DominoEnd.LEFT) === Edges.TOP);
+        assert(domino.getConnectedEdge(DominoEnd.RIGHT) === Edges.BOTTOM);
     });
     domino.rotate();
     it('should return to orientation 0', () => {
         assert(domino.orientation === 0);
         assert(domino.leftEnd.rightEdge === dominoTileRight);
         assert(domino.rightEnd.leftEdge === dominoTileLeft);
+        assert(domino.getConnectedEdge(DominoEnd.LEFT) === Edges.RIGHT);
+        assert(domino.getConnectedEdge(DominoEnd.RIGHT) === Edges.LEFT);
     });
 })();
 
@@ -87,5 +98,11 @@ import { Landscapes } from "/classes/landscapes.js";
     });
     it('should retrieve right end', () => {
         assert(domino.getTile(DominoEnd.RIGHT) === dominoTileRight);
+    });
+    it('should retrieve oppsite left end', () => {
+        assert(domino.getOppositeTile(DominoEnd.LEFT) === dominoTileRight);
+    });
+    it('should retrieve opposite right end', () => {
+        assert(domino.getOppositeTile(DominoEnd.RIGHT) === dominoTileLeft);
     });
 })();
