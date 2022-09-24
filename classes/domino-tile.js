@@ -27,7 +27,7 @@ export class DominoTile {
   */
   x = 0; 
   /** The tile's vertical offset from castle. 
-   * Positive is to the right, negative left 
+   * Positive is up, negative down 
   */
   y = 0;
 
