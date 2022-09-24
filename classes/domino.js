@@ -2,7 +2,7 @@ import { DominoTile } from "./domino-tile.js";
 import { Edges } from "./edges.js";
 
 /**
- * From zero degrees orientation, indicates right or left domino end tile
+ * From zero degrees orientation, indicates right or left domino end
  */ 
 export const DominoEnd = Object.freeze({
   LEFT: Symbol("left"),

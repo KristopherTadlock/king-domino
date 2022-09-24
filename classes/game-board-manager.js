@@ -19,9 +19,9 @@ class DominoCoordinates {
  */
 export class GameBoardManager {
     /**
-     * @type A dictionary with a key [x,y] and a value of domino tile.
+     * A dictionary with a key [x,y] and a value of domino tile.
      * [x,y] are the coordinates relative to the castle. Castle is always [0,0]
-     * ex: [3,2] is three tiles to the right and two tiles up from the castle.
+     * ex: [-3,2] is three tiles to the left and two tiles up from the castle.
      */
     #board = new Object();
 
@@ -33,10 +33,10 @@ export class GameBoardManager {
 
     /**
      * Validates the placement of a domino on the game board
-     * @param {Domino} domino - the domino being placed
-     * @param {DominoTile} tile - the tile the domino will connect to
-     * @param {Edges} tileEdge - the edge of the connecting tile
-     * @param {DominoEnd} dominoEnd - which end of the domino will connect to the tile
+     * @param {Domino} domino the domino being placed
+     * @param {DominoTile} tile the tile the domino will connect to
+     * @param {Edges} tileEdge the edge of the connecting tile
+     * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
      * @returns {boolean} true if the placement is valid
      */
     isValidPlacement(domino, tile, tileEdge, dominoEnd) {
@@ -46,10 +46,10 @@ export class GameBoardManager {
 
     /**
      * Check if the space the domino is trying to occupy is available
-     * @param {Domino} domino - the domino being placed
-     * @param {DominoTile} tile - the tile the domino will connect to
-     * @param {Edges} tileEdge - the edge of the connecting tile
-     * @param {DominoEnd} dominoEnd - which end of the domino will connect to the tile
+     * @param {Domino} domino the domino being placed
+     * @param {DominoTile} tile the tile the domino will connect to
+     * @param {Edges} tileEdge the edge of the connecting tile
+     * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
      * @returns {boolean} true if the domino has the space to be placed there
      */
     #hasFreeSpace(domino, tile, tileEdge, dominoEnd) {
@@ -58,10 +58,10 @@ export class GameBoardManager {
 
     /**
      * Returns a map of edges along the domino and tiles that will connect to those edges
-     * @param {Domino} domino - the domino being placed
-     * @param {DominoTile} tile - the tile the domino will connect to
-     * @param {Edges} tileEdge - the edge of the connecting tile
-     * @param {DominoEnd} dominoEnd - which end of the domino will connect to the tile
+     * @param {Domino} domino the domino being placed
+     * @param {DominoTile} tile the tile the domino will connect to
+     * @param {Edges} tileEdge the edge of the connecting tile
+     * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
      * @returns {{connectedEndEdges: Array<{tile: DominoTile, edge: Edges}>, attachedEndEdges: Array<{tile: DominoTile, edge: Edges}>}} returns two arrays containing a map 
      * of edges and tiles that will conntect on that edge. The connectedEnd will connect to `tile`, the attachedEnd is the other end of the domino
      * 
@@ -72,10 +72,10 @@ export class GameBoardManager {
 
     /**
      * Returns the x and y offset of each domino tile if placed in that position
-     * @param {Domino} domino - the domino being placed
-     * @param {DominoTile} tile - the tile the domino will connect to
-     * @param {Edges} tileEdge - the edge of the connecting tile
-     * @param {DominoEnd} dominoEnd - which end of the domino will connect to the tile
+     * @param {Domino} domino the domino being placed
+     * @param {DominoTile} tile the tile the domino will connect to
+     * @param {Edges} tileEdge the edge of the connecting tile
+     * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
      * @returns {{connectedEndCord: {x: number, y: number}, attachedEndCord: {x: number, y: number}}} returns two arrays containing a map 
      * of edges and tiles that will conntect on that edge. The connectedEnd will connect to `tile`, the attachedEnd is the other end of the domino
      * 
