@@ -22,11 +22,11 @@ export class DominoTile {
    * Used when reccursively calculating scores
    */
   #calculating = false;
-  /** The tile's horizontal offset from castle. 
+  /** The tile's horizontal offset from the castle. 
    * Positive is to the right, negative left 
   */
   x = 0; 
-  /** The tile's vertical offset from castle. 
+  /** The tile's vertical offset from the castle. 
    * Positive is up, negative down 
   */
   y = 0;
