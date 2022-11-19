@@ -1,13 +1,6 @@
 import { DominoTile } from "./domino-tile.js";
-import { Edges } from "./edges.js";
-
-/**
- * From zero degrees orientation, indicates right or left domino end
- */ 
-export const DominoEnd = Object.freeze({
-  LEFT: Symbol("left"),
-  RIGHT: Symbol("right"),
-});
+import { Edges } from "./enums/edges.js";
+import { DominoEnd } from "./enums/domino-end.js";
 
 /** A Domino is two tiles (right and left) with a "rank" number 
  * given by the back of the domino. 

@@ -1,8 +1,9 @@
 import { it, assert } from './test-framework.js';
-import { Domino, DominoEnd } from "../classes/domino.js";
+import { Domino } from "../classes/domino.js";
 import { DominoTile } from "../classes/domino-tile.js";
-import { Landscapes } from "../classes/landscapes.js";
-import { Edges } from '../classes/edges.js';
+import { Landscapes } from "../classes/enums/landscapes.js";
+import { Edges } from '../classes/enums/edges.js';
+import { DominoEnd } from '../classes/enums/domino-end.js';
 
 /** Test constructor */
 (function() {

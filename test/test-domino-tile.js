@@ -1,7 +1,7 @@
 import { it, assert } from './test-framework.js';
 import { DominoTile } from "./../classes/domino-tile.js";
-import { Landscapes } from "./../classes/landscapes.js";
-import { Edges, EdgeOffset } from "./../classes/edges.js";
+import { Landscapes } from "./../classes/enums/landscapes.js";
+import { Edges, EdgeOffset } from "./../classes/enums/edges.js";
 
 /** Test constructor */
 (function() {

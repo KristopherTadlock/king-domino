@@ -1,5 +1,5 @@
-import { Landscapes } from "./landscapes.js";
-import { Edges, EdgeOffset } from "./edges.js";
+import { Landscapes } from "./enums/landscapes.js";
+import { Edges, EdgeOffset } from "./enums/edges.js";
 
 /**
  * Represents the smallest unit on a gameboard. 
@@ -8,16 +8,18 @@ import { Edges, EdgeOffset } from "./edges.js";
  * A tile's placement is given by its x and y offsets relative to the castle.
  */
 export class DominoTile {
-  /** @type {Landscapes} 
+  /** 
+  * @type {Landscapes} 
   * Tiles are conecect to either a castle, the other end of the domino they belong to, 
   * or another a domino tile with the same Landscape type as itself. 
   */
-  landscape
-  /** @type {number} 
+  landscape;
+  /** 
+   * @type {number} 
    * A value between 0 and 3. Is a multiplier for itself and all connected
    * tiles of the same landscape type
   */
-  crowns
+  crowns;
   /** @type {DominoTile} */
   topEdge = null;
   /** @type {DominoTile} */
