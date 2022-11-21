@@ -150,13 +150,14 @@ export class GameBoardManager {
         const discoveredEdges = GameBoardManager.findDiscoveredEdges(domino, tile, tileEdge, dominoEnd, board);
         const connectedTile = domino.getTile(dominoEnd);
         const attachedTile = domino.getOppositeTile(dominoEnd);
-        const hasAtLeastOneEdge = discoveredEdges.connectedEndEdges.length === 0; 
-        const hasInvalidConnectedEdge = discoveredEdges.connectedEndEdges.find(EdgeProps => {
-            EdgeProps.lanscape !== connectedTile.landscape 
-                || EdgeProps.lanscape === Landscapes.CASTLE;
+        const hasAtLeastOneEdge = discoveredEdges.connectedEndEdges.length > 0; 
+        const hasInvalidConnectedEdge = !!discoveredEdges.connectedEndEdges.find(EdgeProps => {
+            return !(EdgeProps.tile.landscape === connectedTile.landscape 
+                || EdgeProps.tile.landscape === Landscapes.CASTLE);
         });
-        const hasInvalidAttachedEdge = discoveredEdges.attachedEndEdges.find(EdgeProps => {
-            EdgeProps.lanscape !== attachedTile.landscape;
+        const hasInvalidAttachedEdge = !!discoveredEdges.attachedEndEdges.find(EdgeProps => {
+            return !(EdgeProps.tile.landscape === attachedTile.landscape 
+                || EdgeProps.tile.landscape === Landscapes.CASTLE);
         });
         return hasAtLeastOneEdge && !hasInvalidConnectedEdge && !hasInvalidAttachedEdge;
     }
@@ -195,8 +196,8 @@ export class GameBoardManager {
             });
         });
         return {
-            connectedEndEdges: connectedEndEdges,
-            attachedEndEdges: attachedEndEdges
+            connectedEndEdges: connectedEndEdges.filter(connection => !!connection.tile),
+            attachedEndEdges: attachedEndEdges.filter(connection => !!connection.tile)
         };
     }
 
