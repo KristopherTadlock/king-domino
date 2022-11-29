@@ -51,16 +51,62 @@ export class GameBoardManager {
     }
 
     /**
+     * 
+     * @param {Domino} domino the domino being placed
+     * @param {DominoTile} tile the tile the domino will connect to
+     * @param {Edges} tileEdge the edge of the connecting tile
+     * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
+     * @returns {?DominoTile} the tile that was placed (according to the provided domino and the specified "end" of the domino)
+     * with its internal coordinates updated to reflect its placement on the game board. Will return null if the domino cannot be placed
+     * at that position. 
+     */
+    placeDomino(domino, tile, tileEdge, dominoEnd) {
+        const isValidPlacement = GameBoardManager.isValidPlacement(
+            domino,
+            tile,
+            tileEdge,
+            dominoEnd,
+            this.#board,
+            this.maxBoardSize(),
+            this.#boardSize
+        );
+        if (!isValidPlacement) {
+            return null;
+        } else {
+            const edgeConnections = GameBoardManager.findDiscoveredEdges(
+                domino,
+                tile,
+                tileEdge,
+                dominoEnd, 
+                this.#board
+            );
+            const connectedTile = domino.getTile(dominoEnd);
+            const attachedTile = domino.getOppositeTile(dominoEnd);
+            edgeConnections.connectedEndEdges.forEach(EdgeProps => {
+                connectedTile.connectToEdge(EdgeProps.tile, EdgeProps.edge);
+            });
+            edgeConnections.attachedEndEdges.forEach(EdgeProps => {
+                attachedTile.connectToEdge(EdgeProps.tile, EdgeProps.edge);
+            });
+            return connectedTile;
+        }
+    }
+
+    /**
      * Validates the placement of a domino on the game board
      * @param {Domino} domino the domino being placed
      * @param {DominoTile} tile the tile the domino will connect to
      * @param {Edges} tileEdge the edge of the connecting tile
      * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
+     * @param {Object} board the object representing the gameboard
+     * @param {number} maxBoardSize The maximum size of the board, in number of tiles, along any axis
+     * @param {BoardMinMaxAxis} boardAxis The min and max offsets of the gameboard
      * @returns {boolean} true if the placement is valid
      */
-    isValidPlacement(domino, tile, tileEdge, dominoEnd) {
-        const dominoTile = domino.getTile(dominoEnd);
-
+    static isValidPlacement(domino, tile, tileEdge, dominoEnd, board, maxBoardSize, boardAxis) {
+        const hasFreeSpace = GameBoardManager.hasFreeSpace(domino, tile, tileEdge, dominoEnd, board, maxBoardSize, boardAxis);
+        const hasValidEdges = GameBoardManager.hasValidEdges(domino, tile, tileEdge, dominoEnd, board);
+        return hasFreeSpace && hasValidEdges;
     }
 
     /**
@@ -70,6 +116,7 @@ export class GameBoardManager {
      * @param {Edges} tileEdge the edge of the connecting tile
      * @param {DominoEnd} dominoEnd which end of the domino will connect to the tile
      * @param {Object} board the object representing the gameboard
+     * @param {number} maxBoardSize The maximum size of the board, in number of tiles, along any axis
      * @param {BoardMinMaxAxis} boardAxis The min and max offsets of the gameboard
      * @returns {boolean} true if the domino has the space to be placed there
      */
