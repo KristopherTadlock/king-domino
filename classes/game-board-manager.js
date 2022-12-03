@@ -67,7 +67,7 @@ export class GameBoardManager {
             tileEdge,
             dominoEnd,
             this.#board,
-            this.maxBoardSize(),
+            this.maxBoardSize,
             this.#boardSize
         );
         if (!isValidPlacement) {
@@ -82,14 +82,24 @@ export class GameBoardManager {
             );
             const connectedTile = domino.getTile(dominoEnd);
             const attachedTile = domino.getOppositeTile(dominoEnd);
-            edgeConnections.connectedEndEdges.forEach(EdgeProps => {
-                connectedTile.connectToEdge(EdgeProps.tile, EdgeProps.edge);
-            });
-            edgeConnections.attachedEndEdges.forEach(EdgeProps => {
-                attachedTile.connectToEdge(EdgeProps.tile, EdgeProps.edge);
-            });
+            const coordinates = GameBoardManager.getDominoCoordinates(domino, tile, tileEdge, dominoEnd);
+            connectedTile.setOffset(coordinates.connectedEnd.x, coordinates.connectedEnd.y);
+            attachedTile.setOffset(coordinates.attachedEnd.x, coordinates.attachedEnd.y);
+            this.#connectTile(edgeConnections.connectedEndEdges, connectedTile);
+            this.#connectTile(edgeConnections.attachedEndEdges, attachedTile);
             return connectedTile;
         }
+    }
+
+    /**
+     * @param {Array<{tile: DominoTile, edge: Edges}} edges the edges that will be connected to the tile
+     * @param {DominoTile} tile the tile to be placed on the board and connected to the edges
+     */
+    #connectTile(edges, tile) {
+        edges.forEach(EdgeProps => {
+            tile.connectToEdge(EdgeProps.tile, EdgeProps.edge);
+        });
+        this.#board[tile.x.toString() + ',' + tile.y.toString()] = tile;
     }
 
     /**
@@ -198,15 +208,15 @@ export class GameBoardManager {
         const connectedTile = domino.getTile(dominoEnd);
         const attachedTile = domino.getOppositeTile(dominoEnd);
         const hasAtLeastOneEdge = discoveredEdges.connectedEndEdges.length > 0; 
-        const hasInvalidConnectedEdge = !!discoveredEdges.connectedEndEdges.find(EdgeProps => {
-            return !(EdgeProps.tile.landscape === connectedTile.landscape 
-                || EdgeProps.tile.landscape === Landscapes.CASTLE);
+        const hasValidConnectedEdge = !!discoveredEdges.connectedEndEdges.find(EdgeProps => {
+            return EdgeProps.tile.landscape === connectedTile.landscape 
+                || EdgeProps.tile.landscape === Landscapes.CASTLE;
         });
-        const hasInvalidAttachedEdge = !!discoveredEdges.attachedEndEdges.find(EdgeProps => {
-            return !(EdgeProps.tile.landscape === attachedTile.landscape 
-                || EdgeProps.tile.landscape === Landscapes.CASTLE);
+        const hasValidAttachedEdge = !!discoveredEdges.attachedEndEdges.find(EdgeProps => {
+            return EdgeProps.tile.landscape === attachedTile.landscape 
+                || EdgeProps.tile.landscape === Landscapes.CASTLE;
         });
-        return hasAtLeastOneEdge && !hasInvalidConnectedEdge && !hasInvalidAttachedEdge;
+        return hasAtLeastOneEdge && (hasValidConnectedEdge || hasValidAttachedEdge);
     }
 
     /**

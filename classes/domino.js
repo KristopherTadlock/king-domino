@@ -35,7 +35,7 @@ export class Domino {
     this.leftEnd = dominoTileLeft;
     this.rightEnd = dominoTileRight;
     this.number = number;
-    dominoTileLeft.connectToEdge(dominoTileRight, Edges.RIGHT)
+    dominoTileLeft.connectToEdge(dominoTileRight, Edges.RIGHT);
   }
 
   /**
@@ -51,7 +51,7 @@ export class Domino {
   /**
    * Retreives one end of the domino
    * @param {DominoEnd} end which end to retrieve
-   * @returns {Domino}
+   * @returns {DominoTile}
    */
   getTile(end) {
     return end === DominoEnd.LEFT ? this.leftEnd : this.rightEnd;
@@ -60,7 +60,7 @@ export class Domino {
   /**
    * Retreives the opposite end of the domino
    * @param {DominoEnd} end the opposite end of the tile to be retrieved
-   * @returns {Domino}
+   * @returns {DominoTile}
    */
   getOppositeTile(end) {
     return end === DominoEnd.LEFT ? this.rightEnd : this.leftEnd;

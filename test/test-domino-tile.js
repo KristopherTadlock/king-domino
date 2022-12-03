@@ -98,20 +98,12 @@ import { Edges, EdgeOffset } from "./../classes/enums/edges.js";
     it('should have reciprical connection on the left edge', () => {
         assert(domino_tile2.leftEdge === domino_tile1);
     });
-    it('should have correct offset for right edge', () => {
-        assert(domino_tile2.x === domino_tile1.x + EdgeOffset.RIGHT.x);
-        assert(domino_tile2.y === domino_tile1.y + EdgeOffset.RIGHT.y);
-    });
     domino_tile1.connectToEdge(domino_tile2, Edges.LEFT);
     it('should have connection on the left edge', () => {
         assert(domino_tile1.leftEdge === domino_tile2);
     });
     it('should have reciprical connection on the right edge', () => {
         assert(domino_tile2.rightEdge === domino_tile1);
-    });
-    it('should have correct offset for left edge', () => {
-        assert(domino_tile2.x === domino_tile1.x + EdgeOffset.LEFT.x);
-        assert(domino_tile2.y === domino_tile1.y + EdgeOffset.LEFT.y);
     });
     domino_tile1.connectToEdge(domino_tile2, Edges.TOP);
     it('should have connection on the top edge', () => {
@@ -120,19 +112,11 @@ import { Edges, EdgeOffset } from "./../classes/enums/edges.js";
     it('should have reciprical connection on the top edge', () => {
         assert(domino_tile2.bottomEdge === domino_tile1);
     });
-    it('should have correct offset for bottom edge', () => {
-        assert(domino_tile2.x === domino_tile1.x + EdgeOffset.TOP.x);
-        assert(domino_tile2.y === domino_tile1.y + EdgeOffset.TOP.y);
-    });
     domino_tile1.connectToEdge(domino_tile2, Edges.BOTTOM);
     it('should have connection on the bottom edge', () => {
         assert(domino_tile1.bottomEdge === domino_tile2);
     });
     it('should have reciprical connection on the bottom edge', () => {
         assert(domino_tile2.topEdge === domino_tile1);
-    });
-    it('should have correct offset for top edge', () => {
-        assert(domino_tile2.x === domino_tile1.x + EdgeOffset.BOTTOM.x);
-        assert(domino_tile2.y === domino_tile1.y + EdgeOffset.BOTTOM.y);
     });
 })();

@@ -54,7 +54,7 @@ export class DominoTile {
   }
 
   /**
-   * Connects two dominos together
+   * Connects two domino tiles together
    * @param {DominoTile} tile - The tile to connect to
    * @param {Edges} edge - the edge to connect the tile
    */
@@ -63,34 +63,18 @@ export class DominoTile {
         case Edges.TOP:
             this.topEdge = tile;
             tile.bottomEdge = this;
-            tile.setOffset(
-                this.x + EdgeOffset.TOP.x,
-                this.y + EdgeOffset.TOP.y
-            );
             break;
         case Edges.BOTTOM:
             this.bottomEdge = tile;
             tile.topEdge = this;
-            tile.setOffset(
-                this.x + EdgeOffset.BOTTOM.x,
-                this.y + EdgeOffset.BOTTOM.y
-            );
             break;
         case Edges.LEFT:
             this.leftEdge = tile;
             tile.rightEdge = this;
-            tile.setOffset(
-                this.x + EdgeOffset.LEFT.x,
-                this.y + EdgeOffset.LEFT.y
-            );
             break;
         case Edges.RIGHT:
             this.rightEdge = tile;
             tile.leftEdge = this;
-            tile.setOffset(
-                this.x + EdgeOffset.RIGHT.x,
-                this.y + EdgeOffset.RIGHT.y
-            );
             break;
     }
   }
