@@ -2,6 +2,61 @@ import { DominoTile } from "./domino-tile";
 import { Domino } from "./domino.js";
 import { Landscapes } from "./enums/landscapes.js";
 
+export class DominoPoolManager {
+    /**
+     * @type {Domino[]}
+     * The pool of dominos
+     */
+    #dominos = [];
+
+    constructor() {
+        this.reset();
+    }
+
+    /** 
+    * @returns {Domino[]} The drawn dominos
+    * Draw four dominos from the pool without replacement
+    */
+    draw4() {
+        // Draw the first four dominos
+        const drawnDominos = this.dominos.slice(0, 4);
+        // Remove the drawn dominos from the pool
+        this.dominos = this.dominos.slice(4);
+        return drawnDominos;
+    }
+
+    /**
+     * @returns {void}
+     * Reset the pool to the starting pool and shuffle it
+     */
+    reset() {
+        this.dominos = this.#getStartingDominoPool();
+        this.#shuffle();
+    }
+
+    /**
+     * @returns {void}
+     * Shuffle the domino pool
+     */
+    #shuffle() {
+        this.#dominos.sort(() => Math.random() - 0.5);
+    }
+
+    /**
+     * @returns {Domino[]} returns the starting pool of dominos
+     * Get the starting pool of dominos
+     */
+    #getStartingDominoPool() {
+        return dominosRaw.map((dominoRaw) => {
+            new Domino(
+                new DominoTile(dominoRaw.left.type, dominoRaw.left.crowns),
+                new DominoTile(dominoRaw.right.type, dominoRaw.right.crowns),
+                dominoRaw.id
+            );
+        });
+    }
+}
+
 const dominosRaw = [
     {
         "id": 1,
@@ -532,43 +587,3 @@ const dominosRaw = [
         }
     }
 ];
-
-export class DominoPoolManager {
-    #dominos = [];
-
-    constructor() {
-        this.reset();
-    }
-
-
-    // Draw four dominos from the pool without replacement
-    draw4() {
-        // Draw the first four dominos
-        const drawnDominos = this.dominos.slice(0, 4);
-        // Remove the drawn dominos from the pool
-        this.dominos = this.dominos.slice(4);
-        return drawnDominos;
-    }
-
-    // Reset the pool to the starting pool and shuffle it
-    reset() {
-        this.dominos = getStartingDominoPool();
-        this.#shuffle();
-    }
-    
-    // Shuffle the domino pool
-    #shuffle() {
-        this.dominos.sort(() => Math.random() - 0.5);
-    }
-
-    // Get the starting pool of dominos
-    #getStartingDominoPool() {
-        return dominosRaw.map((dominoRaw) => {
-            new Domino(
-                new DominoTile(dominoRaw.left.type, dominoRaw.left.crowns),
-                new DominoTile(dominoRaw.right.type, dominoRaw.right.crowns),
-                dominoRaw.id
-            );
-        });
-    }
-}
