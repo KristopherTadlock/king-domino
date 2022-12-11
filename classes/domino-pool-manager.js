@@ -9,6 +9,13 @@ export class DominoPoolManager {
      */
     #dominos = [];
 
+    /**
+     * @type {number}
+     * number of draws taken from the pool since the last reset.
+     * This is used to track the current turn
+     */
+    #drawsTaken = 0;
+
     constructor() {
         this.reset();
     }
@@ -22,8 +29,18 @@ export class DominoPoolManager {
         const drawnDominos = this.dominos.slice(0, 4);
         // Remove the drawn dominos from the pool
         this.dominos = this.dominos.slice(4);
+        // Increment the number of draws taken
+        this.#drawsTaken += 4;
         return drawnDominos;
     }
+
+    /**
+     * @returns {number} The current turn
+     */
+    currentTurn() {
+        return Math.floor(this.#drawsTaken / 4) + 1;
+    }
+
 
     /**
      * @returns {void}
@@ -32,6 +49,16 @@ export class DominoPoolManager {
     reset() {
         this.dominos = this.#getStartingDominoPool();
         this.#shuffle();
+        this.#drawsTaken = 0;
+    }
+
+    /**
+     * returns {boolean} true if the pool is empty
+     * Check if the pool is empty
+     * @returns {boolean}
+     */
+    isEmpty() {
+        return this.dominos.length === 0;
     }
 
     /**
