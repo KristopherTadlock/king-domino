@@ -17,7 +17,6 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
         assert(castle.x === 0);
         assert(castle.y === 0);
         assert(castle.landscape === Landscapes.CASTLE);
-        assert(castle.crowns === 0);
     });
 })();
 
