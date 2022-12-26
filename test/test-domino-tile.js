@@ -25,30 +25,29 @@ import { Edges, EdgeOffset } from "./../classes/enums/edges.js";
     });
 })();
 
-/** Test partitionByLandscapes */
+/** Test partitionEdgesByLandscapes */
 (function() {
-    let edges = [];
-    edges.push(new DominoTile(
+    const tile = new DominoTile(
+        Landscapes.FOREST,
+        1
+    );
+    tile.topEdge = new DominoTile(
         Landscapes.FOREST
         , 1
-        )
     );
-    edges.push(new DominoTile(
+    tile.leftEdge = new DominoTile(
         Landscapes.FOREST
         , 1
-        )
     );
-    edges.push(new DominoTile(
-        Landscapes.WATER
-        , 1
-        )
-    );
-    edges.push(new DominoTile(
+    tile.rightEdge = new DominoTile(
         Landscapes.MINE
         , 1
-        )
     );
-    const result = DominoTile.partitionByLandscapes(edges, Landscapes.FOREST);
+    tile.bottomEdge = new DominoTile(
+        Landscapes.WATER
+        , 1
+    );
+    const result = DominoTile.partitionEdgesByLandscapes(tile);
     it('should have two of same landscape', () => {
         assert(result.matched.length === 2);
     });
@@ -58,20 +57,9 @@ import { Edges, EdgeOffset } from "./../classes/enums/edges.js";
     it('should have have four total edges', () => {
         assert(result.matched.length + result.diff.length === 4);
     });
-    edges = [];
-    edges.push(new DominoTile(
-        Landscapes.FOREST
-        , 1
-        )
-    );
-    edges.push(new DominoTile(
-        Landscapes.FOREST
-        , 1
-        )
-    );
-    edges.push(null);
-    edges.push(null);
-    const result2 = DominoTile.partitionByLandscapes(edges, Landscapes.FOREST);
+    tile.rightEdge = null;
+    tile.bottomEdge = null;
+    const result2 = DominoTile.partitionEdgesByLandscapes(tile);
     it('should have have empty diff landscapes', () => {
         assert(result2.diff.length === 0);
     });

@@ -1,5 +1,5 @@
 import { Landscapes } from "./enums/landscapes.js";
-import { Edges, EdgeOffset } from "./enums/edges.js";
+import { Edges } from "./enums/edges.js";
 
 /**
  * Represents the smallest unit on a gameboard. 
@@ -85,32 +85,34 @@ export class DominoTile {
   }
 
   /**
-   * @returns {Array.<{number}>} Returns an array of three numbers:
-   * 1) The sum of contigous tiles of the same landscape as itself (including itself)
-   * 2) the sum of crowns on those contigous tiles including its own crowns
-   * 3) the total score, including the score of the contigous space it belongs to as well 
-   * as the score of it's neighboring subgraphs.
-   * Calling score from any tile should return the score of the entire board.
-   **/
+  * @returns {number} The score of the area it belongs to as well as the score of each of it's unvisited neighboring sub graphs
+  */
   score() {
-    if (this.#calculating) return [0, 0, 0];
+    if (this.getHasVisited()) return 0;
+    this.toggleVisited(); // a visited flag used to prevent looping during recursion. 
     let score = 0;
     let tiles = 1;
     let crowns = this.crowns;
-    this.#calculating = true;
-    [this.topEdge, this.bottomEdge, this.rightEdge, this.leftEdge]
-      .filter((edge) => !!edge && !edge.getHasVisited())
-      .forEach((edge) => {
-        [edgeTiles, edgeCrowns, edgeScore] = edge.score();
-        if (edge.landscape === this.landscape) {
-          tiles += edgeTiles;
-          crowns += edgeCrowns;
-        } else {
-          score += edgeScore;
-        }
-      });
-    this.#calculating = false;
-    return [tiles, crowns, score + tiles * crowns];
+    let edgesPartition = DominoTile.partitionEdgesByLandscapes(this);
+    let likeLandscapes = edgesPartition.matched;
+    let areaBorder = edgesPartition.diff;
+    while(likeLandscapes.length > 0) { // find all the tiles in the group this one belongs to. Count the number of tiles and crowns.
+      const tile = likeLandscapes.pop();
+      if (tile.getHasVisited() !== true) {
+        tiles++;
+        crowns += tile.crowns;
+        tile.toggleVisited();
+        edgesPartition = DominoTile.partitionEdgesByLandscapes(tile);
+        likeLandscapes = Array.prototype.concat(likeLandscapes, edgesPartition.matched);
+        areaBorder = Array.prototype.concat(areaBorder, edgesPartition.diff);
+      }
+    }
+    score = tiles * crowns; // compute score of the group
+    while(areaBorder.length > 0) { // iterate over the tiles on the border of the given area. Compute the score of each border region and add to total score.
+      const tile = areaBorder.pop();
+      score += tile.score();
+    }
+    return score;
   }
 
   /**
@@ -119,8 +121,8 @@ export class DominoTile {
    * If this tile is part of a gameboard, rotates the gameboard.
    */
   rotate() {
-    if (this.#calculating) return;
-    this.#calculating = true;
+    if (this.getHasVisited()) return;
+    this.toggleVisited();
     let right, bottom, left, top;
     [right, bottom, left, top] = [
       this.rightEdge,
@@ -137,8 +139,25 @@ export class DominoTile {
       .forEach((edge) => {
         edge.rotate();
       });
-    this.#calculating = false;
   }
+
+    /**
+   * In order to prevent looping the 'has visited' flag is set to true when a recursive action on the tiles is performed. 
+   * As a seperate operation, this resets the flag for all pieces to false so another recursive operation 
+   * can be performed later. 
+   */
+    resetHasVisited() {
+      this.#calculating = false;
+      [
+        this.rightEdge,
+        this.bottomEdge,
+        this.leftEdge,
+        this.topEdge,
+      ].filter((edge) => !!edge && edge.getHasVisited())
+        .forEach((edge) => {
+          edge.resetHasVisited();
+        });
+    }
 
   /**
    * @returns {boolean} When recursing through each tile, this is set to true 
@@ -148,20 +167,28 @@ export class DominoTile {
     return this.#calculating;
   }
 
+  toggleVisited() {
+    this.#calculating = true;
+  }
+
   /**
-   * Splits an array of edges. Filters out nulls and visited edges.
-   * @param {Array<DominoTile>} edges tile edges
-   * @param {Landscapes} landscape landscape type of the tile
-   * @returns {{matched: <Array<DominoTile>, diff: <Array<DominoTile>}} 
-   * Array partitioned by edges that match the given landscape type and those that 
-   * are of a different type
+   * @param {DominoTile} tile 
+   * @returns {{matched: <Array<DominoTile>, diff: <Array<DominoTile>}} the edges of the tile 
+   * partitioned by those that are of the same landscape as itself and those that are different. 
+   * Tiles that that are 'hasVisited' and nulls are excluded from both sets. 
    */
-  static partitionByLandscapes(edges, landscape) {
+  static partitionEdgesByLandscapes(tile) {
     const sameLandscape = [];
     const diffLandscape = [];
+    const edges = [
+      tile.rightEdge,
+      tile.bottomEdge,
+      tile.leftEdge,
+      tile.topEdge
+    ];
     edges.filter((edge) => !!edge && !edge.getHasVisited())
     .forEach(edge => {
-        if (edge.landscape === landscape) {
+        if (edge.landscape === tile.landscape) {
             sameLandscape.push(edge);
         } else {
             diffLandscape.push(edge);

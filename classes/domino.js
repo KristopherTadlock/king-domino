@@ -45,6 +45,7 @@ export class Domino {
    */
   rotate() {
     this.leftEnd.rotate();
+    this.leftEnd.resetHasVisited();
     this.orientation = (this.orientation + 90) % 360;
   }
 

@@ -47,7 +47,10 @@ export class GameBoardManager {
      * The current score of the board
      */
     get score() {
-        return 0;
+        const castle = this.#board['0,0'];
+        const score = castle.score();
+        castle.resetHasVisited();
+        return score;
     }
 
     /**
