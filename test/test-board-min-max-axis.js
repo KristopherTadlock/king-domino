@@ -38,3 +38,23 @@ import { BoardMinMaxAxis } from "../classes/board-min-max-axis.js";
         assert(minMaxAxis.yMax === 9);
     });
 })();
+
+/** Test constructor */
+(function() {
+    let boardAxis = new BoardMinMaxAxis(0,0,0,0);
+    it('should be centered if the board is empty', () => {
+        assert(boardAxis.isCentered() === true);
+    });
+    boardAxis = new BoardMinMaxAxis(-2,2,-3,3);
+    it('should be centered if the castle is in the middle', () => {
+        assert(boardAxis.isCentered() === true);
+    });
+    boardAxis = new BoardMinMaxAxis(-2,1,-3,3);
+    it('should not be centered if the castle is not centered on the x axis', () => {
+        assert(boardAxis.isCentered() === false);
+    });
+    boardAxis = new BoardMinMaxAxis(-2,-2,-2,-3);
+    it('should not be centered if the castle is not centered on the y axis', () => {
+        assert(boardAxis.isCentered() === false);
+    });
+})();

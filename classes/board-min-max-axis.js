@@ -53,4 +53,13 @@ export class BoardMinMaxAxis {
             Math.max(boardAxis.yMax, yCord)
         );
     }
+   
+   /**
+    * @returns {Boolean} true if the castle is centered on the board
+    */
+   // casle is always at the origin (0,0)
+   isCentered() {
+      return Math.abs(this.xMin) === Math.abs(this.xMax) &&
+         Math.abs(this.#yMin) === this.#yMax;
+   }
 }

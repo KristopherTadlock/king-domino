@@ -6,10 +6,12 @@ import { Landscapes } from "../classes/enums/landscapes.js";
 import { Edges } from '../classes/enums/edges.js';
 import { GameBoardManager } from '../classes/game-board-manager.js';
 import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
+import { GameConfiguration } from '../classes/game-configuration.js';
 
 /** Test constructor */
 (function() {
-    const gmb = new GameBoardManager();
+    const config = new GameConfiguration(2, false, false);
+    const gmb = new GameBoardManager(config);
     const board = gmb.board;
     it('should have a castle', () => {
         const castle = board['0,0'];
@@ -20,9 +22,24 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
     });
 })();
 
+/** Test expanded board size */
+(function() {
+    let config = new GameConfiguration(2, false, false);
+    let gmb = new GameBoardManager(config);
+    it('should have a max board size of five by default', () => {
+        assert(gmb.maxBoardSize === 5);
+    });
+    config = new GameConfiguration(2, false, true);
+    gmb = new GameBoardManager(config);
+    it('should have a max board size of seven if configured with expanded board size', () => {
+        assert(gmb.maxBoardSize === 7);
+    });
+})();
+
 /** Test getDominoOffsets */
 (function() {
-    const castle = new GameBoardManager().board['0,0'];
+    const config = new GameConfiguration(2, false, false);
+    const castle = new GameBoardManager(config).board['0,0'];
     const domino = new Domino(
         new DominoTile(
             Landscapes.FOREST
@@ -103,7 +120,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
      *  [C]      [9][10]
      *  [5][6][7][8]
      **/
-    let board = new GameBoardManager().board;
+    const config = new GameConfiguration(2, false, false);
+    let board = new GameBoardManager(config).board;
     let castle = board['0,0'];
     let tile1 = new DominoTile(Landscapes.FOREST, 0);
     let tile2 = new DominoTile(Landscapes.FOREST, 0);
@@ -154,7 +172,7 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
      *  [6][7][8]
      **/
     domino.rotate();
-    board = new GameBoardManager().board;
+    board = new GameBoardManager(config).board;
     castle = board['0,0'];
     board['0,1'] = tile1;
     board['1,1'] = tile2;
@@ -220,7 +238,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
     const tileLeft = new DominoTile(Landscapes.FOREST, 0);
     const tileRight = new DominoTile(Landscapes.FOREST, 0);
     const domino = new Domino(tileLeft, tileRight, 1);
-    let board = new GameBoardManager().board;
+    const config = new GameConfiguration(2, false, false);
+    let board = new GameBoardManager(config).board;
     let tile = new DominoTile(Landscapes.FOREST, 0);
     let castle = board['0,0'];
     let overlapping = GameBoardManager.overlapsOtherTiles(domino, castle, Edges.RIGHT, DominoEnd.LEFT, board);
@@ -233,20 +252,20 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
         assert(overlapping === true);
     });
     overlapping = GameBoardManager.overlapsOtherTiles(domino, castle, Edges.RIGHT, DominoEnd.LEFT, board);
-    board = new GameBoardManager().board;
+    board = new GameBoardManager(config).board;
     board['2,0'] = tile;
     it('should overlap on right tile at 0 degrees rotation', () => {
         assert(overlapping === true);
     });
     domino.rotate();
-    board = new GameBoardManager().board;
+    board = new GameBoardManager(config).board;
     board['0,-1'] = tile;
     overlapping = GameBoardManager.overlapsOtherTiles(domino, castle, Edges.BOTTOM, DominoEnd.LEFT, board);
     it('should overlap on left tile at 90 degrees rotation', () => {
         assert(overlapping === true);
     });
     overlapping = GameBoardManager.overlapsOtherTiles(domino, castle, Edges.BOTTOM, DominoEnd.LEFT, board);
-    board = new GameBoardManager().board;
+    board = new GameBoardManager(config).board;
     board['0,-2'] = tile;
     it('should overlap on right tile at 90 degrees rotation', () => {
         assert(overlapping === true);
@@ -255,7 +274,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
 
 (function() {
     let minMaxAxis = new BoardMinMaxAxis(0,0,0,0);
-    const board = new GameBoardManager().board;
+    const config = new GameConfiguration(2, false, false);
+    const board = new GameBoardManager(config).board;
     const castle = board['0,0'];
     const domino = new Domino(
         new DominoTile(
@@ -291,7 +311,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
 })();
 
 (function() {
-    const board = new GameBoardManager().board;
+    const config = new GameConfiguration(2, false, false);
+    const board = new GameBoardManager(config).board;
     const castle = board['0,0'];
     const domino = new Domino(
         new DominoTile(
@@ -344,7 +365,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
 
 (function() {
     let minMaxAxis = new BoardMinMaxAxis(0,0,0,0);
-    const board = new GameBoardManager().board;
+    const config = new GameConfiguration(2, false, false);
+    const board = new GameBoardManager(config).board;
     const castle = board['0,0'];
     const domino = new Domino(
         new DominoTile(
@@ -387,7 +409,8 @@ import { BoardMinMaxAxis } from '../classes/board-min-max-axis.js';
 })();
 
 (function() {
-    const boardManager = new GameBoardManager();
+    const config = new GameConfiguration(2, false, false);
+    const boardManager = new GameBoardManager(config);
     const castle = boardManager.board['0,0'];
     const domino1 = new Domino(
         new DominoTile(

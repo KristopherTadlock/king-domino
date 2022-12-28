@@ -6,6 +6,7 @@ import { Edges, EdgeOffset } from "./enums/edges.js";
 import { DominoCoordinates } from "./domino-coordinates.js";
 import { DominoEdges } from "./domino-edges.js";
 import { BoardMinMaxAxis } from "./board-min-max-axis.js";
+import { GameConfiguration } from "./game-configuration.js";
 
 /**
  * A gameboard always includes a castle. 
@@ -16,12 +17,20 @@ import { BoardMinMaxAxis } from "./board-min-max-axis.js";
 export class GameBoardManager {
     #board = new Object();
     #boardSize = new BoardMinMaxAxis(0,0,0,0);
+    /**@type {GameConfiguration} */
+    #config;
 
-    constructor() {
+    /**
+     * Creates an empty game board with the castle placed in the center
+     * @param {GameConfiguration} config
+     */
+    constructor(config) {
         const castle = new DominoTile(Landscapes.CASTLE, 0);
         castle.setOffset(0,0);
         this.#board['0,0'] = castle;
+        this.#config = config;
     }
+
 
     /**
      * A dictionary with a key [x,y] and a value of domino tile.
@@ -32,6 +41,9 @@ export class GameBoardManager {
         return Object.assign({}, this.#board); // a deep copy isn't possible, as the tiles have circular references along their edges
     }
 
+    /**
+     * @returns {BoardMinMaxAxis} A copy of the object representing the board size
+     */
     get boardSize() {
         return Object.assign({}, this.#boardSize);
     }
@@ -40,7 +52,8 @@ export class GameBoardManager {
      * The maximum size of any axis measured in tiles
      */
     get maxBoardSize() {
-        return 5;
+        return this.#config.expandedBoardSize === true ? 
+            GameConfiguration.expandedBoardSize : GameConfiguration.defaultBoardSize;
     }
 
     /**
@@ -50,7 +63,8 @@ export class GameBoardManager {
         const castle = this.#board['0,0'];
         const score = castle.score();
         castle.resetHasVisited();
-        return score;
+        return this.#config.middleCastleRule && this.#boardSize.isCentered() ? 
+            score + GameConfiguration.middleCastleRuleBonus : score;
     }
 
     /**
@@ -90,6 +104,8 @@ export class GameBoardManager {
             attachedTile.setOffset(coordinates.attachedEnd.x, coordinates.attachedEnd.y);
             this.#connectTile(edgeConnections.connectedEndEdges, connectedTile);
             this.#connectTile(edgeConnections.attachedEndEdges, attachedTile);
+            this.#boardSize = BoardMinMaxAxis.genCurrentBoardMinMaxes(this.#boardSize, connectedTile.x, connectedTile.y);
+            this.#boardSize = BoardMinMaxAxis.genCurrentBoardMinMaxes(this.#boardSize, attachedTile.x, attachedTile.y);
             return connectedTile;
         }
     }
