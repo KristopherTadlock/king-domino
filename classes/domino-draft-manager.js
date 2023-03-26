@@ -1,14 +1,14 @@
 // UNTESTED
 
-import { EventEmitter } from '../utils/event-emitter.js';
-import { DraftEvents } from '../enums/draft-events.js';
+// import { EventEmitter } from '../utils/event-emitter.js';
+// import { DraftEvents } from '../enums/draft-events.js';
 import { DominoPoolManager } from './domino-pool-manager.js';
 import { DraftedTile } from './drafted-tile.js';
 
 /**
 * Manager for the draft across multiple players 
 */
-class DominoDraftManager {
+export class DominoDraftManager {
     /**
      * @type {DominoPoolManager}
      * The pool of domino tiles to draw from
@@ -40,29 +40,40 @@ class DominoDraftManager {
      */
     #currentDraft;
 
-    /**
-     * @type {EventEmitter}
-     * emits @type {DraftEvents.POOL_EMPTY} when the pool is empty
-     * emits @type {DraftEvents.TURN_OVER} when the turn is over
-     */
-    #eventEmitter;
+    // /**
+    //  * @type {EventEmitter}
+    //  * emits @type {DraftEvents.POOL_EMPTY} when the pool is empty
+    //  * emits @type {DraftEvents.TURN_OVER} when the turn is over
+    //  */
+    // #eventEmitter;
 
     constructor(dominoPoolManager, numberOfPlayers) {
         this.#dominoPoolManager = dominoPoolManager;
         this.#numberOfPlayers = numberOfPlayers;
-        this.poolEmptyEventEmitter = new EventEmitter();
+        // this.poolEmptyEventEmitter = new EventEmitter();
 
         this.#initializeDraftOrder();
-        this.#initializeCurrentDraft(this.#dominoPoolManager.draw(4));
+        this.#initializeCurrentDraft(this.#dominoPoolManager.draw4());
+    }
+
+    get currentPlayerIndex() {
+        return this.#currentPlayerIndex;
     }
 
     /**
-     * @returns {EventListener} event listener for the draft manager
-     * @public
+     * @returns {DraftedTile[]}
      */
-    getEventListener() {
-        return this.#eventEmitter.getEventListener();
+    get currentDraft() {
+        return this.#currentDraft;
     }
+
+    // /**
+    //  * @returns {EventListener} event listener for the draft manager
+    //  * @public
+    //  */
+    // getEventListener() {
+    //     return this.#eventEmitter.getEventListener();
+    // }
 
     /**
      * @returns {void}
@@ -97,17 +108,17 @@ class DominoDraftManager {
         }
         // if the pool is empty, emit the pool empty event
         if (this.#dominoPoolManager.isEmpty()) {
-            this.#eventEmitter.emit(DraftEvents.POOL_EMPTY, this.#currentDraft);
+            // this.#eventEmitter.emit(DraftEvents.POOL_EMPTY, this.#currentDraft);
             // return to prevent the turn from starting
             return;
         } else {
-            this.#eventEmitter.emit(DraftEvents.TURN_OVER, this.#currentDraft);
+            // this.#eventEmitter.emit(DraftEvents.TURN_OVER, this.#currentDraft);
             // reset the draft order and start the next turn
             this.#currentPlayerIndex = 0;
             // assign the draft order to the current draft
             this.#draftOrder = this.#currentDraft.map(draftedTile => draftedTile.player);
             // initialize the current draft
-            this.#initializeCurrentDraft(this.#dominoPoolManager.draw(4));
+            this.#initializeCurrentDraft(this.#dominoPoolManager.draw4());
         }
     }
 

@@ -1,4 +1,4 @@
-import { DominoTile } from "./domino-tile";
+import { DominoTile } from "./domino-tile.js";
 import { Domino } from "./domino.js";
 import { Landscapes } from "./enums/landscapes.js";
 
@@ -74,13 +74,13 @@ export class DominoPoolManager {
      * Get the starting pool of dominos
      */
     #getStartingDominoPool() {
-        return dominosRaw.map((dominoRaw) => {
+        return dominosRaw.map((dominoRaw) =>
             new Domino(
                 new DominoTile(dominoRaw.left.type, dominoRaw.left.crowns),
                 new DominoTile(dominoRaw.right.type, dominoRaw.right.crowns),
                 dominoRaw.id
-            );
-        });
+            )
+        );
     }
 }
 

@@ -9,7 +9,9 @@
   },
   "scripts": {
     "test": "node test/test-runner.js",
-    "start": "http-server &"
+    "start": "http-server &",
+    "init-bot": "node bot-init.js",
+    "start-bot": "node bot.js"
   },
   "repository": {
     "type": "git",
@@ -18,6 +20,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "canvas": "^2.11.0",
+    "discord.js": "^14.8.0",
     "http-server": "^14.1.1"
   }
 }
