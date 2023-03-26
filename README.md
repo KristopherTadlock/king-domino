@@ -40,3 +40,7 @@ King domino is a board game where 2 - 4 players compete to build the best kingdo
 3. Describe the use case
 4. Describe the expected behavior
 5. Describe the actual behavior
+
+## Hot to run bot
+
+1. Run `npm run start-bot`
