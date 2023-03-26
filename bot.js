@@ -6,6 +6,9 @@ import { Game } from './classes/game.js';
 import { Player } from './classes/player.js';
 import { GameState } from './classes/enums/game-state.js';
 import { DominoTile } from './classes/domino-tile.js';
+import { config } from 'dotenv';
+
+config();
 
 /** @type {Map<number, Game} */
 const activeGames = new Map();
@@ -50,7 +53,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 });
 
-client.login('MTA4OTQ2OTkzMzc2MDU1MzA0Mg.GqYk_R.nAflY6hFy2RYra1AMILkqKjlaAvuXrr1o5xCzE');
+client.login(process.env.DISCORD_BOT_TOKEN);
 
 class BotInteractionHandler {
     /** @type {Interaction}*/

@@ -1,4 +1,7 @@
 import { REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { config } from 'dotenv';
+
+config();
 
 const newGame = new SlashCommandBuilder()
   .setName('new-game')
@@ -24,13 +27,13 @@ const commands = [
   newGame
 ];
 
-const rest = new REST({ version: '10' }).setToken('MTA4OTQ2OTkzMzc2MDU1MzA0Mg.GqYk_R.nAflY6hFy2RYra1AMILkqKjlaAvuXrr1o5xCzE');
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
 
 (async () => {
   try {
     console.log('Started refreshing application (/) commands.');
 
-    await rest.put(Routes.applicationCommands('1089469933760553042'), { body: commands });
+    await rest.put(Routes.applicationCommands(process.env.DISCORD_APP_ID), { body: commands });
 
     console.log('Successfully reloaded application (/) commands.');
   } catch (error) {
