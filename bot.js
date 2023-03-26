@@ -1,4 +1,17 @@
-import { ActionRowBuilder, Client, Events, GatewayIntentBits, ButtonBuilder, AttachmentBuilder, ButtonStyle, ModalBuilder, TextInputBuilder } from 'discord.js';
+import {
+    ActionRowBuilder,
+    Client,
+    Events,
+    GatewayIntentBits,
+    ButtonBuilder,
+    AttachmentBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    ChatInputCommandInteraction,
+    ModalSubmitInteraction,
+    ButtonInteraction
+} from 'discord.js';
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 import { GameConfiguration } from './classes/game-configuration.js';
@@ -21,34 +34,47 @@ client.on(Events.InteractionCreate, async interaction => {
     console.log(interaction);
     switch (interaction.commandName) {
         case 'new-game':
-            (new BotInteractionHandler(interaction)).onNewGame();
+            if (!interaction.isChatInputCommand()) return;
+            BotInteractionHandler.onNewGame(interaction);
             return;
     }
 
     switch (interaction.customId) {
         case 'start':
-            (new BotInteractionHandler(interaction)).onStart();
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onStart(interaction);
             break;
         case 'join':
-            (new BotInteractionHandler(interaction)).onJoin();
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onJoin(interaction);
+            break;
+        case 'leave':
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onLeave(interaction);
             break;
         case 'draft-1':
-            (new BotInteractionHandler(interaction)).onDraft(1);
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onDraft(interaction, 1);
             break;
         case 'draft-2':
-            (new BotInteractionHandler(interaction)).onDraft(2);
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onDraft(interaction, 2);
             break;
         case 'draft-3':
-            (new BotInteractionHandler(interaction)).onDraft(3);
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onDraft(interaction, 3);
             break;
         case 'draft-4':
-            (new BotInteractionHandler(interaction)).onDraft(4);
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onDraft(interaction, 4);
             break;
         case 'end':
-            (new BotInteractionHandler(interaction)).onEnd();
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onEnd(interaction);
             break;
         case 'place':
-            (new BotInteractionHandler(interaction)).onPlace();
+            if (!interaction.isModalSubmit()) return;
+            BotInteractionHandler.onPlace(interaction);
             break;
     }
 });
@@ -56,38 +82,29 @@ client.on(Events.InteractionCreate, async interaction => {
 client.login(process.env.DISCORD_BOT_TOKEN);
 
 class BotInteractionHandler {
-    /** @type {Interaction}*/
-    interaction;
-
-    /** @param {Interaction} interaction */
-    constructor(interaction) {
-        this.interaction = interaction;
-    }
-
-    async onNewGame() {
-        if (!this.interaction.isChatInputCommand()) return;
-
-        const gameId = this.interaction.channelId;
+    /** @param {ChatInputCommandInteraction} interaction */
+    static async onNewGame(interaction) {
+        const gameId = interaction.channelId;
         const game = new Game();
-        const player = new Player(this.interaction.user.username, this.interaction.user.id);
+        const player = new Player(interaction.user.username, interaction.user.id);
         game.players.push(player);
 
         // Add players to the game if they were specified
-        this.interaction.options.getUser('player1') &&
+        interaction.options.getUser('player1') &&
             game.players.push(
                 new Player(
-                    this.interaction.options.getUser('player1').username,
-                    this.interaction.options.getUser('player1').id));
-        this.interaction.options.getUser('player2') &&
+                    interaction.options.getUser('player1').username,
+                    interaction.options.getUser('player1').id));
+        interaction.options.getUser('player2') &&
             game.players.push(
                 new Player(
-                    this.interaction.options.getUser('player2').username,
-                    this.interaction.options.getUser('player2').id));
-        this.interaction.options.getUser('player3') &&
+                    interaction.options.getUser('player2').username,
+                    interaction.options.getUser('player2').id));
+        interaction.options.getUser('player3') &&
             game.players.push(
                 new Player(
-                    this.interaction.options.getUser('player3').username,
-                    this.interaction.options.getUser('player3').id));
+                    interaction.options.getUser('player3').username,
+                    interaction.options.getUser('player3').id));
 
         activeGames.set(gameId, game);
 
@@ -106,55 +123,88 @@ class BotInteractionHandler {
             )
             .addComponents(
                 new ButtonBuilder()
+                    .setCustomId('leave')
+                    .setStyle(ButtonStyle.Danger)
+                    .setLabel('Leave Game')
+            )
+            .addComponents(
+                new ButtonBuilder()
                     .setCustomId('end')
                     .setStyle(ButtonStyle.Danger)
                     .setLabel('End Game')
             );
 
-        const players = game.players.map(p => p.name).join('\n');
-        await this.interaction.reply({ content: `Game started!\n\nPlayers:\n${players}`, components: [row] });
+        const players = game.players.map(p => `  - ${p.name}`).join('\n');
+        await interaction.reply({ content: `Game started!\n\nPlayers:\n${players}`, components: [row] });
     }
 
-    async onJoin() {
-        const gameId = this.interaction.channelId;
+    /** @param {ButtonInteraction} interaction */
+    static async onJoin(interaction) {
+        const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
         if (!game) {
-            await this.interaction.reply('No game is currently active in this channel.', { ephemeral: true });
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === this.interaction.user.id);
+        const player = game.players.find(p => p.id === interaction.user.id);
         if (player) {
-            await this.interaction.reply('You are already playing in this game.', { ephemeral: true });
+            await interaction.reply({ content: 'You are already playing in this game.', ephemeral: true });
             return;
         }
         if (game.players.length >= 4) {
-            await this.interaction.reply('This game is already full.', { ephemeral: true });
+            await interaction.reply({ content: 'This game is already full.', ephemeral: true });
             return;
         }
-        game.players.push({ id: this.interaction.user.id, name: this.interaction.user.username });
+        game.players.push({ id: interaction.user.id, name: interaction.user.username });
 
-        const players = game.players.map(p => p.name).join('\n');
-        await this.interaction.editReply(`New Player Joined!\n\nPlayers:${players}`);
+        const players = game.players.map(p => `  - ${p.name}`).join('\n');
+        await interaction.update(`New Player Joined!\n\nPlayers:\n${players}`);
     }
 
-    async onStart() {
-        const gameId = this.interaction.channelId;
+    /** @param {ButtonInteraction} interaction */
+    static async onLeave(interaction) {
+        const gameId = interaction.channelId;
+        const game = activeGames.get(gameId);
+        if (!game) {
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
+            return;
+        }
+        const player = game.players.find(p => p.id === interaction.user.id);
+        if (!player) {
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
+            return;
+        }
+        game.players = game.players.filter(p => p.id !== interaction.user.id);
+
+        const gameAbandoned = game.players.length === 0;
+        if (gameAbandoned) {
+            activeGames.delete(gameId);
+            await interaction.update({content: 'Game abandoned.', components: []});
+            return;
+        }
+        const players = game.players.map(p => `  - ${p.name}`).join('\n');
+        await interaction.update(`Player Left!\n\nPlayers:\n${players}`);
+    }
+
+    /** @param {ButtonInteraction} interaction */
+    static async onStart(interaction) {
+        const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
         console.log(game, gameId, 'here');
         if (!game) {
-            await this.interaction.reply('No game is currently active in this channel.', { ephemeral: true });
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === this.interaction.user.id);
+        const player = game.players.find(p => p.id === interaction.user.id);
         if (!player) {
-            await this.interaction.reply('You are not currently playing in this game.', { ephemeral: true });
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
         if (game.players.length < 2) {
-            await this.interaction.reply('You need at least 2 players to start a game.', { ephemeral: true });
+            await interaction.reply({ content: 'You need at least 2 players to start a game.', ephemeral: true });
             return;
         }
-        await this.interaction.deferReply();
+        await interaction.deferReply();
         const expand = game.players.length === 2 ? true : false;
         const config = new GameConfiguration(game.players.length, false, expand);
         game.start(config);
@@ -163,42 +213,46 @@ class BotInteractionHandler {
 
         const row = this.#buildDraftRow(game);
 
-        await this.interaction.editReply({ attachments: [file], content: 'Player 1', components: [row] })
+        await interaction.update({ attachments: [file], content: 'Player 1', components: [row] })
     }
 
-    async onEnd() {
-        const gameId = this.interaction.channelId;
+    /** @param {ButtonInteraction} interaction */
+    static async onEnd(interaction) {
+        const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
         if (!game) {
-            await this.interaction.reply('No game is currently active in this channel.', { ephemeral: true });
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === this.interaction.user.id);
+        const player = game.players.find(p => p.id === interaction.user.id);
         if (!player) {
-            await this.interaction.reply('You are not currently playing in this game.', { ephemeral: true });
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
         activeGames.delete(gameId);
-        await this.interaction.reply('Game ended!');
+        await interaction.update({ content: 'Game ended!', components: [] });
     }
 
-    /** @type {int} tile */
-    async onDraft(tile) {
-        const gameId = this.interaction.channelId;
+    /**
+     * @param {ButtonInteraction} interaction
+     * @param {int} tile
+     */
+    static async onDraft(interaction, tile) {
+        const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
         if (!game) {
-            await this.interaction.reply('No game is currently active in this channel.', { ephemeral: true });
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === this.interaction.user.id);
+        const player = game.players.find(p => p.id === interaction.user.id);
         if (!player) {
-            await this.interaction.reply('You are not currently playing in this game.', { ephemeral: true });
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
 
         const draft = game.draftManager.currentDraft[tile - 1];
         if (draft.player) {
-            await this.interaction.reply('This tile has already been drafted.', { ephemeral: true });
+            await interaction.reply({ content: 'This tile has already been drafted.', ephemeral: true });
             return;
         }
         game.draftManager.draftTile(tile - 1);
@@ -210,96 +264,97 @@ class BotInteractionHandler {
             case GameState.DRAFT:
                 const draftRow = this.#buildDraftRow(game);
                 const currentPlayerIndex = game.draftManager.currentPlayerIndex;
-                await this.interaction.editReply({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [draftRow] })
+                await interaction.update({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [draftRow] })
                 break;
             case GameState.PLACE:
                 const placeRow = this.#buildPlaceRow(game);
-                await this.interaction.editReply({ attachments: [file], content: 'Player 1', components: [placeRow] })
+                await interaction.update({ attachments: [file], content: 'Player 1', components: [placeRow] })
                 break;
         }
     }
 
-    async onPlace() {
-        if (!this.interaction.isModalSubmit) return;
-        const gameId = this.interaction.channelId;
+    /** @param {ModalSubmitInteraction} interaction */
+    static async onPlace(interaction) {
+        if (!interaction.isModalSubmit) return;
+        const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
         if (!game) {
-            await this.interaction.reply('No game is currently active in this channel.', { ephemeral: true });
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === this.interaction.user.id);
+        const player = game.players.find(p => p.id === interaction.user.id);
         if (!player) {
-            await this.interaction.reply('You are not currently playing in this game.', { ephemeral: true });
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
         const currentPlayerIndex = game.draftManager.currentPlayerIndex;
-        if (currentPlayerIndex !== game.players.findIndex(p => p.id === this.interaction.user.id)) {
-            await this.interaction.reply('It is not your turn to place a tile.', { ephemeral: true });
+        if (currentPlayerIndex !== game.players.findIndex(p => p.id === interaction.user.id)) {
+            await interaction.reply({ content: 'It is not your turn to place a tile.', ephemeral: true });
             return;
         }
         const board = game.players[currentPlayerIndex].board;
         const domino = game.draftManager.currentDraft.find(d => d.player === player)?.domino;
         if (!domino) {
-            await this.interaction.reply('You have not drafted a tile.', { ephemeral: true });
+            await interaction.reply({ content: 'You have not drafted a tile.', ephemeral: true });
             return;
         }
-        const targetCoords = this.interaction.fields.getTextInputValue('target');
+        const targetCoords = interaction.fields.getTextInputValue('target');
         if (!targetCoords) {
-            await this.interaction.reply('You must specify a target tile.', { ephemeral: true });
+            await interaction.reply({ content: 'You must specify a target tile.', ephemeral: true });
             return;
         }
         /** @type {DominoTile} */
         const targetTile = board.board[targetCoords];
         if (!targetTile) {
-            await this.interaction.reply('Invalid target tile.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid target tile.', ephemeral: true });
             return;
         }
-        const targetEdge = this.interaction.fields.getTextInputValue('targetEdge');
+        const targetEdge = interaction.fields.getTextInputValue('targetEdge');
         if (!targetEdge) {
-            await this.interaction.reply('You must specify a target edge.', { ephemeral: true });
+            await interaction.reply({ content: 'You must specify a target edge.', ephemeral: true });
             return;
         }
         if (!['left', 'right', 'top', 'bottom'].includes(targetEdge)) {
-            await this.interaction.reply('Invalid target edge.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid target edge.', ephemeral: true });
             return;
         }
         /** @type {DominoEdge} */
         const targetEdgeValue = targetTile[targetEdge + 'Edge'];
         if (!targetEdgeValue) {
-            await this.interaction.reply('Invalid target edge.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid target edge.', ephemeral: true });
             return;
         }
-        const dominoEnd = this.interaction.fields.getTextInputValue('dominoEnd');
+        const dominoEnd = interaction.fields.getTextInputValue('dominoEnd');
         if (!dominoEnd) {
-            await this.interaction.reply('You must specify a domino end.', { ephemeral: true });
+            await interaction.reply({ content: 'You must specify a domino end.', ephemeral: true });
             return;
         }
         if (!['left', 'right'].includes(dominoEnd)) {
-            await this.interaction.reply('Invalid domino end.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid domino end.', ephemeral: true });
             return;
         }
         const dominoEndValue = domino[dominoEnd + 'End'];
         if (!dominoEndValue) {
-            await this.interaction.reply('Invalid domino end.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid domino end.', ephemeral: true });
             return;
         }
-        const dominoEdge = this.interaction.fields.getTextInputValue('dominoEdge');
+        const dominoEdge = interaction.fields.getTextInputValue('dominoEdge');
         if (!dominoEdge) {
-            await this.interaction.reply('You must specify a domino edge.', { ephemeral: true });
+            await interaction.reply({ content: 'You must specify a domino edge.', ephemeral: true });
             return;
         }
         if (!['left', 'right', 'top', 'bottom'].includes(dominoEdge)) {
-            await this.interaction.reply('Invalid domino edge.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid domino edge.', ephemeral: true });
             return;
         }
         const dominoEdgeValue = dominoEndValue[dominoEdge + 'Edge'];
         if (!dominoEdgeValue) {
-            await this.interaction.reply('Invalid domino edge.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid domino edge.', ephemeral: true });
             return;
         }
         const placedTile = board.placeDomino(domino, targetTile, targetEdgeValue, dominoEdgeValue);
         if (!placedTile) {
-            await this.interaction.reply('Invalid placement.', { ephemeral: true });
+            await interaction.reply({ content: 'Invalid placement.', ephemeral: true });
             return;
         }
         const canvas = game.draw(GameState.PLACE);
@@ -308,16 +363,16 @@ class BotInteractionHandler {
         switch (gameState) {
             case GameState.DRAFT:
                 const draftRow = this.#buildDraftRow(game);
-                await this.interaction.editReply({ attachments: [file], content: 'Player 1', components: [draftRow] })
+                await interaction.update({ attachments: [file], content: 'Player 1', components: [draftRow] })
                 break;
             case GameState.PLACE:
                 const placeRow = this.#buildPlaceRow(game);
-                await this.interaction.editReply({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [placeRow] })
+                await interaction.update({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [placeRow] })
         }
     }
 
     /** @param {Game} game */
-    #buildPlaceRow(game) {
+    static #buildPlaceRow(game) {
         return new ActionRowBuilder()
             .addComponents(
                 (
@@ -354,7 +409,7 @@ class BotInteractionHandler {
     }
 
     /** @param {Game} game */
-    #buildDraftRow(game) {
+    static #buildDraftRow(game) {
         return new ActionRowBuilder()
             .addComponents(
                 new ButtonBuilder()
