@@ -1,7 +1,7 @@
-import { Canvas, createCanvas } from 'canvas';
-import { Landscapes } from "./enums/landscapes.js";
+import { Canvas, createCanvas } from '@napi-rs/canvas';
 import { DominoDraftManager } from './domino-draft-manager.js';
 import { DrawBoardSize } from "./enums/draw-board-size.js";
+import { Landscapes } from "./enums/landscapes.js";
 
 export class DrawDraft {
     /** @type {Canvas} */
@@ -113,29 +113,26 @@ export class DrawDraft {
             case Landscapes.CASTLE:
                 this.ctx.fillStyle = "#888";
                 break;
-            case Landscapes.FIELD:
-                this.ctx.fillStyle = "#4c9a2a";
+            case Landscapes.WHEAT:
+                this.ctx.fillStyle = "#fcb13b";
                 break;
             case Landscapes.FOREST:
-                this.ctx.fillStyle = "#228B22";
+                this.ctx.fillStyle = "#145A32a";
                 break;
             case Landscapes.MINE:
-                this.ctx.fillStyle = "#696969";
+                this.ctx.fillStyle = "#5F6A6A";
                 break;
             case Landscapes.PASTURE:
-                this.ctx.fillStyle = "#32CD32";
+                this.ctx.fillStyle = "#52BE80";
                 break;
-            case Landscapes.SWAMP:
-                this.ctx.fillStyle = "#556B2F";
-                break;
-            case Landscapes.VOLCANO:
-                this.ctx.fillStyle = "#8B0000";
+            case Landscapes.BOG:
+                this.ctx.fillStyle = "#655780";
                 break;
             case Landscapes.WATER:
-                this.ctx.fillStyle = "#0000FF";
+                this.ctx.fillStyle = "#03a9f4";
                 break;
             default:
-                this.ctx.fillStyle = "#000";
+                this.ctx.fillStyle = "#EEE";
                 break;
         }
     }
@@ -148,19 +145,19 @@ export class DrawDraft {
         this.ctx.fillRect(x, y, this.#tileSize, this.#tileSize);
 
         // Draw the crowns
-        this.ctx.fillStyle = "#000";
+        this.ctx.fillStyle = "#EEE";
         this.ctx.font = `${this.#crownFontSize}px Arial`;
-        this.ctx.fillText(crowns, x + this.#crownOffsetX, y + this.#crownOffsetY);
+        this.ctx.fillText(crowns.toString(), x + this.#crownOffsetX, y + this.#crownOffsetY);
     }
 
     #drawDraftingPlayer(x, y, player) {
-        this.ctx.fillStyle = "#000";
+        this.ctx.fillStyle = "#EEE";
         this.ctx.font = `${this.#PlayerFontSize}px Arial`;
         this.ctx.fillText(player, x, y);
     }
 
     #drawDraftedPlayer(x, y, player) {
-        this.ctx.fillStyle = "#000";
+        this.ctx.fillStyle = "#EEE";
         this.ctx.font = `${this.#PlayerFontSize}px Arial`;
         this.ctx.fillText(player, x, y);
     }
@@ -171,13 +168,14 @@ export class DrawDraft {
     draw(draftManager) {
         const draft = draftManager.currentDraft;
 
+
         for (let i = 0; i < draft.length; i++) {
             const draftable = draft[i];
 
             this.#drawDraftingPlayer(
-                this.#draftedPlayerOffsetX,
-                this.#tileOffsetY + this.#tileSize * i + this.#tileGapY * i + this.#draftingPlayerOffsetY,
-                draftable.player
+                this.#draftingPlayerOffsetX,
+                this.#tileOffsetY + this.#tileSize * i + this.#tileGapY * i + this.#draftingPlayerOffsetY + this.#PlayerFontSize / 2,
+                draftable.player != null ? '' : draftManager.draftOrder[i].toString()
             );
             this.#drawTile(
                 this.#tileOffsetX,
@@ -193,8 +191,8 @@ export class DrawDraft {
             );
             this.#drawDraftedPlayer(
                 this.#draftedPlayerOffsetX,
-                this.#tileOffsetY + this.#tileSize * i + this.#tileGapY * i + this.#draftedPlayerOffsetY,
-                draftable.player
+                this.#tileOffsetY + this.#tileSize * i + this.#tileGapY * i + this.#draftedPlayerOffsetY + this.#PlayerFontSize / 2,
+                draftable.player?.toString()
             );
         }
         return this.canvas;

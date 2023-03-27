@@ -6,18 +6,29 @@ export class Player {
     /** @type {number} */
     score;
     /** @type {number} */
+    uid;
+    /** @type {number} */
     id;
     /** @type {GameBoardManager} */
     board;
 
-    constructor(name, id) {
+    /**
+     * @param {string} name
+     * @param {number} uid
+     **/
+    constructor(name, uid) {
         this.name = name;
-        this.id = id;
+        this.uid = uid;
         this.score = 0;
     }
 
     /** @param {GameBoardManager} board */
     setBoard(board) {
         this.board = board;
+    }
+
+    /** @param {number} id */
+    setId(id) {
+        this.id = id;
     }
 }

@@ -20,7 +20,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "canvas": "^2.11.0",
+    "@napi-rs/canvas": "^0.1.39",
     "discord.js": "^14.8.0",
     "dotenv": "^16.0.3",
     "http-server": "^14.1.1"

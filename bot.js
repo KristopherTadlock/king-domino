@@ -1,25 +1,18 @@
 import {
-    ActionRowBuilder,
-    Client,
+    ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, ChatInputCommandInteraction, Client,
     Events,
-    GatewayIntentBits,
-    ButtonBuilder,
-    AttachmentBuilder,
-    ButtonStyle,
-    ModalBuilder,
-    TextInputBuilder,
-    ChatInputCommandInteraction,
-    ModalSubmitInteraction,
-    ButtonInteraction
+    GatewayIntentBits, ModalBuilder, ModalSubmitInteraction, TextInputBuilder, TextInputStyle
 } from 'discord.js';
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+import { config } from 'dotenv';
+import { DominoTile } from './classes/domino-tile.js';
+import { GameState } from './classes/enums/game-state.js';
 import { GameConfiguration } from './classes/game-configuration.js';
 import { Game } from './classes/game.js';
 import { Player } from './classes/player.js';
-import { GameState } from './classes/enums/game-state.js';
-import { DominoTile } from './classes/domino-tile.js';
-import { config } from 'dotenv';
+import { Edges } from './classes/enums/edges.js';
+import { DominoEnd } from './classes/enums/domino-end.js';
 
 config();
 
@@ -31,7 +24,7 @@ client.on('ready', () => {
 });
 
 client.on(Events.InteractionCreate, async interaction => {
-    console.log(interaction);
+    // console.log(interaction);
     switch (interaction.commandName) {
         case 'new-game':
             if (!interaction.isChatInputCommand()) return;
@@ -71,6 +64,10 @@ client.on(Events.InteractionCreate, async interaction => {
         case 'end':
             if (!interaction.isButton()) return;
             BotInteractionHandler.onEnd(interaction);
+            break;
+        case 'show-place':
+            if (!interaction.isButton()) return;
+            BotInteractionHandler.onShowPlace(interaction);
             break;
         case 'place':
             if (!interaction.isModalSubmit()) return;
@@ -146,7 +143,7 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (player) {
             await interaction.reply({ content: 'You are already playing in this game.', ephemeral: true });
             return;
@@ -155,7 +152,7 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'This game is already full.', ephemeral: true });
             return;
         }
-        game.players.push({ id: interaction.user.id, name: interaction.user.username });
+        game.players.push(new Player(interaction.user.username, interaction.user.uid));
 
         const players = game.players.map(p => `  - ${p.name}`).join('\n');
         await interaction.update(`New Player Joined!\n\nPlayers:\n${players}`);
@@ -169,17 +166,17 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (!player) {
             await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
-        game.players = game.players.filter(p => p.id !== interaction.user.id);
+        game.players = game.players.filter(p => p.uid !== interaction.user.id);
 
         const gameAbandoned = game.players.length === 0;
         if (gameAbandoned) {
             activeGames.delete(gameId);
-            await interaction.update({content: 'Game abandoned.', components: []});
+            await interaction.update({ content: 'Game abandoned.', components: [] });
             return;
         }
         const players = game.players.map(p => `  - ${p.name}`).join('\n');
@@ -190,12 +187,11 @@ class BotInteractionHandler {
     static async onStart(interaction) {
         const gameId = interaction.channelId;
         const game = activeGames.get(gameId);
-        console.log(game, gameId, 'here');
         if (!game) {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (!player) {
             await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
@@ -204,16 +200,13 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'You need at least 2 players to start a game.', ephemeral: true });
             return;
         }
-        await interaction.deferReply();
         const expand = game.players.length === 2 ? true : false;
         const config = new GameConfiguration(game.players.length, false, expand);
         game.start(config);
         const canvas = game.draw(GameState.DRAFT);
-        const file = new AttachmentBuilder(canvas.createPNGStream(), 'game.png');
-
+        const file = new AttachmentBuilder(await canvas.encode('png'), { name: `game-${gameId}.png` });
         const row = this.#buildDraftRow(game);
-
-        await interaction.update({ attachments: [file], content: 'Player 1', components: [row] })
+        await interaction.update({ files: [file], content: 'Player 0', components: [row] })
     }
 
     /** @param {ButtonInteraction} interaction */
@@ -224,7 +217,7 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (!player) {
             await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
@@ -244,7 +237,7 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (!player) {
             await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
@@ -256,21 +249,43 @@ class BotInteractionHandler {
             return;
         }
         game.draftManager.draftTile(tile - 1);
-        const gameState = game.draftManager.currentDraft.every(d => d.player) ? GameState.PLACE : GameState.DRAFT;
+        const gameState = game.draftManager.currentDraft.every(d => d.player != null) ? GameState.PLACE : GameState.DRAFT;
         const canvas = game.draw(gameState);
-        const file = new AttachmentBuilder(canvas.toBuffer(), 'game.png');
+        const file = new AttachmentBuilder(await canvas.encode('png'), { name: `game-${gameId}.png` });
 
         switch (gameState) {
             case GameState.DRAFT:
                 const draftRow = this.#buildDraftRow(game);
                 const currentPlayerIndex = game.draftManager.currentPlayerIndex;
-                await interaction.update({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [draftRow] })
+                await interaction.update({ files: [file], content: `Player ${currentPlayerIndex}`, components: [draftRow] })
                 break;
             case GameState.PLACE:
-                const placeRow = this.#buildPlaceRow(game);
-                await interaction.update({ attachments: [file], content: 'Player 1', components: [placeRow] })
+                const selectPlacementRow = this.#buildSelectPlacementRow();
+                await interaction.update({ files: [file], content: 'Player 0', components: [selectPlacementRow] })
                 break;
         }
+    }
+
+    /** @param {ButtonInteraction} interaction */
+    static async onShowPlace(interaction) {
+        const gameId = interaction.channelId;
+        const game = activeGames.get(gameId);
+        if (!game) {
+            await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
+            return;
+        }
+        const player = game.players.find(p => p.uid === interaction.user.id);
+        if (!player) {
+            await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
+            return;
+        }
+        const currentPlayerIndex = game.draftManager.currentPlayerIndex;
+        if (currentPlayerIndex !== game.players.findIndex(p => p.uid === interaction.user.id)) {
+            await interaction.reply({ content: 'It is not your turn to place a tile.', ephemeral: true });
+            return;
+        }
+        const modal = this.#buildPlacementModal();
+        await interaction.showModal(modal);
     }
 
     /** @param {ModalSubmitInteraction} interaction */
@@ -282,22 +297,23 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'No game is currently active in this channel.', ephemeral: true });
             return;
         }
-        const player = game.players.find(p => p.id === interaction.user.id);
+        const player = game.players.find(p => p.uid === interaction.user.id);
         if (!player) {
             await interaction.reply({ content: 'You are not currently playing in this game.', ephemeral: true });
             return;
         }
         const currentPlayerIndex = game.draftManager.currentPlayerIndex;
-        if (currentPlayerIndex !== game.players.findIndex(p => p.id === interaction.user.id)) {
+        if (currentPlayerIndex !== game.players.findIndex(p => p.uid === interaction.user.id)) {
             await interaction.reply({ content: 'It is not your turn to place a tile.', ephemeral: true });
             return;
         }
         const board = game.players[currentPlayerIndex].board;
-        const domino = game.draftManager.currentDraft.find(d => d.player === player)?.domino;
+        const domino = game.draftManager.currentDraft.find(d => d.player === player.id)?.domino;
         if (!domino) {
             await interaction.reply({ content: 'You have not drafted a tile.', ephemeral: true });
             return;
         }
+
         const targetCoords = interaction.fields.getTextInputValue('target');
         if (!targetCoords) {
             await interaction.reply({ content: 'You must specify a target tile.', ephemeral: true });
@@ -309,6 +325,7 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'Invalid target tile.', ephemeral: true });
             return;
         }
+
         const targetEdge = interaction.fields.getTextInputValue('targetEdge');
         if (!targetEdge) {
             await interaction.reply({ content: 'You must specify a target edge.', ephemeral: true });
@@ -318,12 +335,13 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'Invalid target edge.', ephemeral: true });
             return;
         }
-        /** @type {DominoEdge} */
-        const targetEdgeValue = targetTile[targetEdge + 'Edge'];
-        if (!targetEdgeValue) {
-            await interaction.reply({ content: 'Invalid target edge.', ephemeral: true });
-            return;
-        }
+        /** @type {Edges} */
+        const targetEdgeValue =
+            targetEdge === 'left' ? Edges.LEFT :
+                targetEdge === 'right' ? Edges.RIGHT :
+                    targetEdge === 'top' ? Edges.TOP :
+                        Edges.BOTTOM;
+
         const dominoEnd = interaction.fields.getTextInputValue('dominoEnd');
         if (!dominoEnd) {
             await interaction.reply({ content: 'You must specify a domino end.', ephemeral: true });
@@ -333,79 +351,73 @@ class BotInteractionHandler {
             await interaction.reply({ content: 'Invalid domino end.', ephemeral: true });
             return;
         }
-        const dominoEndValue = domino[dominoEnd + 'End'];
-        if (!dominoEndValue) {
-            await interaction.reply({ content: 'Invalid domino end.', ephemeral: true });
-            return;
-        }
-        const dominoEdge = interaction.fields.getTextInputValue('dominoEdge');
-        if (!dominoEdge) {
-            await interaction.reply({ content: 'You must specify a domino edge.', ephemeral: true });
-            return;
-        }
-        if (!['left', 'right', 'top', 'bottom'].includes(dominoEdge)) {
-            await interaction.reply({ content: 'Invalid domino edge.', ephemeral: true });
-            return;
-        }
-        const dominoEdgeValue = dominoEndValue[dominoEdge + 'Edge'];
-        if (!dominoEdgeValue) {
-            await interaction.reply({ content: 'Invalid domino edge.', ephemeral: true });
-            return;
-        }
-        const placedTile = board.placeDomino(domino, targetTile, targetEdgeValue, dominoEdgeValue);
+        /** @type {DominoEnd} */
+        const dominoEndValue =
+            dominoEnd === 'left' ? DominoEnd.LEFT :
+                DominoEnd.RIGHT;
+
+        const placedTile = board.placeDomino(domino, targetTile, targetEdgeValue, dominoEndValue);
         if (!placedTile) {
             await interaction.reply({ content: 'Invalid placement.', ephemeral: true });
             return;
         }
         const canvas = game.draw(GameState.PLACE);
         const gameState = currentPlayerIndex === game.players.length - 1 ? GameState.DRAFT : GameState.PLACE;
-        const file = new AttachmentBuilder(canvas.toBuffer(), 'game.png');
+        const file = new AttachmentBuilder(await canvas.encode('png'), { name: `game-${gameId}.png` });
         switch (gameState) {
             case GameState.DRAFT:
                 const draftRow = this.#buildDraftRow(game);
-                await interaction.update({ attachments: [file], content: 'Player 1', components: [draftRow] })
+                await interaction.update({ files: [file], content: 'Player 0', components: [draftRow] })
                 break;
             case GameState.PLACE:
-                const placeRow = this.#buildPlaceRow(game);
-                await interaction.update({ attachments: [file], content: `Player ${currentPlayerIndex}`, components: [placeRow] })
+                const selectPlacementRow = this.#buildSelectPlacementRow();
+                await interaction.update({ files: [file], content: `Player ${currentPlayerIndex}`, components: [selectPlacementRow] })
         }
     }
 
-    /** @param {Game} game */
-    static #buildPlaceRow(game) {
+    static #buildSelectPlacementRow() {
         return new ActionRowBuilder()
             .addComponents(
-                (
-                    new ModalBuilder()
-                        .setCustomId('place')
-                        .setStyle(ButtonStyle.Secondary)
-                        .setLabel('Place Tile')
-                )
-                    .addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('target')
-                            .setPlaceholder('Target Tile')
-                            .setPlaceholder('Something like 0,0 or 0,1')
-                    )
-                    .addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('targetEdge')
-                            .setPlaceholder('Target Edge')
-                            .setPlaceholder('left, right, top, or bottom')
-                    )
-                    .addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('dominoEnd')
-                            .setPlaceholder('Domino End')
-                            .setPlaceholder('left or right')
-                    )
-                    .addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('dominoEdge')
-                            .setPlaceholder('Domino Edge')
-                            .setPlaceholder('left, right, top, or bottom')
-                    )
-            );
+                new ButtonBuilder()
+                    .setCustomId('show-place')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setLabel('select placement')
+            )
+    }
+
+    static #buildPlacementModal() {
+        const modal = new ModalBuilder()
+            .setCustomId('place')
+            .setTitle('Place Tile');
+
+        const target = new TextInputBuilder()
+            .setCustomId('target')
+            .setLabel('Target Tile coordinates')
+            .setPlaceholder('Something like 0,0 or 0,1')
+            .setStyle(TextInputStyle.Short)
+            .setValue('0,0');
+
+        const targetEdge = new TextInputBuilder()
+            .setCustomId('targetEdge')
+            .setLabel('Target Edge')
+            .setPlaceholder('left, right, top, or bottom')
+            .setStyle(TextInputStyle.Short)
+            .setValue('right');
+
+        const dominoEnd = new TextInputBuilder()
+            .setCustomId('dominoEnd')
+            .setLabel('Domino End')
+            .setPlaceholder('left or right')
+            .setStyle(TextInputStyle.Short)
+            .setValue('left');
+
+        const firstActionRow = new ActionRowBuilder().addComponents(target);
+        const secondActionRow = new ActionRowBuilder().addComponents(targetEdge);
+        const thirdActionRow = new ActionRowBuilder().addComponents(dominoEnd);
+
+        modal.addComponents(firstActionRow, secondActionRow, thirdActionRow);
+
+        return modal;
     }
 
     /** @param {Game} game */
@@ -416,28 +428,28 @@ class BotInteractionHandler {
                     .setCustomId('draft-1')
                     .setStyle(ButtonStyle.Secondary)
                     .setLabel('1st Tile')
-                    .setDisabled(!!game.draftManager.currentDraft[0].player)
+                    .setDisabled(game.draftManager.currentDraft[0].player != null)
             )
             .addComponents(
                 new ButtonBuilder()
                     .setCustomId('draft-2')
                     .setStyle(ButtonStyle.Secondary)
                     .setLabel('2nd Tile')
-                    .setDisabled(!!game.draftManager.currentDraft[1].player)
+                    .setDisabled(game.draftManager.currentDraft[1].player != null)
             )
             .addComponents(
                 new ButtonBuilder()
                     .setCustomId('draft-3')
                     .setStyle(ButtonStyle.Secondary)
                     .setLabel('3rd Tile')
-                    .setDisabled(!!game.draftManager.currentDraft[2].player)
+                    .setDisabled(game.draftManager.currentDraft[2].player != null)
             )
             .addComponents(
                 new ButtonBuilder()
                     .setCustomId('draft-4')
                     .setStyle(ButtonStyle.Secondary)
                     .setLabel('4th Tile')
-                    .setDisabled(!!game.draftManager.currentDraft[3].player)
+                    .setDisabled(game.draftManager.currentDraft[3].player != null)
             );
     }
 }

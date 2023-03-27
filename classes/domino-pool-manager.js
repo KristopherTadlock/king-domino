@@ -26,9 +26,9 @@ export class DominoPoolManager {
     */
     draw4() {
         // Draw the first four dominos
-        const drawnDominos = this.dominos.slice(0, 4);
+        const drawnDominos = this.#dominos.slice(0, 4);
         // Remove the drawn dominos from the pool
-        this.dominos = this.dominos.slice(4);
+        this.#dominos = this.#dominos.slice(4);
         // Increment the number of draws taken
         this.#drawsTaken += 4;
         return drawnDominos;
@@ -47,7 +47,7 @@ export class DominoPoolManager {
      * Reset the pool to the starting pool and shuffle it
      */
     reset() {
-        this.dominos = this.#getStartingDominoPool();
+        this.#dominos = this.#getStartingDominoPool();
         this.#shuffle();
         this.#drawsTaken = 0;
     }
@@ -58,7 +58,7 @@ export class DominoPoolManager {
      * @returns {boolean}
      */
     isEmpty() {
-        return this.dominos.length === 0;
+        return this.#dominos.length === 0;
     }
 
     /**
@@ -66,7 +66,7 @@ export class DominoPoolManager {
      * Shuffle the domino pool
      */
     #shuffle() {
-        this.#dominos.sort(() => Math.random() - 0.5);
+        this.#dominos.sort((a, b) => Math.random() - 0.5);
     }
 
     /**

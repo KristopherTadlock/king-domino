@@ -47,6 +47,10 @@ export class DominoDraftManager {
     //  */
     // #eventEmitter;
 
+    /**
+     * @param {DominoPoolManager} dominoPoolManager
+     * @param {number} numberOfPlayers
+     */
     constructor(dominoPoolManager, numberOfPlayers) {
         this.#dominoPoolManager = dominoPoolManager;
         this.#numberOfPlayers = numberOfPlayers;
@@ -54,6 +58,7 @@ export class DominoDraftManager {
 
         this.#initializeDraftOrder();
         this.#initializeCurrentDraft(this.#dominoPoolManager.draw4());
+        this.#currentPlayerIndex = 0;
     }
 
     get currentPlayerIndex() {
@@ -65,6 +70,10 @@ export class DominoDraftManager {
      */
     get currentDraft() {
         return this.#currentDraft;
+    }
+
+    get draftOrder() {
+        return this.#draftOrder;
     }
 
     // /**
@@ -83,7 +92,8 @@ export class DominoDraftManager {
      */
     draftTile(dominoIndex) {
         if (this.#currentDraft[dominoIndex].player !== null) {
-            throw new Error('Tile is already drafted');
+            console.error('Tile is already drafted');
+            return;
         }
 
         // draft the tile
@@ -130,10 +140,10 @@ export class DominoDraftManager {
         this.#draftOrder = [];
         switch (this.#numberOfPlayers) {
             case 2:
-                this.#draftOrder = [1, 2, 1, 2];
+                this.#draftOrder = [0, 1, 0, 1];
                 break;
             case 4:
-                this.#draftOrder = [1, 2, 3, 4];
+                this.#draftOrder = [0, 1, 2, 3];
                 break;
             default:
                 throw new Error('Invalid number of players');

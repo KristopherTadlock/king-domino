@@ -14,11 +14,18 @@ export class DraftedTile {
     domino;
 
     /**
+     * @type {boolean}
+     * placed is true if the tile has been placed on the board
+     */
+    placed;
+
+    /**
      * @param {number} player
      * @param {Domino} domino
      */
     constructor(player, domino) {
         this.player = player;
         this.domino = domino;
+        this.placed = false;
     }
 }

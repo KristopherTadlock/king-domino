@@ -7,7 +7,7 @@ import { GameState } from "./enums/game-state.js";
 import { DrawDraft } from "./draw-draft.js";
 import { DrawBoard } from "./draw-board.js";
 import { DrawBoardSize } from "./enums/draw-board-size.js";
-import { Canvas, createCanvas } from "canvas";
+import { Canvas, createCanvas } from "@napi-rs/canvas";
 
 export class Game {
     /** @type {DominoDraftManager} */
@@ -24,7 +24,10 @@ export class Game {
     /** @param {GameConfiguration} config */
     start(config) {
         this.draftManager = new DominoDraftManager(new DominoPoolManager(), config.numPlayers);
-        this.players.forEach(player => player.setBoard(new GameBoardManager(config)));
+        this.players.forEach((player, i) => {
+            player.setBoard(new GameBoardManager(config));
+            player.setId(i);
+        });
         this.config = config;
     }
 
@@ -41,7 +44,7 @@ export class Game {
                 const miniMaps = this.players.map(player => new DrawBoard(DrawBoardSize.MINI, this.config).draw(player.board));
                 const draftCanvas = createCanvas(
                     draftCanvs.width + miniMaps[0].width,
-                    Math.max(draftCanvs.height, miniMaps.reduce((a, b) => a.height + b.height, 0))
+                    Math.max(draftCanvs.height, miniMaps.reduce((p, m) => p + m.height, 0))
                 );
                 const draftCtx = draftCanvas.getContext('2d');
                 draftCtx.drawImage(draftCanvs, 0, 0);
@@ -50,16 +53,14 @@ export class Game {
                 });
                 return draftCanvas;
             case GameState.PLACE:
-                const currentPlayer = this.players.find(player => player.id === this.draftManager.currentPlayerId);
-                const currentPlayerIndex = this.players.indexOf(currentPlayer);
-                if (!currentPlayer) {
-                    currentPlayer = this.players[0];
-                }
+                const currentTile = this.draftManager.currentDraft.find(draft => !draft.placed);
+                const currentPlayer = this.players[currentTile.player];
+                const currentPlayerIndex = currentTile.player;
                 const currentPlayerCanvas = new DrawBoard(DrawBoardSize.FOCUSED, this.config).draw(currentPlayer.board);
                 const playerMiniMaps = this.players.map(player => new DrawBoard(DrawBoardSize.MINI, this.config).draw(player.board));
                 const placeCanvas = createCanvas(
                     currentPlayerCanvas.width + playerMiniMaps[0].width,
-                    Math.max(currentPlayerCanvas.height, playerMiniMaps.reduce((a, b) => a.height + b.height, 0))
+                    Math.max(currentPlayerCanvas.height, playerMiniMaps.reduce((p, m) => p + m.height, 0))
                 );
                 const placeCtx = placeCanvas.getContext('2d');
                 placeCtx.drawImage(currentPlayerCanvas, 0, 0);
