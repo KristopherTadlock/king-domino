@@ -167,7 +167,7 @@ export class DrawDraft {
      */
     draw(draftManager) {
         const draft = draftManager.currentDraft;
-
+        const countDrafted = draft.filter(draftable => draftable.player != null).length;
 
         for (let i = 0; i < draft.length; i++) {
             const draftable = draft[i];
@@ -175,7 +175,7 @@ export class DrawDraft {
             this.#drawDraftingPlayer(
                 this.#draftingPlayerOffsetX,
                 this.#tileOffsetY + this.#tileSize * i + this.#tileGapY * i + this.#draftingPlayerOffsetY + this.#PlayerFontSize / 2,
-                draftable.player != null ? '' : draftManager.draftOrder[i].toString()
+                countDrafted > i ? '' : draftManager.draftOrder[i].toString()
             );
             this.#drawTile(
                 this.#tileOffsetX,
