@@ -183,9 +183,10 @@ export class WebGameManager {
       .map((d) => d.player);
 
     // Next round pick order is the same as placement order.
-    this.#pickOrder = this.players.length === 2
-      ? [this.#placeOrder[0], this.#placeOrder[1], this.#placeOrder[0], this.#placeOrder[1]]
-      : [...this.#placeOrder];
+    // For 2-player, keep the full 4-king ordering from placement.
+    // Repeating only the first two entries can incorrectly produce
+    // [P1,P1,P1,P1] when placement order is [P1,P1,P2,P2].
+    this.#pickOrder = [...this.#placeOrder];
 
     this.state = GameState.PLACE;
     this.#placeCursor = 0;
@@ -209,34 +210,14 @@ export class WebGameManager {
    * without mutating game state.
    */
   canPlaceCurrentDominoAt(x, y, anchorEnd = DominoEnd.LEFT) {
-    const drafted = this.currentPlacingDraftedTile;
-    if (!drafted) return false;
-
-    const playerIndex = this.currentPlacingPlayerIndex;
-    const boardManager = this.players[playerIndex].board;
-    const board = boardManager.board;
-
-    const anchorCoord = { x, y };
-    const connectedEdge = drafted.domino.getConnectedEdge(anchorEnd);
-    const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
-    const otherCoord = { x: x + offset.x, y: y + offset.y };
-
-    const leftCoord = anchorEnd === DominoEnd.LEFT ? anchorCoord : otherCoord;
-    const rightCoord = anchorEnd === DominoEnd.RIGHT ? anchorCoord : otherCoord;
-
-    if (board[keyOf(leftCoord.x, leftCoord.y)] || board[keyOf(rightCoord.x, rightCoord.y)]) {
-      return false;
-    }
-
-    const option = WebGameManager.#findPlacementOption(boardManager, drafted.domino, leftCoord, rightCoord);
-    return !!option;
+    const feedback = this.explainCurrentPlacementAt(x, y, anchorEnd);
+    return feedback.ok;
   }
 
   /**
-   * Attempt to place the current player's domino by anchoring one end at (x,y).
-   * The opposite end coordinate is derived from the domino's current orientation.
+   * Explain whether a current placement is legal, with a reason when invalid.
    */
-  tryPlaceCurrentDominoAt(x, y, anchorEnd = DominoEnd.LEFT) {
+  explainCurrentPlacementAt(x, y, anchorEnd = DominoEnd.LEFT) {
     const drafted = this.currentPlacingDraftedTile;
     if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
 
@@ -255,6 +236,114 @@ export class WebGameManager {
     if (board[keyOf(leftCoord.x, leftCoord.y)] || board[keyOf(rightCoord.x, rightCoord.y)]) {
       return { ok: false, reason: 'Space occupied.' };
     }
+
+    const option = WebGameManager.#findPlacementOption(boardManager, drafted.domino, leftCoord, rightCoord);
+    if (option) return { ok: true, reason: '' };
+
+    // Derive more explicit feedback for UI.
+    let sawNeighbor = false;
+    let sawFreeSpaceFailure = false;
+    let sawEdgeFailure = false;
+
+    const ends = [
+      { end: DominoEnd.LEFT, coord: leftCoord },
+      { end: DominoEnd.RIGHT, coord: rightCoord },
+    ];
+
+    for (const { end, coord } of ends) {
+      for (const neighborDirection of ALL_EDGES) {
+        const dirOffset = EdgeOffset.MAP_EDGE_TO_OFFSET(neighborDirection);
+        const neighbor = board[keyOf(coord.x + dirOffset.x, coord.y + dirOffset.y)];
+        if (!neighbor) continue;
+        sawNeighbor = true;
+
+        const tileEdge = oppositeEdge(neighborDirection);
+        const cords = GameBoardManager.getDominoCoordinates(drafted.domino, neighbor, tileEdge, end);
+        const expectedConnected = end === DominoEnd.LEFT ? leftCoord : rightCoord;
+        const expectedAttached = end === DominoEnd.LEFT ? rightCoord : leftCoord;
+
+        if (
+          cords.connectedEnd.x !== expectedConnected.x ||
+          cords.connectedEnd.y !== expectedConnected.y ||
+          cords.attachedEnd.x !== expectedAttached.x ||
+          cords.attachedEnd.y !== expectedAttached.y
+        ) {
+          continue;
+        }
+
+        const hasFreeSpace = GameBoardManager.hasFreeSpace(
+          drafted.domino,
+          neighbor,
+          tileEdge,
+          end,
+          board,
+          boardManager.maxBoardSize,
+          boardManager.boardSize
+        );
+        const hasValidEdges = GameBoardManager.hasValidEdges(
+          drafted.domino,
+          neighbor,
+          tileEdge,
+          end,
+          board
+        );
+
+        if (!hasFreeSpace) sawFreeSpaceFailure = true;
+        if (!hasValidEdges) sawEdgeFailure = true;
+      }
+    }
+
+    if (!sawNeighbor) {
+      return { ok: false, reason: 'Must connect to castle or matching landscape.' };
+    }
+    if (sawFreeSpaceFailure && !sawEdgeFailure) {
+      return { ok: false, reason: 'Would overlap or exceed board size.' };
+    }
+    if (!sawFreeSpaceFailure && sawEdgeFailure) {
+      return { ok: false, reason: 'At least one touching edge must match (or castle).' };
+    }
+    return { ok: false, reason: 'Placement violates board size and edge-matching rules.' };
+  }
+
+  /**
+   * Try both anchor ends and return the best placement feedback.
+   */
+  getPlacementFeedbackAt(x, y) {
+    const left = this.explainCurrentPlacementAt(x, y, DominoEnd.LEFT);
+    if (left.ok) return { ok: true, anchorEnd: DominoEnd.LEFT, reason: '' };
+
+    const right = this.explainCurrentPlacementAt(x, y, DominoEnd.RIGHT);
+    if (right.ok) return { ok: true, anchorEnd: DominoEnd.RIGHT, reason: '' };
+
+    // Prefer concrete reason from left, fallback to right.
+    return {
+      ok: false,
+      anchorEnd: DominoEnd.LEFT,
+      reason: left.reason || right.reason || 'Invalid placement.',
+    };
+  }
+
+  /**
+   * Attempt to place the current player's domino by anchoring one end at (x,y).
+   * The opposite end coordinate is derived from the domino's current orientation.
+   */
+  tryPlaceCurrentDominoAt(x, y, anchorEnd = DominoEnd.LEFT) {
+    const drafted = this.currentPlacingDraftedTile;
+    if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
+
+    const feedback = this.explainCurrentPlacementAt(x, y, anchorEnd);
+    if (!feedback.ok) return feedback;
+
+    const playerIndex = this.currentPlacingPlayerIndex;
+    const boardManager = this.players[playerIndex].board;
+
+    const anchorCoord = { x, y };
+    const connectedEdge = drafted.domino.getConnectedEdge(anchorEnd);
+    const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+    const otherCoord = { x: x + offset.x, y: y + offset.y };
+
+    const leftCoord = anchorEnd === DominoEnd.LEFT ? anchorCoord : otherCoord;
+    const rightCoord = anchorEnd === DominoEnd.RIGHT ? anchorCoord : otherCoord;
 
     const option = WebGameManager.#findPlacementOption(boardManager, drafted.domino, leftCoord, rightCoord);
     if (!option) {

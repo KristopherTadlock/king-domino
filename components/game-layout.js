@@ -112,6 +112,7 @@ export class GameLayout extends HTMLElement {
   #root;
   #canvasHost;
   #hud;
+  #canvasNotice;
   #hudHeader;
   #hudTitle;
   #hudHint;
@@ -146,6 +147,12 @@ export class GameLayout extends HTMLElement {
   /** @type {{state:string, attempt?:number, delay?:number} | null} */
   #connStatus = null;
 
+  /** @type {string} */
+  #placementHint = '';
+
+  /** @type {number | null} */
+  #canvasNoticeTimer = null;
+
   /** @type {boolean} */
   #hudCollapsed = false;
 
@@ -178,6 +185,8 @@ export class GameLayout extends HTMLElement {
 
   /** @type {THREE.Group} */
   #tilesGroup;
+  /** @type {THREE.Group} */
+  #regionOverlayGroup;
   /** @type {THREE.Group} */
   #ghostGroup;
 
@@ -309,6 +318,34 @@ export class GameLayout extends HTMLElement {
       .root { position: relative; height: 100%; width: 100%; overflow: hidden; background: #0f1115; }
       .canvasHost { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
       .canvasHost canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+      .canvasNotice {
+        position: absolute;
+        left: 50%;
+        bottom: 12px;
+        transform: translateX(-50%);
+        max-width: min(70vw, 720px);
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(20, 22, 28, 0.92);
+        color: #e9eef5;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      .canvasNotice.show { opacity: 1; }
+      .canvasNotice.error {
+        border-color: rgba(255, 120, 120, 0.7);
+        color: #ffd2d2;
+        background: rgba(48, 20, 20, 0.92);
+      }
+      .canvasNotice.info {
+        border-color: rgba(126, 192, 255, 0.6);
+        color: #d8ecff;
+      }
       .hud {
         position: absolute;
         top: 12px;
@@ -370,6 +407,23 @@ export class GameLayout extends HTMLElement {
         background: rgba(0,0,0,0.15);
       }
       .draftMeta { display: grid; gap: 4px; }
+      .draftTop {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .draftTopMain {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .draftTopStatus {
+        font-size: 12px;
+        color: rgba(233,238,245,0.75);
+        white-space: nowrap;
+      }
       .dominoPreview {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -444,6 +498,9 @@ export class GameLayout extends HTMLElement {
     this.#canvasHost = document.createElement('div');
     this.#canvasHost.className = 'canvasHost';
 
+    this.#canvasNotice = document.createElement('div');
+    this.#canvasNotice.className = 'canvasNotice';
+
     this.#hud = document.createElement('div');
     this.#hud.className = 'hud';
     this.#hudHeader = document.createElement('div');
@@ -478,7 +535,7 @@ export class GameLayout extends HTMLElement {
     this.#miniMapRow.className = 'miniRow';
 
     this.#hud.append(this.#hudHeader, controlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow);
-    this.#root.append(this.#canvasHost, this.#hud);
+    this.#root.append(this.#canvasHost, this.#canvasNotice, this.#hud);
     this.#shadow.append(style, this.#root);
 
     if ((window.innerWidth || 0) <= 760) {
@@ -611,6 +668,198 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #setCanvasNotice(message, tone = 'error', autoHideMs = 0) {
+    if (!this.#canvasNotice) return;
+    if (this.#canvasNoticeTimer != null) {
+      clearTimeout(this.#canvasNoticeTimer);
+      this.#canvasNoticeTimer = null;
+    }
+
+    const text = (message || '').trim();
+    if (!text) {
+      this.#canvasNotice.textContent = '';
+      this.#canvasNotice.classList.remove('show', 'error', 'info');
+      return;
+    }
+
+    this.#canvasNotice.textContent = text;
+    this.#canvasNotice.classList.remove('error', 'info');
+    this.#canvasNotice.classList.add(tone === 'info' ? 'info' : 'error', 'show');
+
+    if (autoHideMs > 0) {
+      this.#canvasNoticeTimer = setTimeout(() => {
+        this.#setCanvasNotice('');
+      }, autoHideMs);
+    }
+  }
+
+  #collectLandscapeRegions(board) {
+    const visited = new Set();
+    const regions = [];
+
+    for (const k of Object.keys(board)) {
+      if (visited.has(k)) continue;
+      const start = board[k];
+      if (!start || start.landscape === Landscapes.CASTLE) {
+        visited.add(k);
+        continue;
+      }
+
+      const regionKeys = new Set();
+      const tiles = [];
+      let crowns = 0;
+      const queue = [start];
+      visited.add(k);
+
+      while (queue.length) {
+        const tile = queue.shift();
+        const tk = keyOf(tile.x, tile.y);
+        if (regionKeys.has(tk)) continue;
+        regionKeys.add(tk);
+        tiles.push(tile);
+        crowns += tile.crowns || 0;
+
+        const n = [
+          [tile.x + 1, tile.y],
+          [tile.x - 1, tile.y],
+          [tile.x, tile.y + 1],
+          [tile.x, tile.y - 1],
+        ];
+        for (const [nx, ny] of n) {
+          const nk = keyOf(nx, ny);
+          const nt = board[nk];
+          if (!nt || nt.landscape !== start.landscape) continue;
+          if (visited.has(nk)) continue;
+          visited.add(nk);
+          queue.push(nt);
+        }
+      }
+
+      regions.push({
+        landscape: start.landscape,
+        tiles,
+        keys: regionKeys,
+        crowns,
+        score: tiles.length * crowns,
+      });
+    }
+
+    return regions;
+  }
+
+  #addRegionBoundariesAndScore(region) {
+    const edge = 0.49;
+    const y = 0.29;
+
+    const base = LANDSCAPE_COLORS[region.landscape] ?? 0xffffff;
+    const borderColor = new THREE.Color(base).offsetHSL(0, 0, 0.28);
+    const borderMat = new THREE.MeshBasicMaterial({
+      color: borderColor,
+      transparent: true,
+      opacity: 0.98,
+    });
+    const borderGeomX = new THREE.BoxGeometry(0.05, 0.07, 0.98);
+    const borderGeomZ = new THREE.BoxGeometry(0.98, 0.07, 0.05);
+
+    const addBorderX = (x, z) => {
+      const m = new THREE.Mesh(borderGeomX, borderMat);
+      m.position.set(x, y, z);
+      this.#regionOverlayGroup.add(m);
+    };
+    const addBorderZ = (x, z) => {
+      const m = new THREE.Mesh(borderGeomZ, borderMat);
+      m.position.set(x, y, z);
+      this.#regionOverlayGroup.add(m);
+    };
+
+    for (const tile of region.tiles) {
+      const x = tile.x;
+      const z = tile.y;
+
+      const left = keyOf(x - 1, z);
+      const right = keyOf(x + 1, z);
+      const up = keyOf(x, z + 1);
+      const down = keyOf(x, z - 1);
+
+      if (!region.keys.has(left)) {
+        addBorderX(x - edge, z);
+      }
+      if (!region.keys.has(right)) {
+        addBorderX(x + edge, z);
+      }
+      if (!region.keys.has(up)) {
+        addBorderZ(x, z + edge);
+      }
+      if (!region.keys.has(down)) {
+        addBorderZ(x, z - edge);
+      }
+    }
+
+    const cx = region.tiles.reduce((s, t) => s + t.x, 0) / region.tiles.length;
+    const cz = region.tiles.reduce((s, t) => s + t.y, 0) / region.tiles.length;
+    const dist2 = (t) => {
+      const dx = t.x - cx;
+      const dz = t.y - cz;
+      return dx * dx + dz * dz;
+    };
+    const sortedTiles = [...region.tiles].sort((a, b) => {
+      const ac = a.crowns || 0;
+      const bc = b.crowns || 0;
+      if (ac !== bc) return ac - bc;
+      return dist2(a) - dist2(b);
+    });
+    const bestTile = sortedTiles[0] ?? { x: cx, y: cz, crowns: 0 };
+
+    const scoreLabel = `${region.score}`;
+    const label = createTextSprite(scoreLabel, {
+      size: 256,
+      font: '800 86px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+      fillStyle: '#f5f7fb',
+      background: 'rgba(17,20,26,0.88)',
+      border: 'rgba(255,255,255,0.22)',
+    });
+    label.scale.set(0.74, 0.46, 1);
+    // Prefer low-crown tiles and offset label from tile center to avoid crown badge overlap.
+    label.position.set(bestTile.x + 0.2, 0.66, bestTile.y - 0.2);
+    this.#regionOverlayGroup.add(label);
+  }
+
+  #renderRegionScoring(board) {
+    while (this.#regionOverlayGroup.children.length) {
+      this.#regionOverlayGroup.remove(this.#regionOverlayGroup.children[0]);
+    }
+
+    const regions = this.#collectLandscapeRegions(board);
+    for (const region of regions) {
+      this.#addRegionBoundariesAndScore(region);
+    }
+  }
+
+  #buildProjectedBoard(board, drafted, anchor, anchorEnd) {
+    const connectedEdge = drafted.domino.getConnectedEdge(anchorEnd);
+    const off = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+    const other = { x: anchor.x + off.x, y: anchor.y + off.y };
+
+    const leftCoord = anchorEnd === DominoEnd.LEFT ? anchor : other;
+    const rightCoord = anchorEnd === DominoEnd.RIGHT ? anchor : other;
+
+    const projected = { ...board };
+    projected[keyOf(leftCoord.x, leftCoord.y)] = {
+      x: leftCoord.x,
+      y: leftCoord.y,
+      landscape: drafted.domino.leftEnd.landscape,
+      crowns: drafted.domino.leftEnd.crowns,
+    };
+    projected[keyOf(rightCoord.x, rightCoord.y)] = {
+      x: rightCoord.x,
+      y: rightCoord.y,
+      landscape: drafted.domino.rightEnd.landscape,
+      crowns: drafted.domino.rightEnd.crowns,
+    };
+
+    return { projected, other };
+  }
+
   #initThree() {
     const debugParam = new URL(location.href).searchParams.get('debug');
     const debugLevel = debugParam == null ? 0 : Number.parseInt(debugParam, 10);
@@ -699,6 +948,8 @@ export class GameLayout extends HTMLElement {
 
     this.#tilesGroup = new THREE.Group();
     this.#scene.add(this.#tilesGroup);
+    this.#regionOverlayGroup = new THREE.Group();
+    this.#scene.add(this.#regionOverlayGroup);
     this.#ghostGroup = new THREE.Group();
     this.#scene.add(this.#ghostGroup);
 
@@ -812,9 +1063,22 @@ export class GameLayout extends HTMLElement {
   };
 
   #onPointerMove(e) {
+    if (!this.#isMyTurnToPlace()) {
+      if (this.#hoverAnchor) {
+        this.#hoverAnchor = null;
+        this.#renderGhost();
+      }
+      this.#placementHint = '';
+      this.#setCanvasNotice('');
+      return;
+    }
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (!grid) return;
     this.#hoverAnchor = grid;
+
+    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
+    this.#placementHint = feedback.ok ? '' : feedback.reason;
+    this.#setCanvasNotice(this.#placementHint, 'error');
     this.#renderGhost();
   }
 
@@ -827,6 +1091,8 @@ export class GameLayout extends HTMLElement {
       // ignore
     }
 
+    if (!this.#isMyTurnToPlace()) return;
+
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (grid) {
       this.#hoverAnchor = grid;
@@ -838,6 +1104,7 @@ export class GameLayout extends HTMLElement {
 
   #onPointerUp(e) {
     if (e.pointerType === 'touch') e.preventDefault();
+    if (!this.#isMyTurnToPlace()) return;
 
     const start = this.#pointerDown;
     this.#pointerDown = null;
@@ -883,24 +1150,22 @@ export class GameLayout extends HTMLElement {
     const x = this.#hoverAnchor.x;
     const y = this.#hoverAnchor.y;
 
-    // Network-safe payloads use 'LEFT'|'RIGHT'.
-    let anchorEnd = null;
-    if (this.#game.canPlaceCurrentDominoAt(x, y, DominoEnd.LEFT)) anchorEnd = 'LEFT';
-    else if (this.#game.canPlaceCurrentDominoAt(x, y, DominoEnd.RIGHT)) anchorEnd = 'RIGHT';
-    else {
-      this.#flashError('Invalid placement.');
+    const feedback = this.#game.getPlacementFeedbackAt(x, y);
+    if (!feedback.ok) {
+      this.#placementHint = feedback.reason;
+      this.#setCanvasNotice(this.#placementHint || 'Invalid placement.', 'error');
       return;
     }
+
+    const anchorEnd = feedback.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT';
+    this.#placementHint = '';
+    this.#setCanvasNotice('');
 
     this.#mp?.sendAction('place', { x, y, anchorEnd });
   }
 
   #flashError(message) {
-    const err = document.createElement('div');
-    err.className = 'error';
-    err.textContent = message;
-    this.#hudBody.prepend(err);
-    setTimeout(() => err.remove(), 1200);
+    this.#setCanvasNotice(message, 'error', 1400);
   }
 
   #refreshHud() {
@@ -996,12 +1261,15 @@ export class GameLayout extends HTMLElement {
     const status = document.createElement('div');
     status.className = 'muted';
     if (g.isGameOver) {
+      this.#placementHint = '';
       status.textContent = 'No more dominos in the pool.';
       this.#hudBody.append(status);
       return;
     }
 
     if (g.state === GameState.DRAFT) {
+      this.#placementHint = '';
+      this.#setCanvasNotice('');
       status.textContent = `Draft phase — picking: ${this.#playerNames[g.currentPickingPlayerIndex] ?? g.players[g.currentPickingPlayerIndex].name}`;
       this.#hudBody.append(status);
 
@@ -1019,7 +1287,17 @@ export class GameLayout extends HTMLElement {
         label.className = 'draftMeta';
 
         const top = document.createElement('div');
-        top.innerHTML = `<span class="tag">#${slot.domino.number}</span> ${left} | ${right}`;
+        top.className = 'draftTop';
+
+        const topMain = document.createElement('div');
+        topMain.className = 'draftTopMain';
+        topMain.innerHTML = `<span class="tag">#${slot.domino.number}</span> ${left} | ${right}`;
+
+        const topStatus = document.createElement('div');
+        topStatus.className = 'draftTopStatus';
+        topStatus.textContent = pickedBy;
+
+        top.append(topMain, topStatus);
 
         const preview = document.createElement('div');
         preview.className = 'dominoPreview';
@@ -1049,11 +1327,7 @@ export class GameLayout extends HTMLElement {
           mkHalf(slot.domino.rightEnd.landscape, slot.domino.rightEnd.crowns),
         );
 
-        const picked = document.createElement('div');
-        picked.className = 'muted';
-        picked.textContent = pickedBy;
-
-        label.append(top, preview, picked);
+        label.append(top, preview);
 
         const btn = document.createElement('button');
         btn.textContent = 'Pick';
@@ -1077,6 +1351,11 @@ export class GameLayout extends HTMLElement {
         info.className = 'muted';
         info.textContent = `Domino #${drafted.domino.number} — click to place; Rotate (R) changes orientation; click chooses which end anchors.`;
         this.#hudBody.append(info);
+      }
+
+      if (!this.#isMyTurnToPlace()) {
+        this.#placementHint = '';
+        this.#setCanvasNotice('');
       }
     }
 
@@ -1113,6 +1392,8 @@ export class GameLayout extends HTMLElement {
         this.#tilesGroup.add(sprite);
       }
     }
+
+    this.#renderRegionScoring(board);
   }
 
   #centerOnActiveBoard() {
@@ -1148,7 +1429,7 @@ export class GameLayout extends HTMLElement {
 
       const title = document.createElement('div');
       title.className = 'miniTitle';
-      title.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? p.name}`;
+      title.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? p.name} · ${p.board.score}`;
 
       const canvas = document.createElement('canvas');
       canvas.width = 140;
@@ -1178,7 +1459,7 @@ export class GameLayout extends HTMLElement {
       canvas.classList.toggle('miniActive', idx === this.#focusedPlayerIndex);
       canvas.parentElement?.classList.toggle('miniTurn', idx === activeIdx);
       const t = canvas.parentElement?.querySelector('.miniTitle');
-      if (t) t.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? this.#game.players[idx].name}`;
+      if (t) t.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? this.#game.players[idx].name} · ${this.#game.players[idx].board.score}`;
       this.#drawMiniBoard(canvas, this.#game.players[idx].board);
     });
   }
@@ -1251,43 +1532,79 @@ export class GameLayout extends HTMLElement {
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
 
     const g = this.#game;
+    const focusedBoard = g.players[this.#focusedPlayerIndex]?.board?.board || g.players[0].board.board;
     if (g.isGameOver) return;
-    if (g.state !== GameState.PLACE) return;
-    if (!this.#hoverAnchor) return;
+    if (g.state !== GameState.PLACE) {
+      this.#renderRegionScoring(focusedBoard);
+      return;
+    }
+    if (!this.#isMyTurnToPlace()) {
+      this.#renderRegionScoring(focusedBoard);
+      return;
+    }
+    if (!this.#hoverAnchor) {
+      this.#renderRegionScoring(focusedBoard);
+      return;
+    }
 
     const drafted = g.currentPlacingDraftedTile;
-    if (!drafted) return;
+    if (!drafted) {
+      this.#renderRegionScoring(focusedBoard);
+      return;
+    }
 
     const anchor = this.#hoverAnchor;
-    const connectedEdge = drafted.domino.getConnectedEdge(DominoEnd.LEFT);
-    const off = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
-    const other = { x: anchor.x + off.x, y: anchor.y + off.y };
+    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    const ghostAnchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
+
+    const built = this.#buildProjectedBoard(focusedBoard, drafted, anchor, ghostAnchorEnd);
+    const other = built.other;
 
     const activeIdx = g.currentPlacingPlayerIndex;
     const board = g.players[activeIdx].board.board;
     const occupied = board[keyOf(anchor.x, anchor.y)] || board[keyOf(other.x, other.y)];
+    const valid = feedback.ok;
 
     const leftColor = LANDSCAPE_COLORS[drafted.domino.leftEnd.landscape] ?? 0xffffff;
     const rightColor = LANDSCAPE_COLORS[drafted.domino.rightEnd.landscape] ?? 0xffffff;
 
-    const matA = new THREE.MeshStandardMaterial({
-      color: leftColor,
-      transparent: true,
-      opacity: occupied ? 0.25 : 0.55,
-    });
-    const matB = new THREE.MeshStandardMaterial({
-      color: rightColor,
-      transparent: true,
-      opacity: occupied ? 0.25 : 0.55,
-    });
+    const borderColor = valid && !occupied ? 0x8cff9b : 0xff6b6b;
 
-    const meshA = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.18, 0.98), matA);
-    meshA.position.set(anchor.x, 0.09, anchor.y);
-    this.#ghostGroup.add(meshA);
+    const makeGhostCell = (x, y, color, crowns) => {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.98, 0.18, 0.98),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.0 })
+      );
+      mesh.position.set(x, 0.09, y);
+      this.#ghostGroup.add(mesh);
 
-    const meshB = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.18, 0.98), matB);
-    meshB.position.set(other.x, 0.09, other.y);
-    this.#ghostGroup.add(meshB);
+      const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.20, 0.99));
+      const edgeMat = new THREE.LineBasicMaterial({ color: borderColor, transparent: true, opacity: 0.98 });
+      const edge = new THREE.LineSegments(edgeGeo, edgeMat);
+      edge.position.set(x, 0.09, y);
+      this.#ghostGroup.add(edge);
+
+      if ((crowns || 0) > 0) {
+        const star = createTextSprite(crownsText(crowns), {
+          font: '700 46px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+          fillStyle: '#f5cc51',
+          background: 'rgba(25,28,34,0.78)',
+          border: 'rgba(255,255,255,0.28)',
+        });
+        star.position.set(x, 0.34, y);
+        star.scale.set(0.30, 0.30, 1);
+        this.#ghostGroup.add(star);
+      }
+    };
+
+    const leftCoord = ghostAnchorEnd === DominoEnd.LEFT ? anchor : other;
+    const rightCoord = ghostAnchorEnd === DominoEnd.RIGHT ? anchor : other;
+
+    makeGhostCell(leftCoord.x, leftCoord.y, leftColor, drafted.domino.leftEnd.crowns);
+    makeGhostCell(rightCoord.x, rightCoord.y, rightColor, drafted.domino.rightEnd.crowns);
+
+    if (valid && !occupied) this.#renderRegionScoring(built.projected);
+    else this.#renderRegionScoring(focusedBoard);
   }
 
   #tick = () => {
