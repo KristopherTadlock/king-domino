@@ -45,7 +45,14 @@ export class GameBoardManager {
      * @returns {BoardMinMaxAxis} A copy of the object representing the board size
      */
     get boardSize() {
-        return Object.assign({}, this.#boardSize);
+        // BoardMinMaxAxis stores data in private fields; Object.assign({}, instance)
+        // would produce an empty object. Return a real copy with the same values.
+        return new BoardMinMaxAxis(
+            this.#boardSize.xMin,
+            this.#boardSize.xMax,
+            this.#boardSize.yMin,
+            this.#boardSize.yMax
+        );
     }
 
     /**

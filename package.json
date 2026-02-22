@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node test/test-runner.js",
     "start": "http-server &",
+    "start-mp": "node server.js",
     "init-bot": "node bot-init.js",
     "start-bot": "node bot.js"
   },
@@ -23,6 +24,8 @@
     "@napi-rs/canvas": "^0.1.39",
     "discord.js": "^14.8.0",
     "dotenv": "^16.0.3",
-    "http-server": "^14.1.1"
+    "http-server": "^14.1.1",
+    "three": "^0.160.0",
+    "ws": "^8.18.0"
   }
 }

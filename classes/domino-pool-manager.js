@@ -16,7 +16,14 @@ export class DominoPoolManager {
      */
     #drawsTaken = 0;
 
-    constructor() {
+    /** @type {() => number} */
+    #rng;
+
+    /**
+     * @param {() => number} rng optional RNG returning [0,1)
+     */
+    constructor(rng = Math.random) {
+        this.#rng = rng;
         this.reset();
     }
 
@@ -66,7 +73,11 @@ export class DominoPoolManager {
      * Shuffle the domino pool
      */
     #shuffle() {
-        this.#dominos.sort((a, b) => Math.random() - 0.5);
+        // Fisher-Yates for deterministic shuffle when rng is seeded.
+        for (let i = this.#dominos.length - 1; i > 0; i--) {
+            const j = Math.floor(this.#rng() * (i + 1));
+            [this.#dominos[i], this.#dominos[j]] = [this.#dominos[j], this.#dominos[i]];
+        }
     }
 
     /**
