@@ -7,6 +7,11 @@ body {
   font-family: system-ui, sans-serif;
   color: black;
   background-color: white;
+  touch-action: manipulation;
+}
+
+html {
+  touch-action: manipulation;
 }
 
 nav {

@@ -211,8 +211,8 @@ import { GameConfiguration } from '../classes/game-configuration.js';
 (function() {
     let minMaxAxis = new BoardMinMaxAxis(0,0,0,0);
     let exceedsBoardSize = GameBoardManager.exceedsBoardSize(5, minMaxAxis, 5,5);
-    it('should not exceed board size', () => {
-        assert(exceedsBoardSize === false);
+    it('should exceed board size when test coordinates make width and height larger than max size', () => {
+        assert(exceedsBoardSize === true);
     });
     exceedsBoardSize = GameBoardManager.exceedsBoardSize(5, minMaxAxis, 6,0);
     it('should exceed board size on x axis', () => {

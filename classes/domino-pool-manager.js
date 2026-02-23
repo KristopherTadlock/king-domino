@@ -588,7 +588,7 @@ const dominosRaw = [
         },
         "right": {
             "type": Landscapes.WHEAT,
-            "crowns": 20
+            "crowns": 2
         }
     },
     {

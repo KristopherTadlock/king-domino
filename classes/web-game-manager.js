@@ -72,6 +72,9 @@ export class WebGameManager {
   /** @type {boolean} */
   isGameOver = false;
 
+  /** @type {Map<number, number>} playerIndex -> preferred domino number */
+  #preferredPlacementDominoByPlayer = new Map();
+
   /**
    * @param {GameConfiguration} config
    * @param {number} seed deterministic seed for shuffles
@@ -102,6 +105,7 @@ export class WebGameManager {
 
     this.#pool.reset();
     this.isGameOver = false;
+    this.#preferredPlacementDominoByPlayer.clear();
 
     // Initial pick order: random player order (2p repeats 0,1,0,1)
     const baseOrder = [...Array(this.players.length).keys()];
@@ -141,7 +145,48 @@ export class WebGameManager {
   get currentPlacingDraftedTile() {
     if (this.state !== GameState.PLACE) return null;
     const playerIndex = this.currentPlacingPlayerIndex;
+    if (playerIndex == null) return null;
+    const choices = this.#draftedTilesForPlayer(playerIndex);
+    if (!choices.length) return null;
+
+    const preferredNumber = this.#preferredPlacementDominoByPlayer.get(playerIndex);
+    if (preferredNumber != null) {
+      const preferred = choices.find((d) => d.domino.number === preferredNumber);
+      if (preferred) return preferred;
+    }
+
+    // Deterministic default when no preferred tile is selected.
+    return choices[0];
+  }
+
+  #draftedTileForPlayer(playerIndex) {
     return this.currentDraft.find((d) => d.player === playerIndex && !d.placed) ?? null;
+  }
+
+  #draftedTilesForPlayer(playerIndex) {
+    return this.currentDraft
+      .filter((d) => d.player === playerIndex && !d.placed)
+      .sort((a, b) => a.domino.number - b.domino.number);
+  }
+
+  getCurrentPlacingChoices() {
+    if (this.state !== GameState.PLACE) return [];
+    const playerIndex = this.currentPlacingPlayerIndex;
+    if (playerIndex == null) return [];
+    return this.#draftedTilesForPlayer(playerIndex);
+  }
+
+  selectCurrentPlacementDomino(dominoNumber) {
+    if (this.state !== GameState.PLACE) return { ok: false, reason: 'Not in placement phase.' };
+    const playerIndex = this.currentPlacingPlayerIndex;
+    if (playerIndex == null) return { ok: false, reason: 'No active placing player.' };
+
+    const selected = this.#draftedTilesForPlayer(playerIndex)
+      .find((d) => d.domino.number === dominoNumber);
+    if (!selected) return { ok: false, reason: 'That tile is not available to place.' };
+
+    this.#preferredPlacementDominoByPlayer.set(playerIndex, dominoNumber);
+    return { ok: true, reason: '' };
   }
 
   #startNewRound() {
@@ -160,6 +205,7 @@ export class WebGameManager {
 
     this.#placeOrder = [];
     this.#placeCursor = 0;
+    this.#preferredPlacementDominoByPlayer.clear();
   }
 
   /**
@@ -200,9 +246,60 @@ export class WebGameManager {
 
   skipCurrentPlacement() {
     const drafted = this.currentPlacingDraftedTile;
-    if (!drafted) return;
+    if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
+    if (!this.canSkipCurrentPlacement()) {
+      return { ok: false, reason: 'A valid placement exists. You cannot skip this tile.' };
+    }
     drafted.placed = true;
+    this.#clearConsumedPlacementPreference(this.currentPlacingPlayerIndex, drafted.domino.number);
     this.#advancePlacement();
+    return { ok: true, reason: '' };
+  }
+
+  #clearConsumedPlacementPreference(playerIndex, dominoNumber) {
+    const preferred = this.#preferredPlacementDominoByPlayer.get(playerIndex);
+    if (preferred === dominoNumber) {
+      this.#preferredPlacementDominoByPlayer.delete(playerIndex);
+    }
+  }
+
+  /**
+   * Skip is allowed only if no legal placement exists for the current domino.
+   */
+  canSkipCurrentPlacement() {
+    const drafted = this.currentPlacingDraftedTile;
+    if (!drafted) return false;
+
+    const playerIndex = this.currentPlacingPlayerIndex;
+    const boardManager = this.players[playerIndex].board;
+    const board = boardManager.board;
+
+    const candidates = new Set();
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      for (const edge of ALL_EDGES) {
+        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+        const cx = t.x + off.x;
+        const cy = t.y + off.y;
+        if (!board[keyOf(cx, cy)]) {
+          candidates.add(keyOf(cx, cy));
+        }
+      }
+    }
+
+    for (const k of candidates) {
+      const [sx, sy] = k.split(',');
+      const x = Number.parseInt(sx, 10);
+      const y = Number.parseInt(sy, 10);
+      if (Number.isNaN(x) || Number.isNaN(y)) continue;
+
+      const left = this.explainCurrentPlacementAt(x, y, DominoEnd.LEFT);
+      if (left.ok) return false;
+      const right = this.explainCurrentPlacementAt(x, y, DominoEnd.RIGHT);
+      if (right.ok) return false;
+    }
+
+    return true;
   }
 
   /**
@@ -356,12 +453,23 @@ export class WebGameManager {
     }
 
     drafted.placed = true;
+    this.#clearConsumedPlacementPreference(playerIndex, drafted.domino.number);
     this.#advancePlacement();
     return { ok: true, reason: '' };
   }
 
   #advancePlacement() {
     this.#placeCursor += 1;
+    while (this.#placeCursor < this.#placeOrder.length) {
+      const playerIndex = this.#placeOrder[this.#placeCursor];
+      if (playerIndex == null) {
+        this.#placeCursor += 1;
+        continue;
+      }
+      if (this.#draftedTileForPlayer(playerIndex)) break;
+      this.#placeCursor += 1;
+    }
+
     if (!this.currentDraft.every((d) => d.placed)) return;
     this.#startNewRound();
   }

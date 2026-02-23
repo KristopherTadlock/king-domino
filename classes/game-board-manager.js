@@ -211,8 +211,9 @@ export class GameBoardManager {
             xCord,
             yCord
         );
-        return Math.abs(newBoardAxis.xMin) + Math.abs(newBoardAxis.xMax) > size
-        || Math.abs(newBoardAxis.yMin) + Math.abs(newBoardAxis.yMax) > size;
+        const width = (newBoardAxis.xMax - newBoardAxis.xMin) + 1;
+        const height = (newBoardAxis.yMax - newBoardAxis.yMin) + 1;
+        return width > size || height > size;
     }
 
     /**
