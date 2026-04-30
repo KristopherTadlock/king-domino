@@ -23,6 +23,9 @@ export class MultiplayerClient {
   /** @type {any[]} */
   #outbox = [];
 
+  /** @type {boolean} */
+  #usesExplicitPlayerToken = false;
+
   roomId;
   name;
 
@@ -36,7 +39,7 @@ export class MultiplayerClient {
   actions = [];
 
   /**
-   * @param {{ roomId: string, name: string, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function }} opts
+   * @param {{ roomId: string, name: string, playerToken?: string, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function }} opts
    */
   constructor(opts) {
     this.roomId = opts.roomId;
@@ -48,7 +51,9 @@ export class MultiplayerClient {
     this.onStatus = opts.onStatus;
     this.url = opts.url;
 
-    this.playerToken = MultiplayerClient.getOrCreatePlayerToken();
+    const explicitToken = typeof opts.playerToken === 'string' ? opts.playerToken.trim() : '';
+    this.#usesExplicitPlayerToken = !!explicitToken;
+    this.playerToken = explicitToken || MultiplayerClient.getOrCreatePlayerToken();
   }
 
   connect() {
@@ -125,7 +130,9 @@ export class MultiplayerClient {
         this.actions = msg.actions || [];
         if (typeof msg.playerToken === 'string' && msg.playerToken) {
           this.playerToken = msg.playerToken;
-          MultiplayerClient.persistPlayerToken(this.playerToken);
+          if (!this.#usesExplicitPlayerToken) {
+            MultiplayerClient.persistPlayerToken(this.playerToken);
+          }
         }
         this.onPlayers?.(msg.players || []);
         this.onJoined?.({ playerIndex: this.playerIndex, seed: this.seed, actions: this.actions, players: msg.players || [] });

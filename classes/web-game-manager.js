@@ -95,8 +95,13 @@ export class WebGameManager {
 
   /** @param {string[]} playerNames */
   start(playerNames) {
-    const names = playerNames?.length ? playerNames : ['Player 1', 'Player 2'];
-    this.players = names.slice(0, this.config.numPlayers).map((name, idx) => {
+    const names = [];
+    for (let i = 0; i < this.config.numPlayers; i++) {
+      const provided = typeof playerNames?.[i] === 'string' ? playerNames[i].trim() : '';
+      names.push(provided || `Player ${i + 1}`);
+    }
+
+    this.players = names.map((name, idx) => {
       const player = new Player(name, idx);
       player.setId(idx);
       player.setBoard(new GameBoardManager(this.config));

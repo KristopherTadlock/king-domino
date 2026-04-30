@@ -4,7 +4,7 @@ import { GameConfiguration } from '../classes/game-configuration.js';
 import { GameState } from '../classes/enums/game-state.js';
 import { Landscapes } from '../classes/enums/landscapes.js';
 import { DominoEnd } from '../classes/enums/domino-end.js';
-import { EdgeOffset } from '../classes/enums/edges.js';
+import { Edges, EdgeOffset } from '../classes/enums/edges.js';
 import { WebGameManager } from '../classes/web-game-manager.js';
 import { MultiplayerClient } from '../classes/multiplayer-client.js';
 import { randomSeed } from '../classes/utils/rng.js';
@@ -18,6 +18,8 @@ const LANDSCAPE_COLORS = Object.freeze({
   [Landscapes.BOG]: 0x655780,
   [Landscapes.WATER]: 0x03a9f4,
 });
+
+const ALL_EDGES = [Edges.TOP, Edges.BOTTOM, Edges.LEFT, Edges.RIGHT];
 
 function landscapeLabel(landscape) {
   switch (landscape) {
@@ -468,12 +470,18 @@ export class GameLayout extends HTMLElement {
   #hudBody;
   #btnRotate;
   #btnSkip;
+  #btnUndoRequest;
+  #btnNextValid;
+  #btnResetTile;
+  #btnPlace;
   #btnCenter;
   #btnRestart;
   #btnCollapse;
   #mobileActions;
   #btnMobileRotate;
   #btnMobileSkip;
+  #btnMobileUndo;
+  #btnMobileNext;
   #btnMobilePlace;
   #miniMapRow;
   /** @type {HTMLCanvasElement[]} */
@@ -484,6 +492,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {MultiplayerClient | null} */
   #mp = null;
+
+  /** @type {boolean} */
+  #hotseat = false;
 
   /** @type {number | null} */
   #myPlayerIndex = null;
@@ -499,6 +510,12 @@ export class GameLayout extends HTMLElement {
 
   /** @type {{state:string, attempt?:number, delay?:number} | null} */
   #connStatus = null;
+
+  /** @type {{type:string,payload:any}[]} */
+  #actionHistory = [];
+
+  /** @type {{requestId:string, requesterIndex:number, targetPlaceId:string | null} | null} */
+  #pendingUndoRequest = null;
 
   /** @type {string} */
   #placementHint = '';
@@ -559,8 +576,17 @@ export class GameLayout extends HTMLElement {
   /** @type {{x:number,y:number} | null} */
   #hoverAnchor = null;
 
+  /** @type {boolean} */
+  #hoverAnchorAuto = false;
+
   /** @type {{x:number,y:number,t:number} | null} */
   #pointerDown = null;
+
+  /** @type {number | null} */
+  #activeTouchPointerId = null;
+
+  /** @type {'pan' | 'movePlacement' | null} */
+  #touchInteractionMode = null;
 
   // Controls how wide the view is in world units (before aspect).
   static #VIEW_SIZE = 7.5;
@@ -940,10 +966,16 @@ export class GameLayout extends HTMLElement {
     this.#btnMobileSkip = document.createElement('button');
     this.#btnMobileSkip.className = 'mobileBtn warn';
     this.#btnMobileSkip.textContent = 'Skip';
+    this.#btnMobileUndo = document.createElement('button');
+    this.#btnMobileUndo.className = 'mobileBtn';
+    this.#btnMobileUndo.textContent = 'Undo';
+    this.#btnMobileNext = document.createElement('button');
+    this.#btnMobileNext.className = 'mobileBtn';
+    this.#btnMobileNext.textContent = 'Next';
     this.#btnMobilePlace = document.createElement('button');
     this.#btnMobilePlace.className = 'mobileBtn primary';
     this.#btnMobilePlace.textContent = 'Place';
-    this.#mobileActions.append(this.#btnMobileRotate, this.#btnMobileSkip, this.#btnMobilePlace);
+    this.#mobileActions.append(this.#btnMobileRotate, this.#btnMobileSkip, this.#btnMobileUndo, this.#btnMobileNext, this.#btnMobilePlace);
 
     this.#hud = document.createElement('div');
     this.#hud.className = 'hud';
@@ -965,11 +997,19 @@ export class GameLayout extends HTMLElement {
     this.#btnRotate.textContent = 'Rotate (R)';
     this.#btnSkip = document.createElement('button');
     this.#btnSkip.textContent = 'Skip';
+    this.#btnUndoRequest = document.createElement('button');
+    this.#btnUndoRequest.textContent = 'Request Undo';
+    this.#btnNextValid = document.createElement('button');
+    this.#btnNextValid.textContent = 'Next Valid';
+    this.#btnResetTile = document.createElement('button');
+    this.#btnResetTile.textContent = 'Reset Tile';
+    this.#btnPlace = document.createElement('button');
+    this.#btnPlace.textContent = 'Place';
     this.#btnCenter = document.createElement('button');
     this.#btnCenter.textContent = 'Center';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
-    controlsRow.append(this.#btnRotate, this.#btnSkip, this.#btnCenter, this.#btnRestart);
+    controlsRow.append(this.#btnRotate, this.#btnSkip, this.#btnUndoRequest, this.#btnNextValid, this.#btnResetTile, this.#btnPlace, this.#btnCenter, this.#btnRestart);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -996,6 +1036,28 @@ export class GameLayout extends HTMLElement {
 
   #initMultiplayer() {
     const url = new URL(location.href);
+    this.#hotseat = url.searchParams.get('hotseat') === '1';
+
+    if (this.#hotseat) {
+      const seed = Number.parseInt(url.searchParams.get('seed') || '', 10);
+      const playerNames = [
+        url.searchParams.get('p1') || 'Codex',
+        url.searchParams.get('p2') || 'Helper',
+      ];
+      this.#myName = 'Hotseat';
+      this.#connStatus = { state: 'hotseat' };
+      this.#pendingUndoRequest = null;
+      this.#actionHistory = [];
+      this.#initGame(Number.isFinite(seed) ? seed : randomSeed(), playerNames);
+      this.#syncHotseatPlayerIndex();
+      this.#mp = {
+        sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
+        disconnect: () => {},
+      };
+      this.#ensureMiniMaps();
+      return;
+    }
+
     let room = url.searchParams.get('room');
     if (!room) {
       room = Math.random().toString(36).slice(2, 8);
@@ -1011,6 +1073,7 @@ export class GameLayout extends HTMLElement {
     this.#mp = new MultiplayerClient({
       roomId: room,
       name,
+      playerToken: url.searchParams.get('playerToken') || undefined,
       onStatus: (s) => {
         this.#connStatus = s;
         this.#refreshHud();
@@ -1019,8 +1082,13 @@ export class GameLayout extends HTMLElement {
         this.#myPlayerIndex = playerIndex;
         this.#focusedPlayerIndex = playerIndex ?? 0;
         this.#initGame(seed, players);
+        this.#pendingUndoRequest = null;
+        this.#actionHistory = [];
         // Replay history
-        for (const a of actions) this.#applyNetworkAction(a);
+        for (const a of (actions || [])) {
+          this.#actionHistory.push(a);
+          this.#applyNetworkAction(a);
+        }
         this.#syncFocusedBoardToPhase();
         this.#refreshHud();
         this.#renderBoard();
@@ -1034,6 +1102,7 @@ export class GameLayout extends HTMLElement {
         this.#renderMiniMaps();
       },
       onAction: (action) => {
+        this.#actionHistory.push(action);
         this.#applyNetworkAction(action);
         const focusChanged = this.#syncFocusedBoardToPhase();
         this.#refreshHud();
@@ -1051,7 +1120,42 @@ export class GameLayout extends HTMLElement {
     this.#mp.connect();
   }
 
-  #applyNetworkAction(action) {
+  #syncHotseatPlayerIndex() {
+    if (!this.#hotseat || !this.#game?.players?.length) return;
+    if (this.#pendingUndoRequest) {
+      const other = this.#pendingUndoRequest.requesterIndex === 0 ? 1 : 0;
+      this.#myPlayerIndex = this.#game.players[other] ? other : 0;
+      this.#myName = this.#playerNames[this.#myPlayerIndex] ?? this.#game.players[this.#myPlayerIndex]?.name ?? 'Hotseat';
+      return;
+    }
+
+    const active = this.#activePlayerIndex();
+    this.#myPlayerIndex = active ?? 0;
+    this.#myName = this.#playerNames[this.#myPlayerIndex] ?? this.#game.players[this.#myPlayerIndex]?.name ?? 'Hotseat';
+  }
+
+  #applyLocalAction(action) {
+    this.#actionHistory.push(action);
+    this.#applyNetworkAction(action);
+    this.#syncHotseatPlayerIndex();
+    const focusChanged = this.#syncFocusedBoardToPhase();
+    this.#refreshHud();
+    this.#renderBoard();
+    if (focusChanged) this.#centerOnFocusedBoard();
+    this.#renderGhost();
+    this.#renderMiniMaps();
+  }
+
+  #isGameplayActionType(type) {
+    return type === 'pickDraft'
+      || type === 'rotate'
+      || type === 'skip'
+      || type === 'selectPlacementTile'
+      || type === 'place'
+      || type === 'restart';
+  }
+
+  #applyGameplayAction(action) {
     switch (action.type) {
       case 'pickDraft':
         this.#game.pickDraft(action.payload.index);
@@ -1077,17 +1181,192 @@ export class GameLayout extends HTMLElement {
       case 'restart': {
         // Restart uses a new seed to avoid repeating the same shuffle.
         const seed = action.payload.seed ?? randomSeed();
+        this.#pendingUndoRequest = null;
         this.#initGame(seed, this.#playerNames);
         return;
       }
     }
   }
 
+  #effectiveGameplayActionsFromHistory() {
+    const effective = [];
+    let pendingUndo = null;
+
+    for (const action of this.#actionHistory) {
+      if (this.#isGameplayActionType(action.type)) {
+        if (pendingUndo && action.type !== 'restart') continue;
+        if (action.type === 'restart') pendingUndo = null;
+        effective.push(action);
+        continue;
+      }
+
+      if (action.type === 'requestUndo') {
+        const requestId = String(action.payload?.requestId || '').trim();
+        const requesterIndex = Number.isInteger(action.payload?.requesterIndex)
+          ? action.payload.requesterIndex
+          : -1;
+        if (requestId && requesterIndex >= 0) {
+          pendingUndo = {
+            requestId,
+            targetPlaceId: typeof action.payload?.targetPlaceId === 'string'
+              ? action.payload.targetPlaceId
+              : null,
+          };
+        }
+        continue;
+      }
+
+      if (action.type === 'denyUndo') {
+        const requestId = String(action.payload?.requestId || '').trim();
+        if (pendingUndo && pendingUndo.requestId === requestId) pendingUndo = null;
+        continue;
+      }
+
+      if (action.type === 'approveUndo') {
+        const requestId = String(action.payload?.requestId || '').trim();
+        if (pendingUndo && pendingUndo.requestId !== requestId) continue;
+
+        const targetPlaceId = action.payload?.targetPlaceId || pendingUndo?.targetPlaceId;
+        if (targetPlaceId) {
+          for (let i = effective.length - 1; i >= 0; i--) {
+            const e = effective[i];
+            if (e.type === 'place' && e.payload?.placeId === targetPlaceId) {
+              effective.splice(i, 1);
+              break;
+            }
+          }
+        } else {
+          for (let i = effective.length - 1; i >= 0; i--) {
+            if (effective[i].type === 'place') {
+              effective.splice(i, 1);
+              break;
+            }
+          }
+        }
+        pendingUndo = null;
+      }
+    }
+    return effective;
+  }
+
+  #rebuildGameFromHistory() {
+    const seed = this.#game?.seed ?? randomSeed();
+    this.#initGame(seed, this.#playerNames);
+    const effective = this.#effectiveGameplayActionsFromHistory();
+    for (const action of effective) {
+      this.#applyGameplayAction(action);
+    }
+  }
+
+  #latestUndoablePlaceAction() {
+    const effective = this.#effectiveGameplayActionsFromHistory();
+    for (let i = effective.length - 1; i >= 0; i--) {
+      const a = effective[i];
+      if (a?.type === 'restart') return null;
+      if (a?.type === 'place') return a;
+    }
+    return null;
+  }
+
+  #isGameplayPausedForUndo() {
+    return !!this.#pendingUndoRequest;
+  }
+
+  #requestUndo() {
+    if (this.#myPlayerIndex == null) return;
+    if (this.#pendingUndoRequest) {
+      this.#setCanvasNotice('An undo request is already pending.', 'info', 1200);
+      return;
+    }
+
+    const lastPlace = this.#latestUndoablePlaceAction();
+    if (!lastPlace) {
+      this.#setCanvasNotice('No move available to undo yet.', 'info', 1200);
+      return;
+    }
+
+    const requestId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.#mp?.sendAction('requestUndo', {
+      requestId,
+      requesterIndex: this.#myPlayerIndex,
+      targetPlaceId: lastPlace.payload?.placeId ?? null,
+    });
+  }
+
+  #approvePendingUndo() {
+    if (!this.#pendingUndoRequest || this.#myPlayerIndex == null) return;
+    const req = this.#pendingUndoRequest;
+    if (req.requesterIndex === this.#myPlayerIndex) return;
+    this.#mp?.sendAction('approveUndo', {
+      requestId: req.requestId,
+      approverIndex: this.#myPlayerIndex,
+      targetPlaceId: req.targetPlaceId,
+    });
+  }
+
+  #denyPendingUndo() {
+    if (!this.#pendingUndoRequest || this.#myPlayerIndex == null) return;
+    const req = this.#pendingUndoRequest;
+    if (req.requesterIndex === this.#myPlayerIndex) return;
+    this.#mp?.sendAction('denyUndo', {
+      requestId: req.requestId,
+      deniedByIndex: this.#myPlayerIndex,
+    });
+  }
+
+  #applyNetworkAction(action) {
+    if (this.#isGameplayActionType(action.type)) {
+      this.#applyGameplayAction(action);
+      return;
+    }
+
+    switch (action.type) {
+      case 'requestUndo': {
+        const requestId = String(action.payload?.requestId || '').trim();
+        const requesterIndex = Number.isInteger(action.payload?.requesterIndex)
+          ? action.payload.requesterIndex
+          : -1;
+        const targetPlaceId = typeof action.payload?.targetPlaceId === 'string'
+          ? action.payload.targetPlaceId
+          : null;
+        if (!requestId || requesterIndex < 0) return;
+
+        this.#pendingUndoRequest = { requestId, requesterIndex, targetPlaceId };
+        if (this.#myPlayerIndex != null && this.#myPlayerIndex !== requesterIndex) {
+          const who = this.#playerNames[requesterIndex] ?? this.#game.players[requesterIndex]?.name ?? `P${requesterIndex + 1}`;
+          this.#setCanvasNotice(`${who} requested an undo.`, 'info', 1400);
+        }
+        return;
+      }
+      case 'approveUndo': {
+        const requestId = String(action.payload?.requestId || '').trim();
+        if (!requestId) return;
+        if (!this.#pendingUndoRequest || this.#pendingUndoRequest.requestId !== requestId) return;
+
+        this.#pendingUndoRequest = null;
+        this.#rebuildGameFromHistory();
+        this.#setCanvasNotice('Undo approved.', 'info', 1000);
+        return;
+      }
+      case 'denyUndo': {
+        const requestId = String(action.payload?.requestId || '').trim();
+        if (!requestId) return;
+        if (this.#pendingUndoRequest && this.#pendingUndoRequest.requestId === requestId) {
+          this.#pendingUndoRequest = null;
+          this.#setCanvasNotice('Undo request denied.', 'info', 1200);
+        }
+        return;
+      }
+    }
+  }
+
   #isMyTurnToPick() {
+    if (this.#hotseat) return this.#game.state === GameState.DRAFT && this.#game.currentPickingPlayerIndex != null;
     return this.#myPlayerIndex != null && this.#game.state === GameState.DRAFT && this.#myPlayerIndex === this.#game.currentPickingPlayerIndex;
   }
 
   #isMyTurnToPlace() {
+    if (this.#hotseat) return this.#game.state === GameState.PLACE && this.#game.currentPlacingPlayerIndex != null;
     return this.#myPlayerIndex != null && this.#game.state === GameState.PLACE && this.#myPlayerIndex === this.#game.currentPlacingPlayerIndex;
   }
 
@@ -1151,11 +1430,14 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
-    const canAct = !!drafted;
+    const canAct = !!drafted && !this.#isGameplayPausedForUndo();
     const canSkip = canAct && this.#game.canSkipCurrentPlacement();
+    const canUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     this.#btnMobileRotate.disabled = !canAct;
     this.#btnMobileSkip.disabled = !canSkip;
-    this.#btnMobilePlace.disabled = !canAct || !this.#hoverAnchor;
+    this.#btnMobileUndo.disabled = !canUndo;
+    this.#btnMobileNext.disabled = !canAct;
+    this.#btnMobilePlace.disabled = !canAct;
     this.#btnMobilePlace.textContent = this.#hoverAnchor ? 'Place' : 'Select';
   }
 
@@ -1351,6 +1633,160 @@ export class GameLayout extends HTMLElement {
     return { projected, other };
   }
 
+  #matchingOpenZones(board, landscape) {
+    const zones = new Map();
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      if (!t || t.landscape !== landscape) continue;
+      for (const edge of ALL_EDGES) {
+        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+        const zx = t.x + off.x;
+        const zy = t.y + off.y;
+        if (board[keyOf(zx, zy)]) continue;
+        zones.set(keyOf(zx, zy), { x: zx, y: zy });
+      }
+    }
+    return [...zones.values()];
+  }
+
+  #matchingTileCenters(board, landscape) {
+    const tiles = [];
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      if (!t || t.landscape !== landscape) continue;
+      tiles.push({ x: t.x, y: t.y });
+    }
+    return tiles;
+  }
+
+  #castleOpenZones(board) {
+    const castle = board[keyOf(0, 0)];
+    if (!castle || castle.landscape !== Landscapes.CASTLE) return [];
+
+    const zones = [];
+    for (const edge of ALL_EDGES) {
+      const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+      const x = off.x;
+      const y = off.y;
+      if (!board[keyOf(x, y)]) zones.push({ x, y });
+    }
+    return zones;
+  }
+
+  #nearestZone(source, zones) {
+    let best = null;
+    let bestD2 = Infinity;
+    for (const z of zones) {
+      const dx = z.x - source.x;
+      const dy = z.y - source.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = z;
+      }
+    }
+    return best;
+  }
+
+  #addGhostConnectionHint(source, target, landscape) {
+    const base = LANDSCAPE_COLORS[landscape] ?? 0xffffff;
+    const color = new THREE.Color(base).offsetHSL(0, 0.05, 0.08);
+
+    const p0 = new THREE.Vector3(source.x, 0.36, source.y);
+    const p2 = new THREE.Vector3(target.x, 0.33, target.y);
+
+    const dx = p2.x - p0.x;
+    const dz = p2.z - p0.z;
+    const len = Math.max(0.0001, Math.hypot(dx, dz));
+    const nx = -dz / len;
+    const nz = dx / len;
+    const bend = Math.min(0.42, 0.18 + len * 0.05);
+    const p1 = new THREE.Vector3(
+      (p0.x + p2.x) / 2 + nx * bend,
+      0.50,
+      (p0.z + p2.z) / 2 + nz * bend,
+    );
+
+    const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, 40, 0.045, 14, false),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.85,
+        roughness: 0.45,
+        metalness: 0.06,
+        transparent: true,
+        opacity: 0.95,
+      }),
+    );
+    tube.renderOrder = 40;
+    tube.material.depthWrite = false;
+    tube.material.depthTest = false;
+    this.#ghostGroup.add(tube);
+
+    const blobMat = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.95,
+      roughness: 0.40,
+      metalness: 0.06,
+      transparent: true,
+      opacity: 0.98,
+    });
+    const blobA = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 12), blobMat);
+    blobA.position.copy(p0);
+    const blobB = new THREE.Mesh(new THREE.SphereGeometry(0.07, 14, 12), blobMat);
+    blobB.position.copy(p2);
+    blobA.renderOrder = 41;
+    blobB.renderOrder = 41;
+    blobA.material.depthWrite = false;
+    blobB.material.depthWrite = false;
+    blobA.material.depthTest = false;
+    blobB.material.depthTest = false;
+    this.#ghostGroup.add(blobA, blobB);
+  }
+
+  #renderGhostConnectionHints(drafted, leftCoord, rightCoord, board) {
+    const leftLandscape = drafted.domino.leftEnd.landscape;
+    const rightLandscape = drafted.domino.rightEnd.landscape;
+
+    const hintEntries = [];
+    if (leftLandscape === rightLandscape) {
+      hintEntries.push({
+        landscape: leftLandscape,
+        source: {
+          x: (leftCoord.x + rightCoord.x) / 2,
+          y: (leftCoord.y + rightCoord.y) / 2,
+        },
+      });
+    } else {
+      hintEntries.push({ landscape: leftLandscape, source: { x: leftCoord.x, y: leftCoord.y } });
+      hintEntries.push({ landscape: rightLandscape, source: { x: rightCoord.x, y: rightCoord.y } });
+    }
+
+    for (const hint of hintEntries) {
+      if (hint.landscape === Landscapes.CASTLE) continue;
+      let zones = this.#matchingOpenZones(board, hint.landscape)
+        .filter((z) => !(z.x === hint.source.x && z.y === hint.source.y));
+      if (!zones.length) {
+        zones = this.#matchingTileCenters(board, hint.landscape)
+          .filter((z) => !(z.x === hint.source.x && z.y === hint.source.y));
+      }
+      if (!zones.length) {
+        zones = this.#castleOpenZones(board)
+          .filter((z) => !(z.x === hint.source.x && z.y === hint.source.y));
+      }
+      if (!zones.length) {
+        zones = [{ x: 0, y: 0 }];
+      }
+      if (!zones.length) continue;
+      const nearest = this.#nearestZone(hint.source, zones);
+      if (!nearest) continue;
+      this.#addGhostConnectionHint(hint.source, nearest, hint.landscape);
+    }
+  }
+
   #initThree() {
     const debugParam = new URL(location.href).searchParams.get('debug');
     const debugLevel = debugParam == null ? 0 : Number.parseInt(debugParam, 10);
@@ -1520,19 +1956,42 @@ export class GameLayout extends HTMLElement {
   #wireEvents() {
     this.#btnRotate.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
+      if (this.#isGameplayPausedForUndo()) return;
       this.#mp?.sendAction('rotate');
     });
     this.#btnSkip.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
+      if (this.#isGameplayPausedForUndo()) return;
       if (!this.#game.canSkipCurrentPlacement()) {
         this.#setCanvasNotice('You can only skip when no legal placement exists.', 'error', 1400);
         return;
       }
       this.#mp?.sendAction('skip');
     });
+    this.#btnUndoRequest.addEventListener('click', () => {
+      this.#requestUndo();
+    });
     this.#btnRestart.addEventListener('click', () => {
       const seed = randomSeed();
       this.#mp?.sendAction('restart', { seed });
+    });
+
+    this.#btnNextValid.addEventListener('click', () => {
+      this.#jumpToNextValidAnchor();
+    });
+
+    this.#btnResetTile.addEventListener('click', () => {
+      this.#resetPlacementAnchor();
+    });
+
+    this.#btnPlace.addEventListener('click', () => {
+      if (!this.#isMyTurnToPlace()) return;
+      if (!this.#hoverAnchor) {
+        this.#resetPlacementAnchor();
+        this.#setCanvasNotice('Anchor selected. Click Place again to confirm.', 'info', 1100);
+        return;
+      }
+      this.#tryPlaceAtHover();
     });
 
     this.#btnCenter.addEventListener('click', () => {
@@ -1545,11 +2004,13 @@ export class GameLayout extends HTMLElement {
 
     this.#btnMobileRotate.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
+      if (this.#isGameplayPausedForUndo()) return;
       this.#mp?.sendAction('rotate');
     });
 
     this.#btnMobileSkip.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
+      if (this.#isGameplayPausedForUndo()) return;
       if (!this.#game.canSkipCurrentPlacement()) {
         this.#setCanvasNotice('You can only skip when no legal placement exists.', 'error', 1400);
         return;
@@ -1557,8 +2018,21 @@ export class GameLayout extends HTMLElement {
       this.#mp?.sendAction('skip');
     });
 
+    this.#btnMobileUndo.addEventListener('click', () => {
+      this.#requestUndo();
+    });
+
+    this.#btnMobileNext.addEventListener('click', () => {
+      this.#jumpToNextValidAnchor();
+    });
+
     this.#btnMobilePlace.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
+      if (!this.#hoverAnchor) {
+        this.#resetPlacementAnchor();
+        this.#setCanvasNotice('Anchor selected. Tap Place to confirm.', 'info', 1100);
+        return;
+      }
       this.#tryPlaceAtHover();
     });
 
@@ -1566,6 +2040,7 @@ export class GameLayout extends HTMLElement {
     this.#renderer.domElement.addEventListener('pointermove', (e) => this.#onPointerMove(e));
     this.#renderer.domElement.addEventListener('pointerup', (e) => this.#onPointerUp(e));
     this.#renderer.domElement.addEventListener('pointercancel', () => this.#onPointerCancel());
+    this.#renderer.domElement.addEventListener('click', (e) => this.#onCanvasClick(e));
 
     window.addEventListener('resize', this.#onResize);
     window.addEventListener('keydown', this.#onKeyDown);
@@ -1599,14 +2074,21 @@ export class GameLayout extends HTMLElement {
   #onKeyDown = (e) => {
     if (e.key.toLowerCase() === 'r') {
       if (!this.#isMyTurnToPlace()) return;
+      if (this.#isGameplayPausedForUndo()) return;
       this.#mp?.sendAction('rotate');
     }
   };
 
   #onPointerMove(e) {
+    if (e.pointerType === 'touch') {
+      if (this.#activeTouchPointerId !== e.pointerId) return;
+      if (this.#touchInteractionMode !== 'movePlacement') return;
+    }
+
     if (!this.#isMyTurnToPlace()) {
       if (this.#hoverAnchor) {
         this.#hoverAnchor = null;
+        this.#hoverAnchorAuto = false;
         this.#renderGhost();
       }
       this.#placementHint = '';
@@ -1616,6 +2098,7 @@ export class GameLayout extends HTMLElement {
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (!grid) return;
     this.#hoverAnchor = grid;
+    this.#hoverAnchorAuto = false;
 
     const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     this.#placementHint = feedback.ok ? '' : feedback.reason;
@@ -1634,9 +2117,27 @@ export class GameLayout extends HTMLElement {
 
     if (!this.#isMyTurnToPlace()) return;
 
+    if (e.pointerType === 'touch') {
+      this.#activeTouchPointerId = e.pointerId;
+      this.#touchInteractionMode = 'pan';
+
+      const grid = this.#gridFromClient(e.clientX, e.clientY);
+      if (grid && this.#isTouchingCurrentGhost(grid)) {
+        this.#touchInteractionMode = 'movePlacement';
+        this.#controls.enabled = false;
+        this.#hoverAnchor = grid;
+        this.#hoverAnchorAuto = false;
+        this.#renderGhost();
+      }
+
+      this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
+      return;
+    }
+
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (grid) {
       this.#hoverAnchor = grid;
+      this.#hoverAnchorAuto = false;
       this.#renderGhost();
     }
 
@@ -1645,34 +2146,74 @@ export class GameLayout extends HTMLElement {
 
   #onPointerUp(e) {
     if (e.pointerType === 'touch') e.preventDefault();
-    if (!this.#isMyTurnToPlace()) return;
+    if (!this.#isMyTurnToPlace()) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (e.pointerType === 'touch' && this.#activeTouchPointerId != null && this.#activeTouchPointerId !== e.pointerId) {
+      return;
+    }
 
     const start = this.#pointerDown;
     this.#pointerDown = null;
-    if (!start) return;
+    if (!start) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
 
     // Treat as a tap if the pointer didn’t move much.
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
     const dist2 = dx * dx + dy * dy;
     const dt = performance.now() - start.t;
-    const TAP_DIST2 = 9 * 9;
+    const TAP_DIST2 = e.pointerType === 'touch' ? 9 * 9 : 20 * 20;
     const TAP_MS = 350;
-    if (dist2 > TAP_DIST2 || dt > TAP_MS) return;
+    const isTap = e.pointerType === 'touch'
+      ? dist2 <= TAP_DIST2 && dt <= TAP_MS
+      : dist2 <= TAP_DIST2;
+    if (!isTap) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
 
     const grid = this.#gridFromClient(e.clientX, e.clientY);
-    if (!grid) return;
+    if (!grid) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
     this.#hoverAnchor = grid;
+    this.#hoverAnchorAuto = false;
 
     const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     this.#placementHint = feedback.ok ? '' : feedback.reason;
 
     this.#renderGhost();
 
-    if (e.pointerType === 'touch' || this.#isMobileViewport()) {
+    if (e.pointerType === 'touch') {
       if (feedback.ok) this.#setCanvasNotice('Tap Place to confirm.', 'info');
       else this.#setCanvasNotice(this.#placementHint, 'error');
       this.#syncMobileActions();
+      this.#resetTouchInteraction();
+      return;
+    }
+  }
+
+  #onCanvasClick(e) {
+    if (!this.#isMyTurnToPlace()) return;
+    if (e.pointerType === 'touch') return;
+
+    const grid = this.#gridFromClient(e.clientX, e.clientY);
+    if (!grid) return;
+    this.#hoverAnchor = grid;
+    this.#hoverAnchorAuto = false;
+
+    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
+    this.#placementHint = feedback.ok ? '' : feedback.reason;
+    this.#renderGhost();
+
+    if (!feedback.ok) {
+      this.#setCanvasNotice(this.#placementHint, 'error');
       return;
     }
 
@@ -1681,6 +2222,39 @@ export class GameLayout extends HTMLElement {
 
   #onPointerCancel() {
     this.#pointerDown = null;
+    this.#resetTouchInteraction();
+  }
+
+  #resetTouchInteraction() {
+    this.#activeTouchPointerId = null;
+    this.#touchInteractionMode = null;
+    if (this.#controls) this.#controls.enabled = true;
+  }
+
+  #isTouchingCurrentGhost(grid) {
+    const cells = this.#currentGhostCells();
+    for (const c of cells) {
+      if (c.x === grid.x && c.y === grid.y) return true;
+    }
+    return false;
+  }
+
+  #currentGhostCells() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return [];
+    const drafted = g.currentPlacingDraftedTile;
+    if (!drafted || !this.#hoverAnchor) return [];
+
+    const anchor = this.#hoverAnchor;
+    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    const ghostAnchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
+    const connectedEdge = drafted.domino.getConnectedEdge(ghostAnchorEnd);
+    const off = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+    const other = { x: anchor.x + off.x, y: anchor.y + off.y };
+
+    const leftCoord = ghostAnchorEnd === DominoEnd.LEFT ? anchor : other;
+    const rightCoord = ghostAnchorEnd === DominoEnd.RIGHT ? anchor : other;
+    return [leftCoord, rightCoord];
   }
 
   #gridFromClient(clientX, clientY) {
@@ -1699,6 +2273,10 @@ export class GameLayout extends HTMLElement {
   #tryPlaceAtHover() {
     if (!this.#hoverAnchor) return;
     if (!this.#isMyTurnToPlace()) return;
+    if (this.#isGameplayPausedForUndo()) {
+      this.#setCanvasNotice('Resolve the undo request before continuing.', 'info', 1200);
+      return;
+    }
 
     const x = this.#hoverAnchor.x;
     const y = this.#hoverAnchor.y;
@@ -1714,7 +2292,12 @@ export class GameLayout extends HTMLElement {
     this.#placementHint = '';
     this.#setCanvasNotice('');
 
-    this.#mp?.sendAction('place', { x, y, anchorEnd });
+    this.#mp?.sendAction('place', {
+      x,
+      y,
+      anchorEnd,
+      placeId: `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
   }
 
   #flashError(message) {
@@ -1723,6 +2306,7 @@ export class GameLayout extends HTMLElement {
 
   #refreshHud() {
     const g = this.#game;
+    this.#syncHotseatPlayerIndex();
     this.#syncMobilePanelForPhase();
     const standings = g.players
       .map((p, i) => ({
@@ -1740,8 +2324,15 @@ export class GameLayout extends HTMLElement {
       ? 'End of Game'
       : `Round ${g.round} — ${playerScores}`;
 
-    this.#btnRotate.disabled = !this.#isMyTurnToPlace() || g.isGameOver;
-    this.#btnSkip.disabled = !this.#isMyTurnToPlace() || g.isGameOver || !g.canSkipCurrentPlacement();
+    const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!g.currentPlacingDraftedTile && !this.#isGameplayPausedForUndo();
+    const canRequestUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
+    this.#btnRotate.disabled = !canPlaceUi;
+    this.#btnSkip.disabled = !canPlaceUi || !g.canSkipCurrentPlacement();
+    this.#btnUndoRequest.disabled = !canRequestUndo;
+    this.#btnNextValid.disabled = !canPlaceUi;
+    this.#btnResetTile.disabled = !canPlaceUi;
+    this.#btnPlace.disabled = !canPlaceUi;
+    this.#btnPlace.textContent = this.#hoverAnchor ? 'Place' : 'Select';
 
     this.#hudBody.innerHTML = '';
 
@@ -1750,6 +2341,29 @@ export class GameLayout extends HTMLElement {
     if (this.#myPlayerIndex == null) you.textContent = `You: ${this.#myName} (Spectator)`;
     else you.textContent = `You: P${this.#myPlayerIndex + 1} ${this.#myName}`;
     this.#hudBody.append(you);
+
+    if (this.#pendingUndoRequest) {
+      const p = this.#pendingUndoRequest;
+      const requester = this.#playerNames[p.requesterIndex] ?? this.#game.players[p.requesterIndex]?.name ?? `P${p.requesterIndex + 1}`;
+
+      const undoLine = document.createElement('div');
+      undoLine.className = 'turnBanner turnOther';
+      undoLine.textContent = `${requester} requested an undo.`;
+      this.#hudBody.append(undoLine);
+
+      if (this.#myPlayerIndex != null && this.#myPlayerIndex !== p.requesterIndex) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const approve = document.createElement('button');
+        approve.textContent = 'Approve Undo';
+        approve.addEventListener('click', () => this.#approvePendingUndo());
+        const deny = document.createElement('button');
+        deny.textContent = 'Deny';
+        deny.addEventListener('click', () => this.#denyPendingUndo());
+        row.append(approve, deny);
+        this.#hudBody.append(row);
+      }
+    }
 
     if (!this.#threeOk) {
       const warn = document.createElement('div');
@@ -1889,9 +2503,36 @@ export class GameLayout extends HTMLElement {
     if (g.state === GameState.DRAFT) {
       this.#placementHint = '';
       this.#hoverAnchor = null;
+      this.#hoverAnchorAuto = false;
       this.#setCanvasNotice('');
       status.textContent = `Draft phase — picking: ${this.#playerNames[g.currentPickingPlayerIndex] ?? g.players[g.currentPickingPlayerIndex].name}`;
       this.#hudBody.append(status);
+
+      const nextOrderByNumber = [...g.currentDraft]
+        .sort((a, b) => a.domino.number - b.domino.number);
+      const nextSlotByDominoNumber = new Map(
+        nextOrderByNumber.map((slot, i) => [slot.domino.number, i + 1])
+      );
+
+      const slotsByPlayer = new Map();
+      for (let i = 0; i < g.players.length; i++) slotsByPlayer.set(i, []);
+      for (let i = 0; i < nextOrderByNumber.length; i++) {
+        const slot = nextOrderByNumber[i];
+        if (slot.player == null) continue;
+        slotsByPlayer.get(slot.player)?.push(i + 1);
+      }
+
+      const forecast = document.createElement('div');
+      forecast.className = 'muted';
+      forecast.style.marginTop = '6px';
+      const parts = [];
+      for (let i = 0; i < g.players.length; i++) {
+        const name = this.#playerNames[i] ?? g.players[i].name ?? `P${i + 1}`;
+        const slots = slotsByPlayer.get(i) ?? [];
+        parts.push(slots.length ? `${name}: #${slots.join(', #')}` : `${name}: —`);
+      }
+      forecast.textContent = `Next order (so far): ${parts.join(' · ')}`;
+      this.#hudBody.append(forecast);
 
       const list = document.createElement('div');
       list.className = 'draftList';
@@ -1901,7 +2542,10 @@ export class GameLayout extends HTMLElement {
 
         const left = `${landscapeLabel(slot.domino.leftEnd.landscape)}(${slot.domino.leftEnd.crowns})`;
         const right = `${landscapeLabel(slot.domino.rightEnd.landscape)}(${slot.domino.rightEnd.crowns})`;
-        const pickedBy = slot.player == null ? 'Available' : `Picked by ${this.#playerNames[slot.player] ?? g.players[slot.player].name}`;
+        const nextSlot = nextSlotByDominoNumber.get(slot.domino.number) ?? '?';
+        const pickedBy = slot.player == null
+          ? `Next #${nextSlot} · Available`
+          : `Next #${nextSlot} · Picked by ${this.#playerNames[slot.player] ?? g.players[slot.player].name}`;
 
         const label = document.createElement('div');
         label.className = 'draftMeta';
@@ -1951,9 +2595,10 @@ export class GameLayout extends HTMLElement {
 
         const btn = document.createElement('button');
         btn.textContent = 'Pick';
-        btn.disabled = slot.player != null || !this.#isMyTurnToPick();
+        btn.disabled = slot.player != null || !this.#isMyTurnToPick() || this.#isGameplayPausedForUndo();
         btn.addEventListener('click', () => {
           if (!this.#isMyTurnToPick()) return;
+          if (this.#isGameplayPausedForUndo()) return;
           this.#mp?.sendAction('pickDraft', { index: idx });
         });
 
@@ -1986,9 +2631,10 @@ export class GameLayout extends HTMLElement {
             const b = document.createElement('button');
             const n = choice.domino.number;
             b.textContent = `#${n}`;
-            b.disabled = !this.#isMyTurnToPlace() || n === drafted.domino.number;
+            b.disabled = !this.#isMyTurnToPlace() || this.#isGameplayPausedForUndo() || n === drafted.domino.number;
             b.addEventListener('click', () => {
               if (!this.#isMyTurnToPlace()) return;
+              if (this.#isGameplayPausedForUndo()) return;
               this.#mp?.sendAction('selectPlacementTile', { dominoNumber: n });
             });
             chooser.append(b);
@@ -2001,6 +2647,7 @@ export class GameLayout extends HTMLElement {
       if (!this.#isMyTurnToPlace()) {
         this.#placementHint = '';
         this.#hoverAnchor = null;
+        this.#hoverAnchorAuto = false;
         this.#setCanvasNotice('');
       }
     }
@@ -2012,7 +2659,8 @@ export class GameLayout extends HTMLElement {
   #renderBoard() {
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
 
-    const board = this.#game.players[this.#focusedPlayerIndex]?.board?.board || this.#game.players[0].board.board;
+    const focusedBoardManager = this.#game.players[this.#focusedPlayerIndex]?.board || this.#game.players[0].board;
+    const board = focusedBoardManager.board;
     for (const k of Object.keys(board)) {
       const tile = board[k];
       const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, `${tile.x},${tile.y}`, false);
@@ -2025,7 +2673,7 @@ export class GameLayout extends HTMLElement {
       this.#tilesGroup.add(tileMesh);
 
       if (tile.landscape === Landscapes.CASTLE) {
-        this.#addCastleDetail(tile.x, tile.y);
+        this.#addCastleDetail(tile.x, tile.y, board, focusedBoardManager);
       } else {
         this.#addLandscapeDetail(tile);
         if ((tile.crowns || 0) > 0) {
@@ -2050,6 +2698,47 @@ export class GameLayout extends HTMLElement {
     }
 
     this.#renderRegionScoring(board);
+  }
+
+  #castleGrowthState(board, boardManager) {
+    const maxSize = Math.max(1, boardManager?.maxBoardSize ?? 7);
+    const targetArea = maxSize * maxSize;
+    const allTiles = Object.keys(board).length;
+    const nonCastleTiles = Math.max(0, allTiles - 1);
+    const progress = Math.max(0, Math.min(1, nonCastleTiles / Math.max(1, targetArea - 1)));
+
+    const axis = boardManager?.boardSize;
+    const xMin = axis?.xMin ?? 0;
+    const xMax = axis?.xMax ?? 0;
+    const yMin = axis?.yMin ?? 0;
+    const yMax = axis?.yMax ?? 0;
+    const spanX = xMax - xMin + 1;
+    const spanY = yMax - yMin + 1;
+    const fullBounds = spanX === maxSize && spanY === maxSize;
+
+    let noGaps = false;
+    if (fullBounds) {
+      noGaps = true;
+      for (let x = xMin; x <= xMax; x++) {
+        for (let y = yMin; y <= yMax; y++) {
+          if (!board[keyOf(x, y)]) {
+            noGaps = false;
+            break;
+          }
+        }
+        if (!noGaps) break;
+      }
+    }
+
+    const perfectKingdom = fullBounds && noGaps && allTiles === targetArea;
+
+    let tier = 0;
+    if (progress >= 0.85) tier = 3;
+    else if (progress >= 0.55) tier = 2;
+    else if (progress >= 0.25) tier = 1;
+    if (perfectKingdom) tier = 4;
+
+    return { tier, progress, perfectKingdom };
   }
 
   #variationRand(tile, tag = 'v') {
@@ -2192,43 +2881,93 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #addCastleDetail(x, y) {
+  #addCastleDetail(x, y, board, boardManager) {
+    const growth = this.#castleGrowthState(board, boardManager);
+    const tier = growth.tier;
+
     const stone = new THREE.MeshStandardMaterial({
-      color: 0xd8dbe1,
-      roughness: 0.58,
-      metalness: 0.08,
-      emissive: 0x11141a,
-      emissiveIntensity: 0.08,
+      color: tier >= 3 ? 0xe1e5ee : 0xd4d8df,
+      roughness: tier === 0 ? 0.68 : 0.56,
+      metalness: tier >= 2 ? 0.11 : 0.06,
+      emissive: growth.perfectKingdom ? 0x1b2841 : 0x11141a,
+      emissiveIntensity: growth.perfectKingdom ? 0.20 : 0.08,
     });
 
-    const keep = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.28, 0.46), stone);
-    keep.position.set(x, 0.36, y);
+    const keepScale = tier === 0 ? 0.80 : tier === 1 ? 0.95 : tier === 2 ? 1.10 : tier === 3 ? 1.22 : 1.30;
+    const keepHeight = 0.18 + keepScale * 0.20;
+    const keep = new THREE.Mesh(new THREE.BoxGeometry(0.42 * keepScale, keepHeight, 0.42 * keepScale), stone);
+    keep.position.set(x, 0.22 + keepHeight / 2, y);
     this.#tilesGroup.add(keep);
 
-    const towerGeom = new THREE.CylinderGeometry(0.09, 0.10, 0.24, 10);
+    const towerCount = tier === 0 ? 2 : 4;
+    const towerGeom = new THREE.CylinderGeometry(0.07 + tier * 0.012, 0.08 + tier * 0.012, 0.18 + tier * 0.05, 12);
     const towerOffsets = [
       [-0.28, -0.28],
       [0.28, -0.28],
       [-0.28, 0.28],
       [0.28, 0.28],
     ];
-    for (const [dx, dz] of towerOffsets) {
+    for (let i = 0; i < towerCount; i++) {
+      const [dx, dz] = towerOffsets[i];
       const tower = new THREE.Mesh(towerGeom, stone);
-      tower.position.set(x + dx, 0.34, y + dz);
+      tower.position.set(x + dx, 0.25 + (0.18 + tier * 0.05) / 2, y + dz);
       this.#tilesGroup.add(tower);
     }
 
-    const battlement = new THREE.MeshStandardMaterial({ color: 0xc3c8cf, roughness: 0.52, metalness: 0.1 });
-    const toothGeom = new THREE.BoxGeometry(0.08, 0.08, 0.08);
-    const teeth = [
-      [-0.16, -0.16], [0.00, -0.16], [0.16, -0.16],
-      [-0.16, 0.16], [0.00, 0.16], [0.16, 0.16],
-      [-0.16, 0.00], [0.16, 0.00],
-    ];
-    for (const [dx, dz] of teeth) {
-      const tooth = new THREE.Mesh(toothGeom, battlement);
-      tooth.position.set(x + dx, 0.53, y + dz);
-      this.#tilesGroup.add(tooth);
+    if (tier >= 1) {
+      const battlement = new THREE.MeshStandardMaterial({ color: 0xc3c8cf, roughness: 0.52, metalness: 0.1 });
+      const toothGeom = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+      const teeth = [
+        [-0.16, -0.16], [0.00, -0.16], [0.16, -0.16],
+        [-0.16, 0.16], [0.00, 0.16], [0.16, 0.16],
+        [-0.16, 0.00], [0.16, 0.00],
+      ];
+      for (const [dx, dz] of teeth) {
+        const tooth = new THREE.Mesh(toothGeom, battlement);
+        tooth.position.set(x + dx * keepScale, 0.44 + keepHeight * 0.35, y + dz * keepScale);
+        this.#tilesGroup.add(tooth);
+      }
+    }
+
+    if (tier >= 2) {
+      const roofMat = new THREE.MeshStandardMaterial({ color: 0x49566f, roughness: 0.42, metalness: 0.16 });
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.20 * keepScale, 0.16, 4), roofMat);
+      roof.rotation.y = Math.PI * 0.25;
+      roof.position.set(x, 0.46 + keepHeight * 0.4, y);
+      this.#tilesGroup.add(roof);
+    }
+
+    if (tier >= 3) {
+      const bannerMat = new THREE.MeshStandardMaterial({ color: 0x2d5ea8, roughness: 0.6, metalness: 0.08, side: THREE.DoubleSide });
+      const mastMat = new THREE.MeshStandardMaterial({ color: 0x5d4c3a, roughness: 0.75, metalness: 0.03 });
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 8), mastMat);
+      mast.position.set(x + 0.06, 0.62, y + 0.06);
+      this.#tilesGroup.add(mast);
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.09), bannerMat);
+      banner.position.set(x + 0.12, 0.66, y + 0.06);
+      banner.rotation.y = Math.PI * 0.20;
+      this.#tilesGroup.add(banner);
+    }
+
+    if (growth.perfectKingdom) {
+      const crownMat = new THREE.MeshStandardMaterial({
+        color: 0xffd66d,
+        roughness: 0.28,
+        metalness: 0.55,
+        emissive: 0x7a4b08,
+        emissiveIntensity: 0.35,
+      });
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.018, 10, 26), crownMat);
+      ring.position.set(x, 0.84, y);
+      ring.rotation.x = Math.PI / 2;
+      this.#tilesGroup.add(ring);
+
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.08, 8), crownMat);
+        tip.position.set(x + Math.cos(a) * 0.18, 0.88, y + Math.sin(a) * 0.18);
+        this.#tilesGroup.add(tip);
+      }
     }
   }
 
@@ -2593,10 +3332,196 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #findBestInitialHoverAnchor() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return null;
+
+    const activeIdx = g.currentPlacingPlayerIndex;
+    if (activeIdx == null) return null;
+
+    const playerBoard = g.players[activeIdx]?.board;
+    const board = playerBoard?.board;
+    const boardSize = playerBoard?.boardSize;
+    if (!board || !boardSize) return null;
+
+    const centerX = Math.round((boardSize.xMin + boardSize.xMax) / 2);
+    const centerY = Math.round((boardSize.yMin + boardSize.yMax) / 2);
+
+    const candidates = new Set();
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      for (const edge of ALL_EDGES) {
+        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+        const cx = t.x + off.x;
+        const cy = t.y + off.y;
+        if (!board[keyOf(cx, cy)]) candidates.add(keyOf(cx, cy));
+      }
+    }
+
+    if (!candidates.size) candidates.add(keyOf(centerX, centerY));
+
+    const ordered = [...candidates]
+      .map((k) => {
+        const [sx, sy] = k.split(',');
+        return { x: Number.parseInt(sx, 10), y: Number.parseInt(sy, 10) };
+      })
+      .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
+      .sort((a, b) => {
+        const ad = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+        const bd = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+        return ad - bd;
+      });
+
+    let firstVisible = null;
+    for (const c of ordered) {
+      if (!firstVisible && !board[keyOf(c.x, c.y)]) firstVisible = c;
+      const feedback = g.getPlacementFeedbackAt(c.x, c.y);
+      if (feedback.ok) return c;
+    }
+
+    if (firstVisible) return firstVisible;
+    return { x: centerX, y: centerY };
+  }
+
+  #orderedPlacementCandidateAnchors() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return [];
+
+    const activeIdx = g.currentPlacingPlayerIndex;
+    if (activeIdx == null) return [];
+
+    const playerBoard = g.players[activeIdx]?.board;
+    const board = playerBoard?.board;
+    const boardSize = playerBoard?.boardSize;
+    if (!board || !boardSize) return [];
+
+    const centerX = Math.round((boardSize.xMin + boardSize.xMax) / 2);
+    const centerY = Math.round((boardSize.yMin + boardSize.yMax) / 2);
+
+    const candidates = new Set();
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      for (const edge of ALL_EDGES) {
+        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+        const cx = t.x + off.x;
+        const cy = t.y + off.y;
+        if (!board[keyOf(cx, cy)]) candidates.add(keyOf(cx, cy));
+      }
+    }
+
+    if (!candidates.size) candidates.add(keyOf(centerX, centerY));
+
+    return [...candidates]
+      .map((k) => {
+        const [sx, sy] = k.split(',');
+        return { x: Number.parseInt(sx, 10), y: Number.parseInt(sy, 10) };
+      })
+      .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
+      .sort((a, b) => {
+        const ad = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+        const bd = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+        if (ad !== bd) return ad - bd;
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+  }
+
+  #resetPlacementAnchor() {
+    if (!this.#isMyTurnToPlace()) {
+      this.#setCanvasNotice('It is not your turn to place.', 'info', 1100);
+      return;
+    }
+
+    const activeIdx = this.#game?.currentPlacingPlayerIndex;
+    if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
+
+    const suggested = this.#findBestInitialHoverAnchor();
+    if (!suggested) {
+      this.#setCanvasNotice('No placement candidates found.', 'info', 1100);
+      return;
+    }
+
+    this.#hoverAnchor = suggested;
+    this.#hoverAnchorAuto = true;
+    this.#placementHint = '';
+    this.#setCanvasNotice('Reset tile preview.', 'info', 900);
+    this.#renderGhost();
+    this.#centerOnFocusedBoard();
+    this.#syncMobileActions();
+    this.#refreshHud();
+  }
+
+  #jumpToNextValidAnchor() {
+    if (!this.#isMyTurnToPlace()) {
+      this.#setCanvasNotice('It is not your turn to place.', 'info', 1100);
+      return;
+    }
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return;
+
+    const activeIdx = g.currentPlacingPlayerIndex;
+    if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
+
+    const ordered = this.#orderedPlacementCandidateAnchors();
+    if (!ordered.length) {
+      this.#setCanvasNotice('No placement candidates found.', 'info', 1100);
+      return;
+    }
+
+    const valid = ordered.filter((c) => g.getPlacementFeedbackAt(c.x, c.y).ok);
+    if (!valid.length) {
+      this.#setCanvasNotice('No valid placements. Use Skip if available.', 'info', 1300);
+      return;
+    }
+
+    let currentIndex = -1;
+    if (this.#hoverAnchor) {
+      currentIndex = valid.findIndex((c) => c.x === this.#hoverAnchor.x && c.y === this.#hoverAnchor.y);
+    }
+    const nextIndex = (currentIndex + 1) % valid.length;
+    const next = valid[nextIndex];
+
+    this.#hoverAnchor = next;
+    this.#hoverAnchorAuto = false;
+    this.#placementHint = '';
+    if (valid.length === 1) {
+      this.#setCanvasNotice('Only one valid spot is available.', 'info', 1100);
+    } else {
+      this.#setCanvasNotice(`Valid spot ${nextIndex + 1}/${valid.length}`, 'info', 900);
+    }
+    this.#renderGhost();
+    this.#centerOnFocusedBoard();
+    this.#syncMobileActions();
+    this.#refreshHud();
+  }
+
+  #isCurrentHoverAnchorOccluded() {
+    if (!this.#hoverAnchor) return false;
+
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return false;
+
+    const activeIdx = g.currentPlacingPlayerIndex;
+    if (activeIdx == null) return false;
+    const board = g.players[activeIdx]?.board?.board;
+    if (!board) return false;
+
+    const anchor = this.#hoverAnchor;
+    if (board[keyOf(anchor.x, anchor.y)]) return true;
+
+    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    return !feedback.ok && feedback.reason === 'Space occupied.';
+  }
+
   #renderGhost() {
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
 
     const g = this.#game;
+    const activeIdx = g.currentPlacingPlayerIndex;
+    if (this.#isMyTurnToPlace() && activeIdx != null && this.#focusedPlayerIndex !== activeIdx) {
+      this.#focusedPlayerIndex = activeIdx;
+    }
+
     const focusedBoard = g.players[this.#focusedPlayerIndex]?.board?.board || g.players[0].board.board;
     if (g.isGameOver) return;
     if (g.state !== GameState.PLACE) {
@@ -2614,15 +3539,14 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
-    // On entering placement phase, show the ghost immediately even before any
-    // pointer hover by choosing a default anchor near the active board center.
-    if (!this.#hoverAnchor) {
-      const activeIdx = g.currentPlacingPlayerIndex;
-      const bs = g.players[activeIdx].board.boardSize;
-      this.#hoverAnchor = {
-        x: Math.round((bs.xMin + bs.xMax) / 2),
-        y: Math.round((bs.yMin + bs.yMax) / 2),
-      };
+    // On entering placement phase, show the ghost immediately.
+    // Prefer a legal/visible anchor so the ghost does not spawn hidden under tiles.
+    if (!this.#hoverAnchor || (this.#hoverAnchorAuto && this.#isCurrentHoverAnchorOccluded())) {
+      const suggested = this.#findBestInitialHoverAnchor();
+      if (suggested) {
+        this.#hoverAnchor = suggested;
+        this.#hoverAnchorAuto = true;
+      }
     }
 
     const anchor = this.#hoverAnchor;
@@ -2632,7 +3556,6 @@ export class GameLayout extends HTMLElement {
     const built = this.#buildProjectedBoard(focusedBoard, drafted, anchor, ghostAnchorEnd);
     const other = built.other;
 
-    const activeIdx = g.currentPlacingPlayerIndex;
     const board = g.players[activeIdx].board.board;
     const occupied = board[keyOf(anchor.x, anchor.y)] || board[keyOf(other.x, other.y)];
     const valid = feedback.ok;
@@ -2672,6 +3595,8 @@ export class GameLayout extends HTMLElement {
 
     makeGhostCell(leftCoord.x, leftCoord.y, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns);
     makeGhostCell(rightCoord.x, rightCoord.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns);
+
+    this.#renderGhostConnectionHints(drafted, leftCoord, rightCoord, board);
 
     if (valid && !occupied) this.#renderRegionScoring(built.projected);
     else this.#renderRegionScoring(focusedBoard);
