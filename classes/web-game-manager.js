@@ -181,6 +181,120 @@ export class WebGameManager {
     return this.#draftedTilesForPlayer(playerIndex);
   }
 
+  #placementCandidateAnchors(board, boardSize) {
+    const centerX = Math.round((boardSize.xMin + boardSize.xMax) / 2);
+    const centerY = Math.round((boardSize.yMin + boardSize.yMax) / 2);
+
+    const candidates = new Set();
+    for (const k of Object.keys(board)) {
+      const t = board[k];
+      for (const edge of ALL_EDGES) {
+        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
+        const cx = t.x + off.x;
+        const cy = t.y + off.y;
+        if (!board[keyOf(cx, cy)]) candidates.add(keyOf(cx, cy));
+      }
+    }
+
+    if (!candidates.size) candidates.add(keyOf(centerX, centerY));
+
+    return [...candidates]
+      .map((k) => {
+        const [sx, sy] = k.split(',');
+        return { x: Number.parseInt(sx, 10), y: Number.parseInt(sy, 10) };
+      })
+      .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
+      .sort((a, b) => {
+        const ad = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+        const bd = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+        if (ad !== bd) return ad - bd;
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+  }
+
+  static #placementOptionKey(domino, x, y, anchorEnd) {
+    const connectedEdge = domino.getConnectedEdge(anchorEnd);
+    const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+    const anchorCoord = { x, y };
+    const otherCoord = { x: x + offset.x, y: y + offset.y };
+    const leftCoord = anchorEnd === DominoEnd.LEFT ? anchorCoord : otherCoord;
+    const rightCoord = anchorEnd === DominoEnd.RIGHT ? anchorCoord : otherCoord;
+
+    const cells = [
+      {
+        x: leftCoord.x,
+        y: leftCoord.y,
+        landscape: domino.leftEnd.landscape.description,
+        crowns: domino.leftEnd.crowns,
+      },
+      {
+        x: rightCoord.x,
+        y: rightCoord.y,
+        landscape: domino.rightEnd.landscape.description,
+        crowns: domino.rightEnd.crowns,
+      },
+    ].sort((a, b) => a.x - b.x || a.y - b.y);
+
+    return [
+      domino.number,
+      ...cells.map((cell) => `${cell.x},${cell.y}:${cell.landscape}:${cell.crowns}`),
+    ].join('|');
+  }
+
+  getCurrentPlacementOptions() {
+    if (this.state !== GameState.PLACE) return [];
+    const playerIndex = this.currentPlacingPlayerIndex;
+    if (playerIndex == null) return [];
+
+    const boardManager = this.players[playerIndex].board;
+    const candidates = this.#placementCandidateAnchors(boardManager.board, boardManager.boardSize);
+    const choices = this.#draftedTilesForPlayer(playerIndex);
+    const originalPreferred = this.#preferredPlacementDominoByPlayer.get(playerIndex);
+    const options = [];
+    const seen = new Set();
+
+    try {
+      for (const choice of choices) {
+        this.#preferredPlacementDominoByPlayer.set(playerIndex, choice.domino.number);
+        const originalOrientation = choice.domino.orientation;
+
+        try {
+          for (let rotationSteps = 0; rotationSteps < 4; rotationSteps++) {
+            for (const c of candidates) {
+              const feedback = this.getPlacementFeedbackAt(c.x, c.y);
+              if (!feedback.ok) continue;
+              const key = WebGameManager.#placementOptionKey(choice.domino, c.x, c.y, feedback.anchorEnd);
+              if (seen.has(key)) continue;
+              seen.add(key);
+              options.push({
+                dominoNumber: choice.domino.number,
+                rotationSteps,
+                orientation: choice.domino.orientation,
+                x: c.x,
+                y: c.y,
+                anchorEnd: feedback.anchorEnd,
+              });
+            }
+            choice.domino.rotate();
+          }
+        } finally {
+          while (choice.domino.orientation !== originalOrientation) {
+            choice.domino.rotate();
+          }
+        }
+      }
+    } finally {
+      if (originalPreferred == null) {
+        this.#preferredPlacementDominoByPlayer.delete(playerIndex);
+      } else {
+        this.#preferredPlacementDominoByPlayer.set(playerIndex, originalPreferred);
+      }
+    }
+
+    return options;
+  }
+
   selectCurrentPlacementDomino(dominoNumber) {
     if (this.state !== GameState.PLACE) return { ok: false, reason: 'Not in placement phase.' };
     const playerIndex = this.currentPlacingPlayerIndex;
@@ -269,42 +383,10 @@ export class WebGameManager {
   }
 
   /**
-   * Skip is allowed only if no legal placement exists for the current domino.
+   * Skip is allowed only if no legal placement exists for any remaining tile choice.
    */
   canSkipCurrentPlacement() {
-    const drafted = this.currentPlacingDraftedTile;
-    if (!drafted) return false;
-
-    const playerIndex = this.currentPlacingPlayerIndex;
-    const boardManager = this.players[playerIndex].board;
-    const board = boardManager.board;
-
-    const candidates = new Set();
-    for (const k of Object.keys(board)) {
-      const t = board[k];
-      for (const edge of ALL_EDGES) {
-        const off = EdgeOffset.MAP_EDGE_TO_OFFSET(edge);
-        const cx = t.x + off.x;
-        const cy = t.y + off.y;
-        if (!board[keyOf(cx, cy)]) {
-          candidates.add(keyOf(cx, cy));
-        }
-      }
-    }
-
-    for (const k of candidates) {
-      const [sx, sy] = k.split(',');
-      const x = Number.parseInt(sx, 10);
-      const y = Number.parseInt(sy, 10);
-      if (Number.isNaN(x) || Number.isNaN(y)) continue;
-
-      const left = this.explainCurrentPlacementAt(x, y, DominoEnd.LEFT);
-      if (left.ok) return false;
-      const right = this.explainCurrentPlacementAt(x, y, DominoEnd.RIGHT);
-      if (right.ok) return false;
-    }
-
-    return true;
+    return this.state === GameState.PLACE && this.getCurrentPlacementOptions().length === 0;
   }
 
   /**

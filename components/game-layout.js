@@ -2092,7 +2092,7 @@ export class GameLayout extends HTMLElement {
     if (!drafted || !this.#hoverAnchor) return [];
 
     const anchor = this.#hoverAnchor;
-    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    const feedback = this.#placementFeedbackForAnchor(anchor);
     const ghostAnchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
     const connectedEdge = drafted.domino.getConnectedEdge(ghostAnchorEnd);
     const off = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
@@ -2127,7 +2127,7 @@ export class GameLayout extends HTMLElement {
     const x = this.#hoverAnchor.x;
     const y = this.#hoverAnchor.y;
 
-    const feedback = this.#game.getPlacementFeedbackAt(x, y);
+    const feedback = this.#placementFeedbackForAnchor(this.#hoverAnchor);
     if (!feedback.ok) {
       this.#placementHint = feedback.reason;
       this.#setCanvasNotice(this.#placementHint || 'Invalid placement.', 'error');
@@ -3281,20 +3281,66 @@ export class GameLayout extends HTMLElement {
     const activeIdx = this.#game?.currentPlacingPlayerIndex;
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const suggested = this.#findBestInitialHoverAnchor();
-    if (!suggested) {
+    const options = this.#game.getCurrentPlacementOptions?.() ?? [];
+    if (!options.length) {
+      const suggested = this.#findBestInitialHoverAnchor();
+      if (suggested) {
+        this.#hoverAnchor = suggested;
+        this.#hoverAnchorAuto = true;
+        this.#placementHint = '';
+        this.#setCanvasNotice('No valid placement. Use Skip if available.', 'info', 1200);
+        this.#renderGhost();
+        this.#centerOnFocusedBoard();
+        this.#syncMobileActions();
+        this.#refreshHud();
+        return;
+      }
       this.#setCanvasNotice('No placement candidates found.', 'info', 1100);
       return;
     }
 
-    this.#hoverAnchor = suggested;
+    this.#applyPlacementOption(options[0]);
     this.#hoverAnchorAuto = true;
     this.#placementHint = '';
-    this.#setCanvasNotice('Reset tile preview.', 'info', 900);
+    this.#setCanvasNotice('Selected first valid move.', 'info', 900);
     this.#renderGhost();
     this.#centerOnFocusedBoard();
     this.#syncMobileActions();
     this.#refreshHud();
+  }
+
+  #currentPlacementOptionIndex(options) {
+    if (!this.#hoverAnchor) return -1;
+    const drafted = this.#game.currentPlacingDraftedTile;
+    if (!drafted) return -1;
+
+    return options.findIndex((option) =>
+      option.dominoNumber === drafted.domino.number
+      && option.orientation === drafted.domino.orientation
+      && option.x === this.#hoverAnchor.x
+      && option.y === this.#hoverAnchor.y
+      && (!this.#hoverAnchor.anchorEnd || option.anchorEnd === this.#hoverAnchor.anchorEnd)
+    );
+  }
+
+  #applyPlacementOption(option) {
+    if (!option) return;
+
+    const drafted = this.#game.currentPlacingDraftedTile;
+    if (drafted?.domino.number !== option.dominoNumber) {
+      this.#mp?.sendAction('selectPlacementTile', { dominoNumber: option.dominoNumber });
+    }
+
+    const selected = this.#game.currentPlacingDraftedTile;
+    let guard = 0;
+    while (selected && selected.domino.orientation !== option.orientation && guard < 4) {
+      this.#mp?.sendAction('rotate');
+      guard += 1;
+    }
+
+    this.#hoverAnchor = { x: option.x, y: option.y, anchorEnd: option.anchorEnd };
+    this.#hoverAnchorAuto = false;
+    this.#placementHint = '';
   }
 
   #jumpToNextValidAnchor() {
@@ -3308,32 +3354,21 @@ export class GameLayout extends HTMLElement {
     const activeIdx = g.currentPlacingPlayerIndex;
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const ordered = this.#orderedPlacementCandidateAnchors();
-    if (!ordered.length) {
-      this.#setCanvasNotice('No placement candidates found.', 'info', 1100);
-      return;
-    }
-
-    const valid = ordered.filter((c) => g.getPlacementFeedbackAt(c.x, c.y).ok);
+    const valid = g.getCurrentPlacementOptions?.() ?? [];
     if (!valid.length) {
       this.#setCanvasNotice('No valid placements. Use Skip if available.', 'info', 1300);
       return;
     }
 
-    let currentIndex = -1;
-    if (this.#hoverAnchor) {
-      currentIndex = valid.findIndex((c) => c.x === this.#hoverAnchor.x && c.y === this.#hoverAnchor.y);
-    }
+    const currentIndex = this.#currentPlacementOptionIndex(valid);
     const nextIndex = (currentIndex + 1) % valid.length;
     const next = valid[nextIndex];
 
-    this.#hoverAnchor = next;
-    this.#hoverAnchorAuto = false;
-    this.#placementHint = '';
+    this.#applyPlacementOption(next);
     if (valid.length === 1) {
       this.#setCanvasNotice('Only one valid spot is available.', 'info', 1100);
     } else {
-      this.#setCanvasNotice(`Valid spot ${nextIndex + 1}/${valid.length}`, 'info', 900);
+      this.#setCanvasNotice(`Valid move ${nextIndex + 1}/${valid.length}`, 'info', 900);
     }
     this.#renderGhost();
     this.#centerOnFocusedBoard();
@@ -3355,8 +3390,18 @@ export class GameLayout extends HTMLElement {
     const anchor = this.#hoverAnchor;
     if (board[keyOf(anchor.x, anchor.y)]) return true;
 
-    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    const feedback = this.#placementFeedbackForAnchor(anchor);
     return !feedback.ok && feedback.reason === 'Space occupied.';
+  }
+
+  #placementFeedbackForAnchor(anchor) {
+    if (!anchor) return { ok: false, anchorEnd: DominoEnd.LEFT, reason: 'No placement selected.' };
+    if (anchor.anchorEnd) {
+      const exact = this.#game.explainCurrentPlacementAt(anchor.x, anchor.y, anchor.anchorEnd);
+      if (exact.ok) return { ok: true, anchorEnd: anchor.anchorEnd, reason: '' };
+      return { ...exact, anchorEnd: anchor.anchorEnd };
+    }
+    return this.#game.getPlacementFeedbackAt(anchor.x, anchor.y);
   }
 
   #renderGhost() {
@@ -3396,7 +3441,7 @@ export class GameLayout extends HTMLElement {
     }
 
     const anchor = this.#hoverAnchor;
-    const feedback = g.getPlacementFeedbackAt(anchor.x, anchor.y);
+    const feedback = this.#placementFeedbackForAnchor(anchor);
     const ghostAnchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
 
     const built = this.#buildProjectedBoard(focusedBoard, drafted, anchor, ghostAnchorEnd);
