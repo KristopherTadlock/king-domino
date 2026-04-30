@@ -468,11 +468,14 @@ export class GameLayout extends HTMLElement {
   #hudTitle;
   #hudHint;
   #hudBody;
+  #primaryControlsRow;
+  #secondaryControlsRow;
   #btnRotate;
   #btnSkip;
   #btnUndoRequest;
   #btnNextValid;
   #btnResetTile;
+  #btnScores;
   #btnPlace;
   #btnCenter;
   #btnRestart;
@@ -528,6 +531,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {GameState | null} */
   #lastAutoHudPhase = null;
+
+  /** @type {boolean} */
+  #showPlacementScores = false;
 
   /** @type {THREE.WebGLRenderer} */
   #renderer;
@@ -814,6 +820,19 @@ export class GameLayout extends HTMLElement {
       .hud h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.2px; }
       .hudHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
       .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .controlsPrimary {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .controlsSecondary {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 6px;
+      }
       .muted { color: rgba(233,238,245,0.7); }
       button {
         appearance: none;
@@ -826,6 +845,28 @@ export class GameLayout extends HTMLElement {
         font-weight: 600;
       }
       .btnCollapse { min-width: 34px; padding: 6px 8px; }
+      .primaryAction {
+        border-color: rgba(115, 232, 150, 0.75);
+        background: rgba(35, 110, 72, 0.72);
+        color: #e8fff0;
+      }
+      .primaryAction:hover { background: rgba(44, 132, 85, 0.84); }
+      .secondaryAction {
+        padding: 5px 8px;
+        font-size: 12px;
+        color: rgba(233,238,245,0.82);
+      }
+      .secondaryAction.active {
+        border-color: rgba(126, 192, 255, 0.70);
+        background: rgba(38, 81, 128, 0.66);
+        color: #d8ecff;
+      }
+      .dangerAction {
+        border-color: rgba(255, 201, 120, 0.70);
+        background: rgba(73, 53, 24, 0.72);
+        color: #ffe7bc;
+      }
+      [hidden] { display: none !important; }
       button:hover { background: rgba(255,255,255,0.12); }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
       .turnBanner {
@@ -881,6 +922,9 @@ export class GameLayout extends HTMLElement {
         grid-template-columns: 1fr 1fr;
         gap: 5px;
       }
+      .dominoPreview.compact {
+        min-width: 118px;
+      }
       .dominoHalf {
         min-height: 34px;
         border-radius: 7px;
@@ -899,6 +943,47 @@ export class GameLayout extends HTMLElement {
         color: #f0c94f;
         text-shadow: 0 1px 2px rgba(0,0,0,0.55);
         letter-spacing: 0.5px;
+      }
+      .placementChoices {
+        margin-top: 8px;
+        display: grid;
+        gap: 6px;
+      }
+      .placementChoiceTitle {
+        font-size: 12px;
+        font-weight: 800;
+        color: rgba(233,238,245,0.86);
+      }
+      .placementChoiceList {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+        gap: 6px;
+      }
+      .placementChoice {
+        display: grid;
+        gap: 5px;
+        justify-items: stretch;
+        padding: 7px;
+        text-align: left;
+      }
+      .placementChoice.selected {
+        border-color: rgba(115, 232, 150, 0.85);
+        background: rgba(30, 95, 62, 0.62);
+        box-shadow: 0 0 0 2px rgba(115, 232, 150, 0.18);
+      }
+      .placementChoiceHeader {
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .placementChoiceNumber {
+        color: rgba(233,238,245,0.72);
+      }
+      .placementChoiceStatus {
+        color: #c6ffe4;
       }
       .tag { font-size: 12px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); }
       .error { color: #ffb4b4; margin-top: 6px; }
@@ -932,7 +1017,9 @@ export class GameLayout extends HTMLElement {
       .collapsed .hudHint,
       .collapsed #hudBody,
       .collapsed .miniRow,
-      .collapsed .row {
+      .collapsed .row,
+      .collapsed .controlsPrimary,
+      .collapsed .controlsSecondary {
         display: none;
       }
 
@@ -991,25 +1078,39 @@ export class GameLayout extends HTMLElement {
     this.#hudBody = document.createElement('div');
     this.#hudBody.id = 'hudBody';
 
-    const controlsRow = document.createElement('div');
-    controlsRow.className = 'row';
+    this.#primaryControlsRow = document.createElement('div');
+    this.#primaryControlsRow.className = 'controlsPrimary';
+    this.#secondaryControlsRow = document.createElement('div');
+    this.#secondaryControlsRow.className = 'controlsSecondary';
     this.#btnRotate = document.createElement('button');
     this.#btnRotate.textContent = 'Rotate (R)';
+    this.#btnRotate.className = 'secondaryAction';
     this.#btnSkip = document.createElement('button');
     this.#btnSkip.textContent = 'Skip';
+    this.#btnSkip.className = 'dangerAction secondaryAction';
     this.#btnUndoRequest = document.createElement('button');
     this.#btnUndoRequest.textContent = 'Request Undo';
+    this.#btnUndoRequest.className = 'secondaryAction';
     this.#btnNextValid = document.createElement('button');
     this.#btnNextValid.textContent = 'Next Valid';
+    this.#btnNextValid.className = 'primaryAction';
     this.#btnResetTile = document.createElement('button');
     this.#btnResetTile.textContent = 'Reset Tile';
+    this.#btnResetTile.className = 'secondaryAction';
+    this.#btnScores = document.createElement('button');
+    this.#btnScores.textContent = 'Scores';
+    this.#btnScores.className = 'secondaryAction';
     this.#btnPlace = document.createElement('button');
     this.#btnPlace.textContent = 'Place';
+    this.#btnPlace.className = 'primaryAction';
     this.#btnCenter = document.createElement('button');
     this.#btnCenter.textContent = 'Center';
+    this.#btnCenter.className = 'secondaryAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
-    controlsRow.append(this.#btnRotate, this.#btnSkip, this.#btnUndoRequest, this.#btnNextValid, this.#btnResetTile, this.#btnPlace, this.#btnCenter, this.#btnRestart);
+    this.#btnRestart.className = 'secondaryAction';
+    this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
+    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnUndoRequest, this.#btnSkip, this.#btnRestart);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -1018,7 +1119,7 @@ export class GameLayout extends HTMLElement {
     this.#miniMapRow = document.createElement('div');
     this.#miniMapRow.className = 'miniRow';
 
-    this.#hud.append(this.#hudHeader, controlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow);
+    this.#hud.append(this.#hudHeader, this.#primaryControlsRow, this.#secondaryControlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow);
     this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#hud);
     this.#shadow.append(style, this.#root);
 
@@ -1435,10 +1536,12 @@ export class GameLayout extends HTMLElement {
     const canUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     this.#btnMobileRotate.disabled = !canAct;
     this.#btnMobileSkip.disabled = !canSkip;
+    this.#btnMobileSkip.hidden = !canSkip;
     this.#btnMobileUndo.disabled = !canUndo;
+    this.#btnMobileUndo.hidden = !canUndo;
     this.#btnMobileNext.disabled = !canAct;
     this.#btnMobilePlace.disabled = !canAct;
-    this.#btnMobilePlace.textContent = this.#hoverAnchor ? 'Place' : 'Select';
+    this.#btnMobilePlace.textContent = 'Place';
   }
 
   #setCanvasNotice(message, tone = 'error', autoHideMs = 0) {
@@ -1464,6 +1567,37 @@ export class GameLayout extends HTMLElement {
         this.#setCanvasNotice('');
       }, autoHideMs);
     }
+  }
+
+  #createDominoHalf(landscape, crowns) {
+    const el = document.createElement('div');
+    el.className = 'dominoHalf';
+    el.style.background = landscapeCssBackground(landscape, crowns || 0);
+    el.style.backgroundBlendMode = 'normal';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'dominoName';
+    nameEl.textContent = landscapeLabel(landscape);
+    el.append(nameEl);
+
+    if (crowns > 0) {
+      const crownsEl = document.createElement('div');
+      crownsEl.className = 'dominoCrowns';
+      crownsEl.textContent = crownsText(crowns);
+      el.append(crownsEl);
+    }
+
+    return el;
+  }
+
+  #createDominoPreview(domino, compact = false) {
+    const preview = document.createElement('div');
+    preview.className = compact ? 'dominoPreview compact' : 'dominoPreview';
+    preview.append(
+      this.#createDominoHalf(domino.leftEnd.landscape, domino.leftEnd.crowns),
+      this.#createDominoHalf(domino.rightEnd.landscape, domino.rightEnd.crowns),
+    );
+    return preview;
   }
 
   #collectLandscapeRegions(board) {
@@ -1601,6 +1735,7 @@ export class GameLayout extends HTMLElement {
     while (this.#regionOverlayGroup.children.length) {
       this.#regionOverlayGroup.remove(this.#regionOverlayGroup.children[0]);
     }
+    if (!board) return;
 
     const regions = this.#collectLandscapeRegions(board);
     for (const region of regions) {
@@ -1828,6 +1963,12 @@ export class GameLayout extends HTMLElement {
 
     this.#btnResetTile.addEventListener('click', () => {
       this.#resetPlacementAnchor();
+    });
+
+    this.#btnScores.addEventListener('click', () => {
+      this.#showPlacementScores = !this.#showPlacementScores;
+      this.#refreshHud();
+      this.#renderGhost();
     });
 
     this.#btnPlace.addEventListener('click', () => {
@@ -2171,14 +2312,27 @@ export class GameLayout extends HTMLElement {
       : `Round ${g.round} — ${playerScores}`;
 
     const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!g.currentPlacingDraftedTile && !this.#isGameplayPausedForUndo();
-    const canRequestUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
+    const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
+    const canSkip = canPlaceUi && g.canSkipCurrentPlacement();
+    const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
+    this.#primaryControlsRow.hidden = !isPlacementPhase;
+    this.#secondaryControlsRow.hidden = g.state === GameState.DRAFT && !g.isGameOver;
     this.#btnRotate.disabled = !canPlaceUi;
-    this.#btnSkip.disabled = !canPlaceUi || !g.canSkipCurrentPlacement();
+    this.#btnRotate.hidden = g.isGameOver;
+    this.#btnResetTile.hidden = g.isGameOver;
+    this.#btnSkip.disabled = !canSkip;
+    this.#btnSkip.hidden = !canSkip;
     this.#btnUndoRequest.disabled = !canRequestUndo;
+    this.#btnUndoRequest.hidden = !canRequestUndo;
+    this.#btnRestart.hidden = !g.isGameOver;
+    this.#btnScores.disabled = !canPlaceUi;
+    this.#btnScores.hidden = !isPlacementPhase;
+    this.#btnScores.classList.toggle('active', this.#showPlacementScores);
+    this.#btnScores.textContent = this.#showPlacementScores ? 'Scores On' : 'Scores';
     this.#btnNextValid.disabled = !canPlaceUi;
     this.#btnResetTile.disabled = !canPlaceUi;
     this.#btnPlace.disabled = !canPlaceUi;
-    this.#btnPlace.textContent = this.#hoverAnchor ? 'Place' : 'Select';
+    this.#btnPlace.textContent = 'Place';
 
     this.#hudBody.innerHTML = '';
 
@@ -2409,35 +2563,7 @@ export class GameLayout extends HTMLElement {
 
         top.append(topMain, topStatus);
 
-        const preview = document.createElement('div');
-        preview.className = 'dominoPreview';
-
-        const mkHalf = (landscape, crowns) => {
-          const el = document.createElement('div');
-          el.className = 'dominoHalf';
-          el.style.background = landscapeCssBackground(landscape, crowns || 0);
-          el.style.backgroundBlendMode = 'normal';
-
-          const nameEl = document.createElement('div');
-          nameEl.className = 'dominoName';
-          nameEl.textContent = landscapeLabel(landscape);
-          el.append(nameEl);
-
-          if (crowns > 0) {
-            const crownsEl = document.createElement('div');
-            crownsEl.className = 'dominoCrowns';
-            crownsEl.textContent = crownsText(crowns);
-            el.append(crownsEl);
-          }
-          return el;
-        };
-
-        preview.append(
-          mkHalf(slot.domino.leftEnd.landscape, slot.domino.leftEnd.crowns),
-          mkHalf(slot.domino.rightEnd.landscape, slot.domino.rightEnd.crowns),
-        );
-
-        label.append(top, preview);
+        label.append(top, this.#createDominoPreview(slot.domino));
 
         const btn = document.createElement('button');
         btn.textContent = 'Pick';
@@ -2460,32 +2586,50 @@ export class GameLayout extends HTMLElement {
       if (drafted) {
         const info = document.createElement('div');
         info.className = 'muted';
-        info.textContent = `Domino #${drafted.domino.number} — click to place; Rotate (R) changes orientation; click chooses which end anchors.`;
+        info.textContent = `Placing #${drafted.domino.number} — click the board to move the preview; Rotate changes orientation.`;
         this.#hudBody.append(info);
 
         const choices = g.getCurrentPlacingChoices();
         if (choices.length > 1) {
           const chooser = document.createElement('div');
-          chooser.className = 'row';
+          chooser.className = 'placementChoices';
 
-          const label = document.createElement('span');
-          label.className = 'muted';
-          label.textContent = 'Choose tile to place first:';
+          const label = document.createElement('div');
+          label.className = 'placementChoiceTitle';
+          label.textContent = 'Tile to place';
           chooser.append(label);
 
+          const list = document.createElement('div');
+          list.className = 'placementChoiceList';
           for (const choice of choices) {
             const b = document.createElement('button');
             const n = choice.domino.number;
-            b.textContent = `#${n}`;
-            b.disabled = !this.#isMyTurnToPlace() || this.#isGameplayPausedForUndo() || n === drafted.domino.number;
+            const selected = n === drafted.domino.number;
+            b.className = selected ? 'placementChoice selected' : 'placementChoice';
+            b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+
+            const header = document.createElement('div');
+            header.className = 'placementChoiceHeader';
+            const number = document.createElement('span');
+            number.className = 'placementChoiceNumber';
+            number.textContent = `#${n}`;
+            const state = document.createElement('span');
+            state.className = 'placementChoiceStatus';
+            state.textContent = selected ? 'Placing' : 'Choose';
+            header.append(number, state);
+
+            b.append(header, this.#createDominoPreview(choice.domino, true));
+            b.disabled = !this.#isMyTurnToPlace() || this.#isGameplayPausedForUndo();
             b.addEventListener('click', () => {
               if (!this.#isMyTurnToPlace()) return;
               if (this.#isGameplayPausedForUndo()) return;
+              if (n === this.#game.currentPlacingDraftedTile?.domino.number) return;
               this.#mp?.sendAction('selectPlacementTile', { dominoNumber: n });
             });
-            chooser.append(b);
+            list.append(b);
           }
 
+          chooser.append(list);
           this.#hudBody.append(chooser);
         }
       }
@@ -3487,7 +3631,8 @@ export class GameLayout extends HTMLElement {
     makeGhostCell(leftCoord.x, leftCoord.y, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns);
     makeGhostCell(rightCoord.x, rightCoord.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns);
 
-    if (valid && !occupied) this.#renderRegionScoring(built.projected);
+    if (!this.#showPlacementScores) this.#renderRegionScoring(null);
+    else if (valid && !occupied) this.#renderRegionScoring(built.projected);
     else this.#renderRegionScoring(focusedBoard);
   }
 
