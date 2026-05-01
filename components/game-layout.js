@@ -2570,7 +2570,7 @@ export class GameLayout extends HTMLElement {
     if (this.#endOverlay) this.#endOverlay.hidden = !g.isGameOver;
 
     const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!g.currentPlacingDraftedTile && !this.#isGameplayPausedForUndo();
-    const placementOptions = canPlaceUi ? (g.getCurrentPlacementOptions?.() ?? []) : [];
+    const placementOptions = canPlaceUi ? this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []) : [];
     const hasPlacementOptions = placementOptions.length > 0;
     const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     const canSkip = canPlaceUi && g.canSkipCurrentPlacement();
@@ -3689,7 +3689,7 @@ export class GameLayout extends HTMLElement {
     const activeIdx = this.#game?.currentPlacingPlayerIndex;
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const options = this.#game.getCurrentPlacementOptions?.() ?? [];
+    const options = this.#uniqueVisiblePlacementOptions(this.#game.getCurrentPlacementOptions?.() ?? []);
     if (!options.length) {
       const suggested = this.#findBestInitialHoverAnchor();
       if (suggested) {
@@ -3731,6 +3731,87 @@ export class GameLayout extends HTMLElement {
     );
   }
 
+  #visiblePlacementOptionKey(option) {
+    const choice = this.#game.getCurrentPlacingChoices?.()
+      ?.find((c) => c.domino.number === option.dominoNumber);
+    const domino = choice?.domino;
+    if (!domino) {
+      return [
+        option.x,
+        option.y,
+        option.anchorEnd?.description ?? String(option.anchorEnd),
+        option.orientation,
+      ].join('|');
+    }
+
+    const originalOrientation = domino.orientation;
+    try {
+      let guard = 0;
+      while (domino.orientation !== option.orientation && guard < 4) {
+        domino.rotate();
+        guard += 1;
+      }
+
+      const connectedEdge = domino.getConnectedEdge(option.anchorEnd);
+      const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+      const anchorCoord = { x: option.x, y: option.y };
+      const otherCoord = { x: option.x + offset.x, y: option.y + offset.y };
+      const leftCoord = option.anchorEnd === DominoEnd.LEFT ? anchorCoord : otherCoord;
+      const rightCoord = option.anchorEnd === DominoEnd.RIGHT ? anchorCoord : otherCoord;
+      const cells = [
+        {
+          x: leftCoord.x,
+          y: leftCoord.y,
+          landscape: domino.leftEnd.landscape.description,
+          crowns: domino.leftEnd.crowns,
+        },
+        {
+          x: rightCoord.x,
+          y: rightCoord.y,
+          landscape: domino.rightEnd.landscape.description,
+          crowns: domino.rightEnd.crowns,
+        },
+      ].sort((a, b) => a.x - b.x || a.y - b.y);
+
+      return cells.map((cell) => `${cell.x},${cell.y}:${cell.landscape}:${cell.crowns}`).join('|');
+    } finally {
+      while (domino.orientation !== originalOrientation) {
+        domino.rotate();
+      }
+    }
+  }
+
+  #uniqueVisiblePlacementOptions(options) {
+    if (!options.length) return [];
+    const currentDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+    const byKey = new Map();
+    for (const option of options) {
+      const key = this.#visiblePlacementOptionKey(option);
+      const existing = byKey.get(key);
+      if (!existing || (option.dominoNumber === currentDominoNumber && existing.dominoNumber !== currentDominoNumber)) {
+        byKey.set(key, option);
+      }
+    }
+    const playerIndex = this.#game.currentPlacingPlayerIndex;
+    const boardSize = playerIndex == null ? null : this.#game.players[playerIndex]?.board?.boardSize;
+    const centerX = boardSize ? (boardSize.xMin + boardSize.xMax) / 2 : 0;
+    const centerY = boardSize ? (boardSize.yMin + boardSize.yMax) / 2 : 0;
+    return [...byKey.values()].sort((a, b) => {
+      if (a.dominoNumber !== b.dominoNumber) return a.dominoNumber - b.dominoNumber;
+      if (a.orientation !== b.orientation) return a.orientation - b.orientation;
+
+      const ad = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+      const bd = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+      if (ad !== bd) return ad - bd;
+      if (a.y !== b.y) return a.y - b.y;
+      if (a.x !== b.x) return a.x - b.x;
+
+      const ae = a.anchorEnd === DominoEnd.RIGHT ? 1 : 0;
+      const be = b.anchorEnd === DominoEnd.RIGHT ? 1 : 0;
+      return ae - be;
+    });
+  }
+
   #applyPlacementOption(option) {
     if (!option) return;
 
@@ -3762,7 +3843,7 @@ export class GameLayout extends HTMLElement {
     const activeIdx = g.currentPlacingPlayerIndex;
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const valid = g.getCurrentPlacementOptions?.() ?? [];
+    const valid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []);
     if (!valid.length) {
       this.#setCanvasNotice('No valid placements. Use Skip if available.', 'info', 1300);
       return;
