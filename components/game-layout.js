@@ -462,12 +462,15 @@ export class GameLayout extends HTMLElement {
   #root;
   #canvasHost;
   #canvasTurn;
+  #topBar;
   #hud;
   #canvasNotice;
   #hudHeader;
   #hudTitle;
   #hudHint;
   #hudBody;
+  #miniMapDock;
+  #endOverlay;
   #primaryControlsRow;
   #secondaryControlsRow;
   #tertiaryControlsRow;
@@ -479,8 +482,8 @@ export class GameLayout extends HTMLElement {
   #btnScores;
   #btnPlace;
   #btnCenter;
+  #btnMore;
   #btnRestart;
-  #btnCollapse;
   #mobileActions;
   #btnMobileRotate;
   #btnMobileSkip;
@@ -535,6 +538,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {boolean} */
   #showPlacementScores = false;
+
+  /** @type {boolean} */
+  #moreOpen = false;
 
   /** @type {THREE.WebGLRenderer} */
   #renderer;
@@ -647,21 +653,60 @@ export class GameLayout extends HTMLElement {
     this.#camera.lookAt(centerX, 0, centerZ);
     this.#camera.updateMatrixWorld();
 
-    // Shift framing to the right so content appears centered in the visible
-    // area that remains after the left HUD panel.
-    // If the panel is collapsed, center against the full viewport instead.
-    const hudRect = this.#hud?.getBoundingClientRect();
-    if (hudRect && w > 0 && !this.#hudCollapsed && !this.#isMobileViewport()) {
-      const hostRect = this.#canvasHost.getBoundingClientRect();
-      const hudRightPx = Math.max(0, Math.min(w, hudRect.right - hostRect.left));
-      const shiftPx = hudRightPx / 2;
-      if (shiftPx > 0) {
-        const worldPerPxX = (this.#camera.right - this.#camera.left) / w;
-        const shiftWorld = shiftPx * worldPerPxX;
-        const right = new THREE.Vector3().setFromMatrixColumn(this.#camera.matrixWorld, 0).normalize();
-        this.#camera.position.addScaledVector(right, -shiftWorld);
-        this.#controls.target.addScaledVector(right, -shiftWorld);
-      }
+    // Center against the usable canvas area after persistent overlays have
+    // claimed space at the edges.
+    const hostRect = this.#canvasHost.getBoundingClientRect();
+    let visibleLeft = 0;
+    let visibleTop = 0;
+    let visibleRight = w;
+    let visibleBottom = h;
+    const gap = 8;
+    const overlayRect = (el) => {
+      if (!el || el.hidden) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return null;
+      return {
+        left: Math.max(0, r.left - hostRect.left),
+        right: Math.min(w, r.right - hostRect.left),
+        top: Math.max(0, r.top - hostRect.top),
+        bottom: Math.min(h, r.bottom - hostRect.top),
+      };
+    };
+    const insetTop = (el) => {
+      const r = overlayRect(el);
+      if (r) visibleTop = Math.max(visibleTop, r.bottom + gap);
+    };
+    const insetBottom = (el) => {
+      const r = overlayRect(el);
+      if (r) visibleBottom = Math.min(visibleBottom, r.top - gap);
+    };
+    const insetLeft = (el) => {
+      const r = overlayRect(el);
+      if (r) visibleLeft = Math.max(visibleLeft, r.right + gap);
+    };
+    const mobile = this.#isMobileViewport();
+    insetTop(this.#topBar);
+    if (mobile) {
+      insetTop(this.#miniMapDock);
+      insetBottom(this.#hud);
+    } else {
+      insetLeft(this.#hud);
+    }
+    insetBottom(this.#primaryControlsRow);
+
+    const usableW = Math.max(120, visibleRight - visibleLeft);
+    const usableH = Math.max(120, visibleBottom - visibleTop);
+    if (usableW > 0 && usableH > 0) {
+      const dxPx = (visibleLeft + usableW / 2) - w / 2;
+      const dyPx = (visibleTop + usableH / 2) - h / 2;
+      const worldPerPxX = (this.#camera.right - this.#camera.left) / w;
+      const worldPerPxY = (this.#camera.top - this.#camera.bottom) / h;
+      const right = new THREE.Vector3().setFromMatrixColumn(this.#camera.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(this.#camera.matrixWorld, 1).normalize();
+      this.#camera.position.addScaledVector(right, -dxPx * worldPerPxX);
+      this.#controls.target.addScaledVector(right, -dxPx * worldPerPxX);
+      this.#camera.position.addScaledVector(up, dyPx * worldPerPxY);
+      this.#controls.target.addScaledVector(up, dyPx * worldPerPxY);
     }
 
     this.#controls.update();
@@ -734,7 +779,7 @@ export class GameLayout extends HTMLElement {
         z-index: 6;
         display: none;
       }
-      .canvasTurn.show { display: block; }
+      .canvasTurn.show { display: none; }
       .canvasTurn.turnMine {
         background: rgba(27, 76, 49, 0.92);
         color: #ccffe6;
@@ -776,7 +821,7 @@ export class GameLayout extends HTMLElement {
       .canvasNotice {
         position: absolute;
         left: 50%;
-        bottom: 12px;
+        bottom: 76px;
         transform: translateX(-50%);
         max-width: min(70vw, 720px);
         padding: 7px 10px;
@@ -790,6 +835,7 @@ export class GameLayout extends HTMLElement {
         pointer-events: none;
         opacity: 0;
         transition: opacity 120ms ease;
+        z-index: 8;
       }
       .canvasNotice.show { opacity: 1; }
       .canvasNotice.error {
@@ -801,12 +847,41 @@ export class GameLayout extends HTMLElement {
         border-color: rgba(126, 192, 255, 0.6);
         color: #d8ecff;
       }
-      .hud {
+      .topBar {
         position: absolute;
         top: 12px;
         left: 12px;
-        width: min(420px, calc(100vw - 24px));
-        max-height: calc(100dvh - 24px);
+        right: 12px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: rgba(20, 22, 28, 0.86);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 10px;
+        padding: 8px 10px;
+        color: #e9eef5;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        backdrop-filter: blur(8px);
+        z-index: 5;
+      }
+      .topBar h2 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hud {
+        position: absolute;
+        top: 72px;
+        left: 12px;
+        width: min(380px, calc(100vw - 24px));
+        max-height: calc(100dvh - 150px);
         background: rgba(20, 22, 28, 0.85);
         border: 1px solid rgba(255,255,255,0.10);
         border-radius: 10px;
@@ -817,28 +892,56 @@ export class GameLayout extends HTMLElement {
         touch-action: manipulation;
         overflow: auto;
         -webkit-overflow-scrolling: touch;
+        z-index: 5;
       }
-      .hud h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.2px; }
       .hudHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
       .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
       .controlsPrimary {
+        position: absolute;
+        left: 50%;
+        bottom: 12px;
+        transform: translateX(-50%);
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        gap: 6px;
-        margin-bottom: 6px;
+        grid-template-columns: minmax(128px, 1fr) minmax(128px, 1fr);
+        gap: 8px;
+        width: min(520px, calc(100vw - 24px));
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(20,22,28,0.82);
+        backdrop-filter: blur(8px);
+        z-index: 5;
       }
+      .controlsPrimary.skipOnly { grid-template-columns: 1fr; }
       .controlsSecondary {
+        position: absolute;
+        top: 72px;
+        right: 12px;
         display: flex;
         gap: 6px;
-        flex-wrap: wrap;
+        flex-direction: column;
         align-items: center;
-        margin-bottom: 6px;
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(20,22,28,0.72);
+        backdrop-filter: blur(8px);
+        z-index: 5;
       }
       .controlsTertiary {
+        position: absolute;
+        top: 72px;
+        right: 82px;
         display: flex;
-        justify-content: flex-end;
+        flex-direction: column;
         gap: 6px;
-        margin-top: 8px;
+        min-width: 150px;
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(20,22,28,0.92);
+        backdrop-filter: blur(8px);
+        z-index: 7;
       }
       .muted { color: rgba(233,238,245,0.7); }
       button {
@@ -851,7 +954,11 @@ export class GameLayout extends HTMLElement {
         cursor: pointer;
         font-weight: 600;
       }
-      .btnCollapse { min-width: 34px; padding: 6px 8px; }
+      .iconAction {
+        min-width: 36px;
+        min-height: 34px;
+        padding: 6px 8px;
+      }
       .primaryAction {
         border-color: rgba(115, 232, 150, 0.75);
         background: rgba(35, 110, 72, 0.72);
@@ -1000,7 +1107,19 @@ export class GameLayout extends HTMLElement {
       .tag { font-size: 12px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); }
       .error { color: #ffb4b4; margin-top: 6px; }
 
-      .miniRow { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+      .miniMapDock {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        max-width: min(360px, calc(100vw - 220px));
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(20,22,28,0.72);
+        backdrop-filter: blur(8px);
+        z-index: 5;
+      }
+      .miniRow { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
       .miniCard {
         display: grid;
         gap: 5px;
@@ -1008,6 +1127,7 @@ export class GameLayout extends HTMLElement {
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.10);
         background: rgba(0,0,0,0.15);
+        flex: 0 0 auto;
       }
       .miniTitle { font-size: 12px; font-weight: 700; color: rgba(233,238,245,0.85); }
       canvas.mini { width: 140px; height: 140px; border-radius: 8px; background: rgba(0,0,0,0.35); }
@@ -1025,39 +1145,89 @@ export class GameLayout extends HTMLElement {
         font-weight: 700;
         font-size: 12px;
       }
-
-      .collapsed .hudHint,
-      .collapsed #hudBody,
-      .collapsed .miniRow,
-      .collapsed .row,
-      .collapsed .controlsPrimary,
-      .collapsed .controlsSecondary,
-      .collapsed .controlsTertiary {
-        display: none;
+      .endOverlay {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 88px 16px 116px;
+        pointer-events: none;
+        z-index: 6;
+      }
+      .endOverlay[hidden] { display: none !important; }
+      .endCard {
+        width: min(440px, calc(100vw - 32px));
+        display: grid;
+        gap: 12px;
+        padding: 18px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(20,22,28,0.88);
+        color: #e9eef5;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 60px rgba(0,0,0,0.38);
+        pointer-events: auto;
+      }
+      .endKicker {
+        font-size: 12px;
+        font-weight: 800;
+        color: rgba(233,238,245,0.72);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .endTitle {
+        font-size: 28px;
+        line-height: 1.05;
+        font-weight: 900;
+      }
+      .endScoreList { display: grid; gap: 6px; }
+      .endScoreRow {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.07);
       }
 
       @media (max-width: 760px) {
+        .topBar {
+          top: 8px;
+          left: 8px;
+          right: 8px;
+          min-height: 42px;
+        }
+        .canvasNotice {
+          bottom: calc(min(34dvh, 320px) + 92px);
+          max-width: calc(100vw - 24px);
+        }
         .hud {
           width: calc(100vw - 16px);
-          max-height: min(62dvh, 560px);
+          max-height: min(34dvh, 320px);
           top: auto;
-          bottom: 8px;
+          bottom: 74px;
           left: 8px;
           padding: 8px;
           border-radius: 12px;
         }
-        .hud.collapsed {
-          width: min(360px, calc(100vw - 16px));
-          max-height: calc(100dvh - 16px);
-          top: 8px;
-          bottom: auto;
-        }
         .controlsPrimary {
-          position: sticky;
-          top: -8px;
-          z-index: 2;
-          padding-bottom: 6px;
-          background: linear-gradient(rgba(20,22,28,0.96), rgba(20,22,28,0.82));
+          left: 8px;
+          right: 8px;
+          bottom: 8px;
+          transform: none;
+          width: auto;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          padding: 7px;
+        }
+        .controlsSecondary {
+          top: 64px;
+          right: 8px;
+          padding: 6px;
+        }
+        .controlsTertiary {
+          top: 64px;
+          right: 58px;
         }
         .mobileActions {
           right: 8px;
@@ -1067,10 +1237,46 @@ export class GameLayout extends HTMLElement {
           flex-wrap: wrap;
         }
         .mobileBtn { padding: 9px 11px; }
-        .draftItem { grid-template-columns: 1fr; }
+        .draftList {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 6px;
+        }
+        .draftItem {
+          grid-template-columns: 1fr;
+          padding: 6px;
+        }
         .draftItem > button { justify-self: stretch; }
+        .draftTop {
+          display: grid;
+          align-items: start;
+          gap: 3px;
+        }
+        .draftTopStatus {
+          font-size: 10px;
+          white-space: normal;
+        }
+        .dominoPreview { gap: 4px; }
+        .dominoPreview.compact { min-width: 0; }
+        .dominoHalf {
+          min-height: 28px;
+          font-size: 9px;
+        }
         .placementChoiceList { grid-template-columns: 1fr; }
+        .miniMapDock {
+          top: 64px;
+          left: 8px;
+          bottom: auto;
+          max-width: calc(100vw - 78px);
+          padding: 6px;
+        }
         .miniRow { gap: 6px; }
+        .miniCard { padding: 5px; gap: 4px; }
+        .miniTitle { font-size: 11px; }
+        canvas.mini { width: 76px; height: 76px; }
+        .endOverlay { padding: 132px 12px 128px; }
+        .endCard { padding: 15px; }
+        .endTitle { font-size: 23px; }
       }
     `;
 
@@ -1105,17 +1311,16 @@ export class GameLayout extends HTMLElement {
 
     this.#hud = document.createElement('div');
     this.#hud.className = 'hud';
+    this.#topBar = document.createElement('div');
+    this.#topBar.className = 'topBar';
     this.#hudHeader = document.createElement('div');
     this.#hudHeader.className = 'hudHeader';
     this.#hudTitle = document.createElement('h2');
-    this.#btnCollapse = document.createElement('button');
-    this.#btnCollapse.className = 'btnCollapse';
-    this.#btnCollapse.textContent = '▾';
-    this.#btnCollapse.title = 'Collapse panel';
 
-    this.#hudHeader.append(this.#hudTitle, this.#btnCollapse);
+    this.#hudHeader.append(this.#hudTitle);
     this.#hudBody = document.createElement('div');
     this.#hudBody.id = 'hudBody';
+    this.#topBar.append(this.#hudTitle);
 
     this.#primaryControlsRow = document.createElement('div');
     this.#primaryControlsRow.className = 'controlsPrimary';
@@ -1146,13 +1351,17 @@ export class GameLayout extends HTMLElement {
     this.#btnPlace.className = 'primaryAction';
     this.#btnCenter = document.createElement('button');
     this.#btnCenter.textContent = 'Center';
-    this.#btnCenter.className = 'secondaryAction';
+    this.#btnCenter.className = 'secondaryAction iconAction';
+    this.#btnMore = document.createElement('button');
+    this.#btnMore.textContent = 'More';
+    this.#btnMore.className = 'secondaryAction iconAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
     this.#btnRestart.className = 'secondaryAction destructiveAction';
     this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
-    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnUndoRequest, this.#btnSkip);
-    this.#tertiaryControlsRow.append(this.#btnRestart);
+    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnMore);
+    this.#tertiaryControlsRow.hidden = true;
+    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnRestart);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -1160,14 +1369,17 @@ export class GameLayout extends HTMLElement {
 
     this.#miniMapRow = document.createElement('div');
     this.#miniMapRow.className = 'miniRow';
+    this.#miniMapDock = document.createElement('div');
+    this.#miniMapDock.className = 'miniMapDock';
+    this.#miniMapDock.append(this.#miniMapRow);
 
-    this.#hud.append(this.#hudHeader, this.#primaryControlsRow, this.#secondaryControlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow, this.#tertiaryControlsRow);
-    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#hud);
+    this.#endOverlay = document.createElement('div');
+    this.#endOverlay.className = 'endOverlay';
+    this.#endOverlay.hidden = true;
+
+    this.#hud.append(this.#hudBody);
+    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay);
     this.#shadow.append(style, this.#root);
-
-    if ((window.innerWidth || 0) <= 760) {
-      this.#setHudCollapsed(true);
-    }
   }
 
   #initGame(seed, playerNames) {
@@ -1533,10 +1745,6 @@ export class GameLayout extends HTMLElement {
   #setHudCollapsed(collapsed) {
     this.#hudCollapsed = !!collapsed;
     this.#hud?.classList.toggle('collapsed', this.#hudCollapsed);
-    if (this.#btnCollapse) {
-      this.#btnCollapse.textContent = this.#hudCollapsed ? '▸' : '▾';
-      this.#btnCollapse.title = this.#hudCollapsed ? 'Expand panel' : 'Collapse panel';
-    }
 
     if (this.#canvasTurn) {
       this.#canvasTurn.classList.toggle('show', this.#hudCollapsed);
@@ -1565,10 +1773,9 @@ export class GameLayout extends HTMLElement {
   #syncMobileActions() {
     if (!this.#mobileActions || !this.#game) return;
     const drafted = this.#game.currentPlacingDraftedTile;
-    const show = this.#isMobileViewport() && this.#hudCollapsed && this.#isMyTurnToPlace() && this.#game.state === GameState.PLACE && !this.#game.isGameOver;
+    const show = false;
     this.#mobileActions.classList.toggle('show', show);
     if (!show) {
-      this.#setCanvasNotice('');
       this.#btnMobilePlace.textContent = 'Place';
       return;
     }
@@ -1996,6 +2203,7 @@ export class GameLayout extends HTMLElement {
     });
     this.#btnRestart.addEventListener('click', () => {
       const seed = randomSeed();
+      this.#moreOpen = false;
       this.#mp?.sendAction('restart', { seed });
     });
 
@@ -2013,6 +2221,11 @@ export class GameLayout extends HTMLElement {
       this.#renderGhost();
     });
 
+    this.#btnMore.addEventListener('click', () => {
+      this.#moreOpen = !this.#moreOpen;
+      this.#refreshHud();
+    });
+
     this.#btnPlace.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (!this.#hoverAnchor) {
@@ -2025,10 +2238,6 @@ export class GameLayout extends HTMLElement {
 
     this.#btnCenter.addEventListener('click', () => {
       this.#centerOnFocusedBoard();
-    });
-
-    this.#btnCollapse.addEventListener('click', () => {
-      this.#setHudCollapsed(!this.#hudCollapsed);
     });
 
     this.#btnMobileRotate.addEventListener('click', () => {
@@ -2348,42 +2557,59 @@ export class GameLayout extends HTMLElement {
     const playerScores = g.players
       .map((p, i) => `P${i + 1} ${this.#playerNames[i] ?? p.name}: ${p.board.score}`)
       .join(' · ');
+    const titleActiveIdx = this.#activePlayerIndex();
+    const titleActiveName = titleActiveIdx == null
+      ? ''
+      : this.#playerNames[titleActiveIdx] ?? g.players[titleActiveIdx]?.name ?? `P${titleActiveIdx + 1}`;
+    const titlePhase = g.state === GameState.DRAFT ? 'picking' : 'placing';
 
     this.#hudTitle.textContent = g.isGameOver
       ? 'End of Game'
-      : `Round ${g.round} — ${playerScores}`;
+      : `Round ${g.round} — ${titleActiveName} ${titlePhase} · ${playerScores}`;
+    if (this.#hud) this.#hud.hidden = g.isGameOver;
+    if (this.#endOverlay) this.#endOverlay.hidden = !g.isGameOver;
 
     const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!g.currentPlacingDraftedTile && !this.#isGameplayPausedForUndo();
+    const placementOptions = canPlaceUi ? (g.getCurrentPlacementOptions?.() ?? []) : [];
+    const hasPlacementOptions = placementOptions.length > 0;
     const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     const canSkip = canPlaceUi && g.canSkipCurrentPlacement();
     const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
     this.#primaryControlsRow.hidden = !isPlacementPhase;
-    this.#secondaryControlsRow.hidden = g.state === GameState.DRAFT && !g.isGameOver;
-    this.#tertiaryControlsRow.hidden = false;
+    this.#primaryControlsRow.classList.toggle('skipOnly', canSkip);
+    this.#secondaryControlsRow.hidden = false;
+    this.#tertiaryControlsRow.hidden = !this.#moreOpen;
     this.#btnRotate.disabled = !canPlaceUi;
-    this.#btnRotate.hidden = g.isGameOver;
-    this.#btnResetTile.hidden = g.isGameOver;
+    this.#btnRotate.hidden = !isPlacementPhase || canSkip;
+    this.#btnResetTile.hidden = !isPlacementPhase || canSkip;
     this.#btnSkip.disabled = !canSkip;
     this.#btnSkip.hidden = !canSkip;
     this.#btnUndoRequest.disabled = !canRequestUndo;
     this.#btnUndoRequest.hidden = !canRequestUndo;
     this.#btnRestart.hidden = false;
     this.#btnScores.disabled = !canPlaceUi;
-    this.#btnScores.hidden = !isPlacementPhase;
+    this.#btnScores.hidden = !isPlacementPhase || canSkip;
     this.#btnScores.classList.toggle('active', this.#showPlacementScores);
     this.#btnScores.textContent = this.#showPlacementScores ? 'Scores On' : 'Scores';
-    this.#btnNextValid.disabled = !canPlaceUi;
-    this.#btnResetTile.disabled = !canPlaceUi;
-    this.#btnPlace.disabled = !canPlaceUi;
+    this.#btnMore.classList.toggle('active', this.#moreOpen);
+    this.#btnMore.textContent = this.#moreOpen ? 'Close' : 'More';
+    if (canSkip && this.#btnSkip.parentElement !== this.#primaryControlsRow) {
+      this.#primaryControlsRow.prepend(this.#btnSkip);
+    } else if (!canSkip && this.#btnSkip.parentElement !== this.#secondaryControlsRow) {
+      this.#secondaryControlsRow.insertBefore(this.#btnSkip, this.#btnMore);
+    }
+    this.#btnNextValid.hidden = canSkip;
+    this.#btnPlace.hidden = canSkip;
+    this.#btnNextValid.disabled = !canPlaceUi || !hasPlacementOptions;
+    this.#btnResetTile.disabled = !canPlaceUi || !hasPlacementOptions;
+    this.#btnPlace.disabled = !canPlaceUi || !hasPlacementOptions;
+    this.#btnSkip.classList.toggle('primaryAction', canSkip);
+    this.#btnSkip.classList.toggle('secondaryAction', !canSkip);
+    this.#btnSkip.textContent = 'Skip';
     this.#btnPlace.textContent = 'Place';
 
     this.#hudBody.innerHTML = '';
-
-    const you = document.createElement('div');
-    you.className = 'muted';
-    if (this.#myPlayerIndex == null) you.textContent = `You: ${this.#myName} (Spectator)`;
-    else you.textContent = `You: P${this.#myPlayerIndex + 1} ${this.#myName}`;
-    this.#hudBody.append(you);
+    if (this.#endOverlay) this.#endOverlay.innerHTML = '';
 
     if (this.#pendingUndoRequest) {
       const p = this.#pendingUndoRequest;
@@ -2451,12 +2677,6 @@ export class GameLayout extends HTMLElement {
       }
     }
 
-    const viewing = document.createElement('div');
-    viewing.className = 'focusInfo';
-    const focusedName = this.#playerNames[this.#focusedPlayerIndex] ?? this.#game.players[this.#focusedPlayerIndex]?.name ?? `Player ${this.#focusedPlayerIndex + 1}`;
-    viewing.textContent = `Viewing board: P${this.#focusedPlayerIndex + 1} ${focusedName}`;
-    this.#hudBody.append(viewing);
-
     if (g.isGameOver) {
       const topScore = standings.length ? standings[0].score : 0;
       const winners = standings.filter((s) => s.score === topScore);
@@ -2469,34 +2689,42 @@ export class GameLayout extends HTMLElement {
           ? `Game Over — Tie at ${topScore}`
           : `Game Over — Winner: ${winners[0].name}`;
       }
+      if (this.#endOverlay) {
+        const card = document.createElement('div');
+        card.className = 'endCard';
 
-      const winnerLine = document.createElement('div');
-      winnerLine.className = 'turnBanner turnOther';
-      winnerLine.textContent = winners.length > 1
-        ? `🏆 Tie: ${winners.map((w) => w.name).join(', ')} (${topScore})`
-        : `🏆 Winner: ${winners[0].name} (${topScore})`;
-      this.#hudBody.append(winnerLine);
+        const kicker = document.createElement('div');
+        kicker.className = 'endKicker';
+        kicker.textContent = 'Game Over';
 
-      const summary = document.createElement('div');
-      summary.className = 'muted';
-      summary.textContent = `Final scores — ${standings.map((s) => `P${s.index + 1} ${s.name}: ${s.score}`).join(' · ')}`;
-      this.#hudBody.append(summary);
+        const title = document.createElement('div');
+        title.className = 'endTitle';
+        title.textContent = winners.length > 1
+          ? `Tie at ${topScore}`
+          : `${winners[0].name} wins`;
 
-      const rank = document.createElement('div');
-      rank.className = 'draftList';
-      standings.forEach((s, i) => {
-        const row = document.createElement('div');
-        row.className = 'draftItem';
-        const left = document.createElement('div');
-        left.className = 'draftMeta';
-        left.textContent = `#${i + 1} · P${s.index + 1} ${s.name}`;
-        const right = document.createElement('div');
-        right.className = 'tag';
-        right.textContent = `${s.score}`;
-        row.append(left, right);
-        rank.append(row);
-      });
-      this.#hudBody.append(rank);
+        const summary = document.createElement('div');
+        summary.className = 'muted';
+        summary.textContent = winners.length > 1
+          ? `Shared by ${winners.map((w) => w.name).join(', ')}.`
+          : `Final score: ${topScore}`;
+
+        const rank = document.createElement('div');
+        rank.className = 'endScoreList';
+        standings.forEach((s, i) => {
+          const row = document.createElement('div');
+          row.className = 'endScoreRow';
+          const left = document.createElement('div');
+          left.textContent = `#${i + 1} P${s.index + 1} ${s.name}`;
+          const right = document.createElement('strong');
+          right.textContent = `${s.score}`;
+          row.append(left, right);
+          rank.append(row);
+        });
+
+        card.append(kicker, title, summary, rank);
+        this.#endOverlay.append(card);
+      }
 
       this.#renderMiniMaps();
       this.#syncMobileActions();
@@ -2525,14 +2753,7 @@ export class GameLayout extends HTMLElement {
         : `Their turn — ${activeName} is choosing ${mode}`;
     }
 
-    const turn = document.createElement('div');
-    turn.className = `turnBanner ${isMine ? 'turnMine' : 'turnOther'}`;
-    turn.textContent = isMine
-      ? `Your turn — ${mode}`
-      : `Their turn — ${activeName} is choosing ${mode}`;
-    this.#hudBody.append(turn);
-
-    if (this.#connStatus) {
+    if (this.#connStatus && this.#connStatus.state !== 'hotseat' && this.#connStatus.state !== 'open') {
       const conn = document.createElement('div');
       conn.className = 'muted';
       const s = this.#connStatus;
@@ -2548,7 +2769,7 @@ export class GameLayout extends HTMLElement {
       this.#hoverAnchor = null;
       this.#hoverAnchorAuto = false;
       this.#setCanvasNotice('');
-      status.textContent = `Draft phase — picking: ${this.#playerNames[g.currentPickingPlayerIndex] ?? g.players[g.currentPickingPlayerIndex].name}`;
+      status.textContent = `Draft — ${this.#playerNames[g.currentPickingPlayerIndex] ?? g.players[g.currentPickingPlayerIndex].name} picking`;
       this.#hudBody.append(status);
 
       const nextOrderByNumber = [...g.currentDraft]
@@ -2624,7 +2845,7 @@ export class GameLayout extends HTMLElement {
     } else {
       const drafted = g.currentPlacingDraftedTile;
       const playerName = this.#playerNames[g.currentPlacingPlayerIndex] ?? g.players[g.currentPlacingPlayerIndex].name;
-      status.textContent = `Place phase — placing: ${playerName}`;
+      status.textContent = `Placement — ${playerName}`;
       this.#hudBody.append(status);
       if (drafted) {
         const info = document.createElement('div');
