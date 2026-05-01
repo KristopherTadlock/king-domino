@@ -470,6 +470,7 @@ export class GameLayout extends HTMLElement {
   #hudBody;
   #primaryControlsRow;
   #secondaryControlsRow;
+  #tertiaryControlsRow;
   #btnRotate;
   #btnSkip;
   #btnUndoRequest;
@@ -833,6 +834,12 @@ export class GameLayout extends HTMLElement {
         align-items: center;
         margin-bottom: 6px;
       }
+      .controlsTertiary {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+        margin-top: 8px;
+      }
       .muted { color: rgba(233,238,245,0.7); }
       button {
         appearance: none;
@@ -865,6 +872,11 @@ export class GameLayout extends HTMLElement {
         border-color: rgba(255, 201, 120, 0.70);
         background: rgba(73, 53, 24, 0.72);
         color: #ffe7bc;
+      }
+      .destructiveAction {
+        border-color: rgba(255, 130, 130, 0.55);
+        background: rgba(76, 30, 30, 0.42);
+        color: #ffd2d2;
       }
       [hidden] { display: none !important; }
       button:hover { background: rgba(255,255,255,0.12); }
@@ -1019,18 +1031,45 @@ export class GameLayout extends HTMLElement {
       .collapsed .miniRow,
       .collapsed .row,
       .collapsed .controlsPrimary,
-      .collapsed .controlsSecondary {
+      .collapsed .controlsSecondary,
+      .collapsed .controlsTertiary {
         display: none;
       }
 
       @media (max-width: 760px) {
         .hud {
+          width: calc(100vw - 16px);
+          max-height: min(62dvh, 560px);
+          top: auto;
+          bottom: 8px;
+          left: 8px;
+          padding: 8px;
+          border-radius: 12px;
+        }
+        .hud.collapsed {
           width: min(360px, calc(100vw - 16px));
           max-height: calc(100dvh - 16px);
           top: 8px;
-          left: 8px;
-          padding: 8px;
+          bottom: auto;
         }
+        .controlsPrimary {
+          position: sticky;
+          top: -8px;
+          z-index: 2;
+          padding-bottom: 6px;
+          background: linear-gradient(rgba(20,22,28,0.96), rgba(20,22,28,0.82));
+        }
+        .mobileActions {
+          right: 8px;
+          bottom: 12px;
+          left: 8px;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+        }
+        .mobileBtn { padding: 9px 11px; }
+        .draftItem { grid-template-columns: 1fr; }
+        .draftItem > button { justify-self: stretch; }
+        .placementChoiceList { grid-template-columns: 1fr; }
         .miniRow { gap: 6px; }
       }
     `;
@@ -1082,6 +1121,8 @@ export class GameLayout extends HTMLElement {
     this.#primaryControlsRow.className = 'controlsPrimary';
     this.#secondaryControlsRow = document.createElement('div');
     this.#secondaryControlsRow.className = 'controlsSecondary';
+    this.#tertiaryControlsRow = document.createElement('div');
+    this.#tertiaryControlsRow.className = 'controlsTertiary';
     this.#btnRotate = document.createElement('button');
     this.#btnRotate.textContent = 'Rotate (R)';
     this.#btnRotate.className = 'secondaryAction';
@@ -1108,9 +1149,10 @@ export class GameLayout extends HTMLElement {
     this.#btnCenter.className = 'secondaryAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
-    this.#btnRestart.className = 'secondaryAction';
+    this.#btnRestart.className = 'secondaryAction destructiveAction';
     this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
-    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnUndoRequest, this.#btnSkip, this.#btnRestart);
+    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnUndoRequest, this.#btnSkip);
+    this.#tertiaryControlsRow.append(this.#btnRestart);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -1119,7 +1161,7 @@ export class GameLayout extends HTMLElement {
     this.#miniMapRow = document.createElement('div');
     this.#miniMapRow.className = 'miniRow';
 
-    this.#hud.append(this.#hudHeader, this.#primaryControlsRow, this.#secondaryControlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow);
+    this.#hud.append(this.#hudHeader, this.#primaryControlsRow, this.#secondaryControlsRow, this.#hudHint, this.#hudBody, this.#miniMapRow, this.#tertiaryControlsRow);
     this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#hud);
     this.#shadow.append(style, this.#root);
 
@@ -1523,7 +1565,7 @@ export class GameLayout extends HTMLElement {
   #syncMobileActions() {
     if (!this.#mobileActions || !this.#game) return;
     const drafted = this.#game.currentPlacingDraftedTile;
-    const show = this.#isMobileViewport() && this.#isMyTurnToPlace() && this.#game.state === GameState.PLACE && !this.#game.isGameOver;
+    const show = this.#isMobileViewport() && this.#hudCollapsed && this.#isMyTurnToPlace() && this.#game.state === GameState.PLACE && !this.#game.isGameOver;
     this.#mobileActions.classList.toggle('show', show);
     if (!show) {
       this.#setCanvasNotice('');
@@ -2317,6 +2359,7 @@ export class GameLayout extends HTMLElement {
     const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
     this.#primaryControlsRow.hidden = !isPlacementPhase;
     this.#secondaryControlsRow.hidden = g.state === GameState.DRAFT && !g.isGameOver;
+    this.#tertiaryControlsRow.hidden = false;
     this.#btnRotate.disabled = !canPlaceUi;
     this.#btnRotate.hidden = g.isGameOver;
     this.#btnResetTile.hidden = g.isGameOver;
@@ -2324,7 +2367,7 @@ export class GameLayout extends HTMLElement {
     this.#btnSkip.hidden = !canSkip;
     this.#btnUndoRequest.disabled = !canRequestUndo;
     this.#btnUndoRequest.hidden = !canRequestUndo;
-    this.#btnRestart.hidden = !g.isGameOver;
+    this.#btnRestart.hidden = false;
     this.#btnScores.disabled = !canPlaceUi;
     this.#btnScores.hidden = !isPlacementPhase;
     this.#btnScores.classList.toggle('active', this.#showPlacementScores);
