@@ -1915,8 +1915,8 @@ export class GameLayout extends HTMLElement {
 
   #syncFocusedBoardToPhase() {
     if (!this.#game?.players?.length) return false;
-    if (this.#game.state !== GameState.PLACE) return false;
     const active = this.#activePlayerIndex();
+    if (active == null) return false;
     if (this.#focusedPlayerIndex === active) return false;
     this.#focusedPlayerIndex = active;
     return true;
