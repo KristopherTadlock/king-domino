@@ -1852,6 +1852,9 @@ export class GameLayout extends HTMLElement {
   #applyNetworkAction(action) {
     if (this.#isGameplayActionType(action.type)) {
       this.#applyGameplayAction(action);
+      if (action.type === 'rotate' || action.type === 'selectPlacementTile') {
+        this.#repairSelectedPlacementAfterDominoChange();
+      }
       return;
     }
 
@@ -2641,13 +2644,7 @@ export class GameLayout extends HTMLElement {
     }
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (!grid) return;
-    this.#hoverAnchor = grid;
-    this.#hoverAnchorAuto = false;
-
-    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
-    this.#placementHint = feedback.ok ? '' : feedback.reason;
-    this.#setCanvasNotice(this.#placementHint, 'error');
-    this.#renderGhost();
+    this.#trySelectPlacementAnchor(grid, { showError: false, render: true });
   }
 
   #onPointerDown(e) {
@@ -2669,20 +2666,10 @@ export class GameLayout extends HTMLElement {
       if (grid && this.#isTouchingCurrentGhost(grid)) {
         this.#touchInteractionMode = 'movePlacement';
         this.#controls.enabled = false;
-        this.#hoverAnchor = grid;
-        this.#hoverAnchorAuto = false;
-        this.#renderGhost();
       }
 
       this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
       return;
-    }
-
-    const grid = this.#gridFromClient(e.clientX, e.clientY);
-    if (grid) {
-      this.#hoverAnchor = grid;
-      this.#hoverAnchorAuto = false;
-      this.#renderGhost();
     }
 
     this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -2726,17 +2713,10 @@ export class GameLayout extends HTMLElement {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
-    this.#hoverAnchor = grid;
-    this.#hoverAnchorAuto = false;
-
-    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
-    this.#placementHint = feedback.ok ? '' : feedback.reason;
-
-    this.#renderGhost();
+    const selected = this.#trySelectPlacementAnchor(grid, { showError: e.pointerType === 'touch', render: true });
 
     if (e.pointerType === 'touch') {
-      if (feedback.ok) this.#setCanvasNotice('Tap Place to confirm.', 'info');
-      else this.#setCanvasNotice(this.#placementHint, 'error');
+      if (selected) this.#setCanvasNotice('Tap Place to confirm.', 'info');
       this.#syncMobileActions();
       this.#resetTouchInteraction();
       return;
@@ -2749,17 +2729,7 @@ export class GameLayout extends HTMLElement {
 
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (!grid) return;
-    this.#hoverAnchor = grid;
-    this.#hoverAnchorAuto = false;
-
-    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
-    this.#placementHint = feedback.ok ? '' : feedback.reason;
-    this.#renderGhost();
-
-    if (!feedback.ok) {
-      this.#setCanvasNotice(this.#placementHint, 'error');
-      return;
-    }
+    if (!this.#trySelectPlacementAnchor(grid, { showError: true, render: true })) return;
 
     this.#tryPlaceAtHover();
   }
@@ -2812,6 +2782,28 @@ export class GameLayout extends HTMLElement {
     if (!hits.length) return null;
     const p = hits[0].point;
     return { x: Math.round(p.x), y: Math.round(p.z) };
+  }
+
+  #trySelectPlacementAnchor(grid, { showError = false, render = false, auto = false } = {}) {
+    if (!grid) return false;
+    if (!this.#game || this.#game.state !== GameState.PLACE) return false;
+
+    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
+    if (!feedback.ok) {
+      if (showError) {
+        this.#placementHint = feedback.reason;
+        this.#setCanvasNotice(this.#placementHint || 'Invalid placement.', 'error');
+      }
+      if (render && !this.#hoverAnchor) this.#renderGhost();
+      return false;
+    }
+
+    this.#hoverAnchor = { x: grid.x, y: grid.y, anchorEnd: feedback.anchorEnd };
+    this.#hoverAnchorAuto = auto;
+    this.#placementHint = '';
+    this.#setCanvasNotice('');
+    if (render) this.#renderGhost();
+    return true;
   }
 
   #tryPlaceAtHover() {
@@ -4156,6 +4148,49 @@ export class GameLayout extends HTMLElement {
     this.#hoverAnchor = { x: option.x, y: option.y, anchorEnd: option.anchorEnd };
     this.#hoverAnchorAuto = false;
     this.#placementHint = '';
+  }
+
+  #repairSelectedPlacementAfterDominoChange() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return;
+
+    const drafted = g.currentPlacingDraftedTile;
+    if (!drafted) return;
+
+    if (this.#hoverAnchor && this.#placementFeedbackForAnchor(this.#hoverAnchor).ok) {
+      this.#placementHint = '';
+      this.#setCanvasNotice('');
+      return;
+    }
+
+    const previous = this.#hoverAnchor;
+    const valid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? [])
+      .filter((option) =>
+        option.dominoNumber === drafted.domino.number
+        && option.orientation === drafted.domino.orientation
+      );
+
+    if (!valid.length) {
+      if (previous) {
+        this.#placementHint = 'No valid placement for this rotation.';
+        this.#setCanvasNotice(this.#placementHint, 'error', 1300);
+      }
+      return;
+    }
+
+    valid.sort((a, b) => {
+      if (!previous) return 0;
+      const ad = Math.abs(a.x - previous.x) + Math.abs(a.y - previous.y);
+      const bd = Math.abs(b.x - previous.x) + Math.abs(b.y - previous.y);
+      if (ad !== bd) return ad - bd;
+      if (a.y !== b.y) return a.y - b.y;
+      return a.x - b.x;
+    });
+
+    this.#hoverAnchor = { x: valid[0].x, y: valid[0].y, anchorEnd: valid[0].anchorEnd };
+    this.#hoverAnchorAuto = false;
+    this.#placementHint = '';
+    this.#setCanvasNotice('');
   }
 
   #jumpToNextValidAnchor() {
