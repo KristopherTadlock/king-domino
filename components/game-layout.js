@@ -1052,29 +1052,49 @@ export class GameLayout extends HTMLElement {
       .draftPlayerToken {
         display: grid;
         place-items: center;
-        width: 28px;
-        height: 28px;
+        position: relative;
+        width: 25px;
+        height: 31px;
+        color: transparent;
+        font-size: 0;
+        line-height: 0;
+        filter: drop-shadow(0 3px 5px rgba(0,0,0,0.32));
+      }
+      .draftPlayerToken::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 6px;
+        width: 13px;
+        height: 13px;
         border-radius: 999px;
-        color: rgba(12, 14, 18, 0.88);
         background: var(--player-color, #8fc7ff);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.52), 0 3px 8px rgba(0,0,0,0.24);
-        border: 1px solid rgba(255,255,255,0.36);
-        font-size: 10px;
-        font-weight: 800;
-        line-height: 1;
+        border: 1px solid rgba(255,255,255,0.54);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.48);
+      }
+      .draftPlayerToken::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        bottom: 0;
+        width: 21px;
+        height: 22px;
+        background: var(--player-color, #8fc7ff);
+        border: 1px solid rgba(255,255,255,0.42);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.36);
+        clip-path: polygon(50% 0%, 82% 16%, 100% 44%, 76% 48%, 72% 100%, 28% 100%, 24% 48%, 0% 44%, 18% 16%);
       }
       .draftPlayerToken.isCurrent {
-        outline: 2px solid rgba(255,255,255,0.82);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.52), 0 0 0 3px rgba(115, 232, 150, 0.20), 0 3px 8px rgba(0,0,0,0.24);
+        filter: drop-shadow(0 0 0 rgba(255,255,255,0.0)) drop-shadow(0 0 5px rgba(255,255,255,0.78)) drop-shadow(0 3px 5px rgba(0,0,0,0.32));
       }
       .draftTurnSlot.isEmpty::before,
       .draftClaimSlot.isEmpty::before {
         content: "";
-        width: 26px;
-        height: 26px;
-        border-radius: 999px;
-        border: 1px dashed rgba(255,255,255,0.16);
-        background: transparent;
+        width: 23px;
+        height: 29px;
+        background: rgba(255,255,255,0.14);
+        clip-path: polygon(50% 0%, 72% 4%, 81% 20%, 78% 36%, 100% 50%, 78% 56%, 73% 100%, 27% 100%, 22% 56%, 0% 50%, 22% 36%, 19% 20%, 28% 4%);
+        opacity: 0.55;
       }
       .draftItem.isPicked {
         opacity: 0.76;
@@ -1190,21 +1210,41 @@ export class GameLayout extends HTMLElement {
         justify-items: center;
         align-items: center;
         gap: 4px;
-        padding: 5px;
+        padding: 7px;
         border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.10);
+        border: 1px solid rgba(255,255,255,0.08);
         background: transparent;
         flex: 0 0 auto;
       }
-      .miniTitle { font-size: 12px; font-weight: 700; color: rgba(233,238,245,0.85); }
-      canvas.mini { width: 140px; height: 140px; border-radius: 8px; background: rgba(0,0,0,0.35); }
+      .miniTitle {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 700;
+        color: rgba(233,238,245,0.85);
+      }
+      .miniTitle::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--mini-player-color, rgba(255,255,255,0.6));
+        box-shadow: 0 0 0 2px var(--mini-player-glow, rgba(255,255,255,0.12));
+      }
+      canvas.mini {
+        width: 140px;
+        height: 140px;
+        border-radius: 8px;
+        background: rgba(0,0,0,0.35);
+        box-shadow: 0 0 0 2px var(--mini-player-color, rgba(255,255,255,0.18)), 0 0 0 5px var(--mini-player-glow, rgba(255,255,255,0.06));
+      }
       .miniActive {
-        outline: 2px solid rgba(102, 191, 255, 0.95);
-        box-shadow: 0 0 0 3px rgba(102, 191, 255, 0.25);
-        outline-offset: 2px;
+        outline: 0;
+        filter: brightness(1.14);
       }
       .miniTurn {
-        border-color: rgba(146, 255, 166, 0.60);
+        border-color: rgba(255,255,255,0.08);
       }
       .focusInfo {
         margin-top: 4px;
@@ -1372,7 +1412,7 @@ export class GameLayout extends HTMLElement {
         .miniCard {
           min-width: 0;
           justify-items: center;
-          padding: 5px;
+          padding: 8px;
           gap: 4px;
         }
         .miniTitle {
@@ -1393,7 +1433,7 @@ export class GameLayout extends HTMLElement {
           padding: 7px;
         }
         .miniRow { gap: 7px; }
-        .miniCard { padding: 6px; }
+        .miniCard { padding: 7px; }
         .miniTitle { font-size: 11px; }
         canvas.mini {
           width: min(96px, calc((100vw - 118px) / 2));
@@ -1405,9 +1445,17 @@ export class GameLayout extends HTMLElement {
         }
         .draftItem .dominoPreview { width: min(118px, calc(100vw - 88px)); }
         .draftPlayerToken {
-          width: 26px;
-          height: 26px;
-          font-size: 9px;
+          width: 23px;
+          height: 29px;
+        }
+        .draftPlayerToken::before {
+          left: 5px;
+          width: 12px;
+          height: 12px;
+        }
+        .draftPlayerToken::after {
+          width: 20px;
+          height: 21px;
         }
       }
     `;
@@ -2080,12 +2128,27 @@ export class GameLayout extends HTMLElement {
     return colors[Math.max(0, playerIndex) % colors.length];
   }
 
+  #playerMiniMapColor(playerIndex, alpha = 1) {
+    const colors = [
+      [102, 191, 255],
+      [119, 232, 151],
+      [242, 201, 111],
+      [214, 160, 255],
+    ];
+    const [r, g, b] = colors[Math.max(0, playerIndex) % colors.length];
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  #playerColorHex(playerIndex) {
+    const colors = [0x66bfff, 0x77e897, 0xf2c96f, 0xd6a0ff];
+    return colors[Math.max(0, playerIndex) % colors.length];
+  }
+
   #createDraftPlayerToken(playerIndex, current = false) {
     const token = document.createElement('div');
     token.className = 'draftPlayerToken';
     token.classList.toggle('isCurrent', current);
     token.style.setProperty('--player-color', this.#playerDraftColor(playerIndex));
-    token.textContent = `P${playerIndex + 1}`;
     const name = this.#playerNames[playerIndex] ?? this.#game?.players[playerIndex]?.name ?? `P${playerIndex + 1}`;
     token.title = name;
     token.setAttribute('aria-label', name);
@@ -2798,7 +2861,7 @@ export class GameLayout extends HTMLElement {
       .sort((a, b) => b.score - a.score || a.index - b.index);
 
     const playerScores = g.players
-      .map((p, i) => `P${i + 1} ${this.#playerNames[i] ?? p.name}: ${p.board.score}`)
+      .map((p, i) => `${this.#playerNames[i] ?? p.name}: ${p.board.score}`)
       .join(' · ');
     const titleActiveIdx = this.#activePlayerIndex();
     const titleActiveName = titleActiveIdx == null
@@ -3150,6 +3213,7 @@ export class GameLayout extends HTMLElement {
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
 
     const focusedBoardManager = this.#game.players[this.#focusedPlayerIndex]?.board || this.#game.players[0].board;
+    const focusedPlayerIndex = Math.max(0, Math.min(this.#focusedPlayerIndex, this.#game.players.length - 1));
     const board = focusedBoardManager.board;
     for (const k of Object.keys(board)) {
       const tile = board[k];
@@ -3163,7 +3227,7 @@ export class GameLayout extends HTMLElement {
       this.#tilesGroup.add(tileMesh);
 
       if (tile.landscape === Landscapes.CASTLE) {
-        this.#addCastleDetail(tile.x, tile.y, board, focusedBoardManager);
+        this.#addCastleDetail(tile.x, tile.y, board, focusedBoardManager, focusedPlayerIndex);
       } else {
         this.#addLandscapeDetail(tile);
         if ((tile.crowns || 0) > 0) {
@@ -3178,9 +3242,9 @@ export class GameLayout extends HTMLElement {
           font: text.length >= 2
             ? '700 42px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
             : '700 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-          fillStyle: isCastle ? '#1f232b' : '#f5cc51',
-          background: isCastle ? 'rgba(240,240,240,0.92)' : 'rgba(28,31,38,0.88)',
-          border: isCastle ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.32)',
+          fillStyle: isCastle ? '#f5fbff' : '#f5cc51',
+          background: isCastle ? this.#playerMiniMapColor(focusedPlayerIndex, 0.82) : 'rgba(28,31,38,0.88)',
+          border: isCastle ? this.#playerMiniMapColor(focusedPlayerIndex, 0.95) : 'rgba(255,255,255,0.32)',
         });
         sprite.position.set(tile.x, 0.38, tile.y);
         this.#tilesGroup.add(sprite);
@@ -3371,16 +3435,24 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #addCastleDetail(x, y, board, boardManager) {
+  #addCastleDetail(x, y, board, boardManager, playerIndex = 0) {
     const growth = this.#castleGrowthState(board, boardManager);
     const tier = growth.tier;
+    const playerColor = this.#playerColorHex(playerIndex);
 
     const stone = new THREE.MeshStandardMaterial({
-      color: tier >= 3 ? 0xe1e5ee : 0xd4d8df,
-      roughness: tier === 0 ? 0.68 : 0.56,
-      metalness: tier >= 2 ? 0.11 : 0.06,
-      emissive: growth.perfectKingdom ? 0x1b2841 : 0x11141a,
-      emissiveIntensity: growth.perfectKingdom ? 0.20 : 0.08,
+      color: playerColor,
+      roughness: tier === 0 ? 0.62 : 0.52,
+      metalness: tier >= 2 ? 0.16 : 0.10,
+      emissive: playerColor,
+      emissiveIntensity: growth.perfectKingdom ? 0.24 : 0.12,
+    });
+    const trim = new THREE.MeshStandardMaterial({
+      color: 0xe9edf5,
+      roughness: 0.48,
+      metalness: 0.12,
+      emissive: playerColor,
+      emissiveIntensity: 0.07,
     });
 
     const keepScale = tier === 0 ? 0.80 : tier === 1 ? 0.95 : tier === 2 ? 1.10 : tier === 3 ? 1.22 : 1.30;
@@ -3405,7 +3477,6 @@ export class GameLayout extends HTMLElement {
     }
 
     if (tier >= 1) {
-      const battlement = new THREE.MeshStandardMaterial({ color: 0xc3c8cf, roughness: 0.52, metalness: 0.1 });
       const toothGeom = new THREE.BoxGeometry(0.08, 0.08, 0.08);
       const teeth = [
         [-0.16, -0.16], [0.00, -0.16], [0.16, -0.16],
@@ -3413,14 +3484,14 @@ export class GameLayout extends HTMLElement {
         [-0.16, 0.00], [0.16, 0.00],
       ];
       for (const [dx, dz] of teeth) {
-        const tooth = new THREE.Mesh(toothGeom, battlement);
+        const tooth = new THREE.Mesh(toothGeom, trim);
         tooth.position.set(x + dx * keepScale, 0.44 + keepHeight * 0.35, y + dz * keepScale);
         this.#tilesGroup.add(tooth);
       }
     }
 
     if (tier >= 2) {
-      const roofMat = new THREE.MeshStandardMaterial({ color: 0x49566f, roughness: 0.42, metalness: 0.16 });
+      const roofMat = new THREE.MeshStandardMaterial({ color: playerColor, roughness: 0.42, metalness: 0.16, emissive: playerColor, emissiveIntensity: 0.08 });
       const roof = new THREE.Mesh(new THREE.ConeGeometry(0.20 * keepScale, 0.16, 4), roofMat);
       roof.rotation.y = Math.PI * 0.25;
       roof.position.set(x, 0.46 + keepHeight * 0.4, y);
@@ -3428,7 +3499,7 @@ export class GameLayout extends HTMLElement {
     }
 
     if (tier >= 3) {
-      const bannerMat = new THREE.MeshStandardMaterial({ color: 0x2d5ea8, roughness: 0.6, metalness: 0.08, side: THREE.DoubleSide });
+      const bannerMat = new THREE.MeshStandardMaterial({ color: playerColor, roughness: 0.6, metalness: 0.08, side: THREE.DoubleSide, emissive: playerColor, emissiveIntensity: 0.10 });
       const mastMat = new THREE.MeshStandardMaterial({ color: 0x5d4c3a, roughness: 0.75, metalness: 0.03 });
       const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 8), mastMat);
       mast.position.set(x + 0.06, 0.62, y + 0.06);
@@ -3720,10 +3791,12 @@ export class GameLayout extends HTMLElement {
     this.#game.players.forEach((p, idx) => {
       const card = document.createElement('div');
       card.className = 'miniCard';
+      card.style.setProperty('--mini-player-color', this.#playerMiniMapColor(idx, 0.92));
+      card.style.setProperty('--mini-player-glow', this.#playerMiniMapColor(idx, 0.16));
 
       const title = document.createElement('div');
       title.className = 'miniTitle';
-      title.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? p.name} · ${p.board.score}`;
+      title.textContent = `${this.#playerNames[idx] ?? p.name} · ${p.board.score}`;
 
       const canvas = document.createElement('canvas');
       canvas.width = 140;
@@ -3753,12 +3826,12 @@ export class GameLayout extends HTMLElement {
       canvas.classList.toggle('miniActive', idx === this.#focusedPlayerIndex);
       canvas.parentElement?.classList.toggle('miniTurn', idx === activeIdx);
       const t = canvas.parentElement?.querySelector('.miniTitle');
-      if (t) t.textContent = `P${idx + 1}: ${this.#playerNames[idx] ?? this.#game.players[idx].name} · ${this.#game.players[idx].board.score}`;
-      this.#drawMiniBoard(canvas, this.#game.players[idx].board);
+      if (t) t.textContent = `${this.#playerNames[idx] ?? this.#game.players[idx].name} · ${this.#game.players[idx].board.score}`;
+      this.#drawMiniBoard(canvas, this.#game.players[idx].board, idx);
     });
   }
 
-  #drawMiniBoard(canvas, boardManager) {
+  #drawMiniBoard(canvas, boardManager, playerIndex = 0) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -3812,12 +3885,29 @@ export class GameLayout extends HTMLElement {
       ctx.fillRect(px + 1, py + 1, tilePx - 2, tilePx - 2);
 
       if (tile.crowns > 0 || tile.landscape === Landscapes.CASTLE) {
-        ctx.fillStyle = 'rgba(0,0,0,0.65)';
         ctx.font = `${Math.max(8, Math.floor(tilePx * 0.55))}px system-ui`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const label = tile.landscape === Landscapes.CASTLE ? 'C' : String(tile.crowns);
-        ctx.fillText(label, px + tilePx / 2, py + tilePx / 2);
+        if (tile.landscape === Landscapes.CASTLE) {
+          const cx = px + tilePx / 2;
+          const cy = py + tilePx / 2;
+          const radius = Math.max(4, tilePx * 0.34);
+          ctx.fillStyle = this.#playerMiniMapColor(playerIndex, 0.22);
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = this.#playerMiniMapColor(playerIndex, 0.95);
+          ctx.lineWidth = Math.max(1.5, tilePx * 0.12);
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(245,248,255,0.86)';
+          ctx.font = `${Math.max(8, Math.floor(tilePx * 0.46))}px system-ui`;
+          ctx.fillText('C', cx, cy);
+        } else {
+          ctx.fillStyle = 'rgba(0,0,0,0.65)';
+          ctx.fillText(String(tile.crowns), px + tilePx / 2, py + tilePx / 2);
+        }
       }
     }
   }
