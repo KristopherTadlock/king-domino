@@ -2120,9 +2120,9 @@ export class GameLayout extends HTMLElement {
     const oy = (canvas.height - (maxY - minY)) / 2 - minY - 1;
 
     projected
-      .sort((a, b) => (a.x + a.y) - (b.x + b.y))
-      .forEach((p, i) => {
-        this.#drawIsoTile(ctx, p.tile, p.x + ox, p.y + oy, tileW, tileH, depth, `preview|${domino.number}|${i}`);
+      .sort((a, b) => a.y - b.y || a.x - b.x)
+      .forEach((p) => {
+        this.#drawIsoTile(ctx, p.tile, p.x + ox, p.y + oy, tileW, tileH, depth, `preview|${domino.number}|${p.x}|${p.y}`);
       });
   }
 
