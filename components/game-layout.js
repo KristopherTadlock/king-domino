@@ -930,7 +930,7 @@ export class GameLayout extends HTMLElement {
       .controlsPrimary.skipOnly { grid-template-columns: 1fr; }
       .controlsSecondary {
         position: absolute;
-        top: 72px;
+        top: 78px;
         right: 12px;
         display: flex;
         gap: 6px;
@@ -1023,7 +1023,7 @@ export class GameLayout extends HTMLElement {
         border-color: rgba(136, 186, 255, 0.45);
       }
       .draftList {
-        margin-top: 7px;
+        margin-top: 6px;
         display: grid;
         grid-template-columns: 1fr;
         gap: 3px;
@@ -1032,12 +1032,12 @@ export class GameLayout extends HTMLElement {
         box-sizing: border-box;
         width: 100%;
         display: grid;
-        grid-template-columns: 34px max-content 34px;
+        grid-template-columns: 28px max-content 28px;
         justify-content: center;
         place-items: center;
-        min-height: 56px;
-        gap: 7px;
-        padding: 2px 4px;
+        min-height: 52px;
+        gap: 4px;
+        padding: 1px 3px;
         border-radius: 8px;
         border: 1px solid rgba(255,255,255,0.06);
         background: transparent;
@@ -1050,10 +1050,10 @@ export class GameLayout extends HTMLElement {
         display: grid;
         place-items: center;
         width: 100%;
-        min-height: 34px;
+        min-height: 30px;
       }
       .draftClaimSlot {
-        min-width: 34px;
+        min-width: 28px;
       }
       .draftPlayerToken {
         display: grid;
@@ -1108,7 +1108,7 @@ export class GameLayout extends HTMLElement {
       }
       .draftItem .dominoPreview,
       .placementChoice .dominoPreview {
-        width: 142px;
+        width: 126px;
       }
       .dominoPreviewCanvas {
         display: block;
@@ -1193,8 +1193,10 @@ export class GameLayout extends HTMLElement {
       .miniRow { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
       .miniCard {
         display: grid;
-        gap: 5px;
-        padding: 7px;
+        justify-items: center;
+        align-items: center;
+        gap: 4px;
+        padding: 5px;
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.10);
         background: transparent;
@@ -1292,7 +1294,7 @@ export class GameLayout extends HTMLElement {
           padding: 7px;
         }
         .controlsSecondary {
-          top: 64px;
+          top: 74px;
           right: 8px;
           padding: 6px;
         }
@@ -1315,12 +1317,12 @@ export class GameLayout extends HTMLElement {
         }
         .draftItem {
           min-width: 0;
-          grid-template-columns: 30px max-content 30px;
-          min-height: 54px;
-          gap: 6px;
-          padding: 2px 4px;
+          grid-template-columns: 28px max-content 28px;
+          min-height: 50px;
+          gap: 4px;
+          padding: 1px 3px;
         }
-        .draftItem .dominoPreview { width: min(136px, calc(100vw - 104px)); }
+        .draftItem .dominoPreview { width: min(122px, calc(100vw - 92px)); }
         .dominoPreview { width: clamp(108px, 18vw, 148px); }
         .dominoPreview.compact { width: clamp(104px, 17vw, 140px); min-width: 0; }
         .placementChoiceList { grid-template-columns: repeat(2, max-content); }
@@ -1346,10 +1348,10 @@ export class GameLayout extends HTMLElement {
       }
       @media (max-width: 520px) {
         .draftItem {
-          grid-template-columns: 28px max-content 28px;
-          gap: 5px;
+          grid-template-columns: 27px max-content 27px;
+          gap: 3px;
         }
-        .draftItem .dominoPreview { width: min(132px, calc(100vw - 96px)); }
+        .draftItem .dominoPreview { width: min(118px, calc(100vw - 88px)); }
         .draftPlayerToken {
           width: 26px;
           height: 26px;
@@ -1358,7 +1360,7 @@ export class GameLayout extends HTMLElement {
       }
       @media (min-width: 560px) and (max-width: 760px) {
         .hud {
-          width: min(350px, calc(56vw - 10px));
+          width: min(310px, calc(52vw - 8px));
           max-height: min(44dvh, 380px);
           right: auto;
         }
@@ -1368,8 +1370,8 @@ export class GameLayout extends HTMLElement {
           bottom: 74px;
           left: auto;
           box-sizing: border-box;
-          width: min(210px, calc(44vw - 10px));
-          max-width: 210px;
+          width: min(230px, calc(48vw - 10px));
+          max-width: 230px;
           max-height: min(44dvh, 380px);
           overflow: auto;
         }
@@ -1390,8 +1392,8 @@ export class GameLayout extends HTMLElement {
           white-space: nowrap;
         }
         canvas.mini {
-          width: min(136px, calc(44vw - 46px));
-          height: min(136px, calc(44vw - 46px));
+          width: min(140px, calc(48vw - 46px));
+          height: min(140px, calc(48vw - 46px));
         }
       }
     `;
@@ -1940,7 +1942,7 @@ export class GameLayout extends HTMLElement {
 
     const canvas = document.createElement('canvas');
     canvas.className = 'dominoPreviewCanvas';
-    canvas.width = 320;
+    canvas.width = 260;
     canvas.height = 132;
     canvas.setAttribute('role', 'img');
     canvas.setAttribute(
