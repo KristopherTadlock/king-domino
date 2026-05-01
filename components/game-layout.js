@@ -311,7 +311,7 @@ function landscapeCssBackground(landscape, crowns = 0) {
   return layers.join(', ');
 }
 
-function createLandscapeTileTexture(landscape, crowns, seedKey, size = 256) {
+function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
   const seed = hash32(`${landscapeKey(landscape)}|${crowns}|${seedKey}`);
   const rand = mulberry32(seed);
   const base = LANDSCAPE_COLORS[landscape] ?? 0xeeeeee;
@@ -447,6 +447,11 @@ function createLandscapeTileTexture(landscape, crowns, seedKey, size = 256) {
     }
   }
 
+  return canvas;
+}
+
+function createLandscapeTileTexture(landscape, crowns, seedKey, size = 256) {
+  const canvas = createLandscapeTileCanvas(landscape, crowns, seedKey, size);
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.magFilter = THREE.LinearFilter;
@@ -684,10 +689,19 @@ export class GameLayout extends HTMLElement {
       const r = overlayRect(el);
       if (r) visibleLeft = Math.max(visibleLeft, r.right + gap);
     };
+    const insetByVerticalPosition = (el) => {
+      const r = overlayRect(el);
+      if (!r) return;
+      if ((r.top + r.bottom) / 2 < h / 2) {
+        visibleTop = Math.max(visibleTop, r.bottom + gap);
+      } else {
+        visibleBottom = Math.min(visibleBottom, r.top - gap);
+      }
+    };
     const mobile = this.#isMobileViewport();
     insetTop(this.#topBar);
     if (mobile) {
-      insetTop(this.#miniMapDock);
+      insetByVerticalPosition(this.#miniMapDock);
       insetBottom(this.#hud);
     } else {
       insetLeft(this.#hud);
@@ -878,17 +892,18 @@ export class GameLayout extends HTMLElement {
       }
       .hud {
         position: absolute;
+        box-sizing: border-box;
         top: 72px;
         left: 12px;
         width: min(380px, calc(100vw - 24px));
         max-height: calc(100dvh - 150px);
-        background: rgba(20, 22, 28, 0.85);
-        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(20, 22, 28, 0.64);
+        border: 1px solid rgba(255,255,255,0.12);
         border-radius: 10px;
         padding: 10px;
         color: #e9eef5;
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        backdrop-filter: blur(8px);
+        backdrop-filter: blur(6px);
         touch-action: manipulation;
         overflow: auto;
         -webkit-overflow-scrolling: touch;
@@ -1007,102 +1022,158 @@ export class GameLayout extends HTMLElement {
         color: #cfe4ff;
         border-color: rgba(136, 186, 255, 0.45);
       }
-      .draftList { margin-top: 8px; display: grid; gap: 6px; }
-      .draftItem {
+      .draftList {
+        margin-top: 7px;
         display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 6px;
-        align-items: center;
-        padding: 7px;
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+      .draftItem {
+        box-sizing: border-box;
+        width: 100%;
+        display: grid;
+        grid-template-columns: 34px max-content 34px;
+        justify-content: center;
+        place-items: center;
+        min-height: 56px;
+        gap: 7px;
+        padding: 2px 4px;
         border-radius: 8px;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(0,0,0,0.15);
+        border: 1px solid rgba(255,255,255,0.06);
+        background: transparent;
+        color: #e9eef5;
+        cursor: pointer;
+        font: inherit;
       }
-      .draftMeta { display: grid; gap: 4px; }
-      .draftTop {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+      .draftTurnSlot,
+      .draftClaimSlot {
+        display: grid;
+        place-items: center;
+        width: 100%;
+        min-height: 34px;
       }
-      .draftTopMain {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      .draftClaimSlot {
+        min-width: 34px;
       }
-      .draftTopStatus {
-        font-size: 12px;
-        color: rgba(233,238,245,0.75);
-        white-space: nowrap;
+      .draftPlayerToken {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        color: rgba(12, 14, 18, 0.88);
+        background: var(--player-color, #8fc7ff);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.52), 0 3px 8px rgba(0,0,0,0.24);
+        border: 1px solid rgba(255,255,255,0.36);
+        font-size: 10px;
+        font-weight: 800;
+        line-height: 1;
+      }
+      .draftPlayerToken.isCurrent {
+        outline: 2px solid rgba(255,255,255,0.82);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.52), 0 0 0 3px rgba(115, 232, 150, 0.20), 0 3px 8px rgba(0,0,0,0.24);
+      }
+      .draftTurnSlot.isEmpty::before,
+      .draftClaimSlot.isEmpty::before {
+        content: "";
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        border: 1px dashed rgba(255,255,255,0.16);
+        background: transparent;
+      }
+      .draftItem.isPicked {
+        opacity: 0.76;
+        background: rgba(0,0,0,0.08);
+      }
+      .draftItem:disabled {
+        opacity: 0.76;
+        cursor: default;
+      }
+      .draftItem:not(:disabled):hover {
+        border-color: rgba(126, 192, 255, 0.55);
+        background: rgba(255,255,255,0.06);
+      }
+      .draftItem.isCurrentPick {
+        border-color: rgba(115, 232, 150, 0.78);
+        box-shadow: 0 0 0 2px rgba(115, 232, 150, 0.14);
       }
       .dominoPreview {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 5px;
+        width: 150px;
+        max-width: 100%;
       }
       .dominoPreview.compact {
-        min-width: 118px;
+        width: 140px;
+        min-width: 0;
       }
-      .dominoHalf {
-        min-height: 34px;
-        border-radius: 7px;
-        border: 1px solid rgba(255,255,255,0.30);
-        display: grid;
-        align-content: center;
-        justify-items: center;
-        color: rgba(12,14,18,0.90);
-        text-shadow: 0 1px 0 rgba(255,255,255,0.45);
-        font-size: 10px;
-        font-weight: 700;
+      .draftItem .dominoPreview,
+      .placementChoice .dominoPreview {
+        width: 142px;
       }
-      .dominoName { line-height: 1; }
-      .dominoCrowns {
-        margin-top: 2px;
-        color: #f0c94f;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.55);
-        letter-spacing: 0.5px;
+      .dominoPreviewCanvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        filter: drop-shadow(0 3px 4px rgba(0,0,0,0.28));
       }
       .placementChoices {
         margin-top: 8px;
         display: grid;
-        gap: 6px;
+        gap: 5px;
       }
       .placementChoiceTitle {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 800;
-        color: rgba(233,238,245,0.86);
+        color: rgba(233,238,245,0.68);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
       }
       .placementChoiceList {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+        grid-template-columns: repeat(2, max-content);
         gap: 6px;
       }
       .placementChoice {
         display: grid;
-        gap: 5px;
+        grid-template-rows: auto 1fr;
+        gap: 4px;
         justify-items: stretch;
-        padding: 7px;
+        padding: 6px;
         text-align: left;
+        min-width: 142px;
+        border-color: rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.05);
       }
       .placementChoice.selected {
-        border-color: rgba(115, 232, 150, 0.85);
-        background: rgba(30, 95, 62, 0.62);
-        box-shadow: 0 0 0 2px rgba(115, 232, 150, 0.18);
+        border-color: rgba(115, 232, 150, 0.95);
+        background: rgba(31, 103, 66, 0.58);
+        box-shadow: 0 0 0 2px rgba(115, 232, 150, 0.22), 0 8px 24px rgba(0,0,0,0.22);
+        transform: translateY(-1px);
       }
       .placementChoiceHeader {
         display: flex;
         justify-content: space-between;
         gap: 6px;
         align-items: center;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 800;
       }
       .placementChoiceNumber {
-        color: rgba(233,238,245,0.72);
+        color: rgba(233,238,245,0.88);
       }
       .placementChoiceStatus {
+        padding: 1px 5px;
+        border-radius: 999px;
+        color: rgba(233,238,245,0.64);
+        background: rgba(255,255,255,0.07);
+        font-size: 10px;
+      }
+      .placementChoice.selected .placementChoiceStatus {
         color: #c6ffe4;
+        background: rgba(115, 232, 150, 0.16);
+      }
+      .placementChoice .dominoPreview.compact {
+        min-width: 0;
       }
       .tag { font-size: 12px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); }
       .error { color: #ffb4b4; margin-top: 6px; }
@@ -1115,8 +1186,8 @@ export class GameLayout extends HTMLElement {
         padding: 8px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(20,22,28,0.72);
-        backdrop-filter: blur(8px);
+        background: rgba(20,22,28,0.64);
+        backdrop-filter: blur(6px);
         z-index: 5;
       }
       .miniRow { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
@@ -1126,7 +1197,7 @@ export class GameLayout extends HTMLElement {
         padding: 7px;
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(0,0,0,0.15);
+        background: transparent;
         flex: 0 0 auto;
       }
       .miniTitle { font-size: 12px; font-weight: 700; color: rgba(233,238,245,0.85); }
@@ -1204,7 +1275,7 @@ export class GameLayout extends HTMLElement {
         }
         .hud {
           width: calc(100vw - 16px);
-          max-height: min(34dvh, 320px);
+          max-height: min(44dvh, 380px);
           top: auto;
           bottom: 74px;
           left: 8px;
@@ -1239,30 +1310,25 @@ export class GameLayout extends HTMLElement {
         .mobileBtn { padding: 9px 11px; }
         .draftList {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 6px;
-        }
-        .draftItem {
           grid-template-columns: 1fr;
-          padding: 6px;
-        }
-        .draftItem > button { justify-self: stretch; }
-        .draftTop {
-          display: grid;
-          align-items: start;
           gap: 3px;
         }
-        .draftTopStatus {
-          font-size: 10px;
-          white-space: normal;
+        .draftItem {
+          min-width: 0;
+          grid-template-columns: 30px max-content 30px;
+          min-height: 54px;
+          gap: 6px;
+          padding: 2px 4px;
         }
-        .dominoPreview { gap: 4px; }
-        .dominoPreview.compact { min-width: 0; }
-        .dominoHalf {
-          min-height: 28px;
-          font-size: 9px;
+        .draftItem .dominoPreview { width: min(136px, calc(100vw - 104px)); }
+        .dominoPreview { width: clamp(108px, 18vw, 148px); }
+        .dominoPreview.compact { width: clamp(104px, 17vw, 140px); min-width: 0; }
+        .placementChoiceList { grid-template-columns: repeat(2, max-content); }
+        .placementChoice {
+          min-width: 132px;
+          padding: 5px;
+          gap: 3px;
         }
-        .placementChoiceList { grid-template-columns: 1fr; }
         .miniMapDock {
           top: 64px;
           left: 8px;
@@ -1277,6 +1343,56 @@ export class GameLayout extends HTMLElement {
         .endOverlay { padding: 132px 12px 128px; }
         .endCard { padding: 15px; }
         .endTitle { font-size: 23px; }
+      }
+      @media (max-width: 520px) {
+        .draftItem {
+          grid-template-columns: 28px max-content 28px;
+          gap: 5px;
+        }
+        .draftItem .dominoPreview { width: min(132px, calc(100vw - 96px)); }
+        .draftPlayerToken {
+          width: 26px;
+          height: 26px;
+          font-size: 9px;
+        }
+      }
+      @media (min-width: 560px) and (max-width: 760px) {
+        .hud {
+          width: min(350px, calc(56vw - 10px));
+          max-height: min(44dvh, 380px);
+          right: auto;
+        }
+        .miniMapDock {
+          top: auto;
+          right: 8px;
+          bottom: 74px;
+          left: auto;
+          box-sizing: border-box;
+          width: min(210px, calc(44vw - 10px));
+          max-width: 210px;
+          max-height: min(44dvh, 380px);
+          overflow: auto;
+        }
+        .miniRow {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 6px;
+          overflow: visible;
+        }
+        .miniCard {
+          min-width: 0;
+          justify-items: center;
+        }
+        .miniTitle {
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        canvas.mini {
+          width: min(136px, calc(44vw - 46px));
+          height: min(136px, calc(44vw - 46px));
+        }
       }
     `;
 
@@ -1818,35 +1934,141 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #createDominoHalf(landscape, crowns) {
-    const el = document.createElement('div');
-    el.className = 'dominoHalf';
-    el.style.background = landscapeCssBackground(landscape, crowns || 0);
-    el.style.backgroundBlendMode = 'normal';
+  #createDominoPreview(domino, compact = false) {
+    const wrap = document.createElement('div');
+    wrap.className = compact ? 'dominoPreview compact' : 'dominoPreview';
 
-    const nameEl = document.createElement('div');
-    nameEl.className = 'dominoName';
-    nameEl.textContent = landscapeLabel(landscape);
-    el.append(nameEl);
+    const canvas = document.createElement('canvas');
+    canvas.className = 'dominoPreviewCanvas';
+    canvas.width = 320;
+    canvas.height = 132;
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute(
+      'aria-label',
+      `Domino ${landscapeLabel(domino.leftEnd.landscape)} ${domino.leftEnd.crowns || 0} crowns and ${landscapeLabel(domino.rightEnd.landscape)} ${domino.rightEnd.crowns || 0} crowns`
+    );
 
-    if (crowns > 0) {
-      const crownsEl = document.createElement('div');
-      crownsEl.className = 'dominoCrowns';
-      crownsEl.textContent = crownsText(crowns);
-      el.append(crownsEl);
-    }
-
-    return el;
+    this.#drawDominoPreview(canvas, domino);
+    wrap.append(canvas);
+    return wrap;
   }
 
-  #createDominoPreview(domino, compact = false) {
-    const preview = document.createElement('div');
-    preview.className = compact ? 'dominoPreview compact' : 'dominoPreview';
-    preview.append(
-      this.#createDominoHalf(domino.leftEnd.landscape, domino.leftEnd.crowns),
-      this.#createDominoHalf(domino.rightEnd.landscape, domino.rightEnd.crowns),
+  #drawIsoTile(ctx, tile, cx, cy, tileW, tileH, depth, seedKey) {
+    const pTop = { x: cx, y: cy - tileH / 2 };
+    const pRight = { x: cx + tileW / 2, y: cy };
+    const pBottom = { x: cx, y: cy + tileH / 2 };
+    const pLeft = { x: cx - tileW / 2, y: cy };
+    const down = { x: 0, y: depth };
+
+    ctx.fillStyle = 'rgba(47, 52, 57, 0.84)';
+    ctx.beginPath();
+    ctx.moveTo(pLeft.x, pLeft.y);
+    ctx.lineTo(pBottom.x, pBottom.y);
+    ctx.lineTo(pBottom.x + down.x, pBottom.y + down.y);
+    ctx.lineTo(pLeft.x + down.x, pLeft.y + down.y);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(32, 36, 41, 0.92)';
+    ctx.beginPath();
+    ctx.moveTo(pRight.x, pRight.y);
+    ctx.lineTo(pBottom.x, pBottom.y);
+    ctx.lineTo(pBottom.x + down.x, pBottom.y + down.y);
+    ctx.lineTo(pRight.x + down.x, pRight.y + down.y);
+    ctx.closePath();
+    ctx.fill();
+
+    const texture = createLandscapeTileCanvas(tile.landscape, tile.crowns || 0, seedKey, 128);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pTop.x, pTop.y);
+    ctx.lineTo(pRight.x, pRight.y);
+    ctx.lineTo(pBottom.x, pBottom.y);
+    ctx.lineTo(pLeft.x, pLeft.y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.setTransform(
+      (pRight.x - pTop.x) / texture.width,
+      (pRight.y - pTop.y) / texture.width,
+      (pLeft.x - pTop.x) / texture.height,
+      (pLeft.y - pTop.y) / texture.height,
+      pTop.x,
+      pTop.y
     );
-    return preview;
+    ctx.drawImage(texture, 0, 0);
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(pTop.x, pTop.y);
+    ctx.lineTo(pRight.x, pRight.y);
+    ctx.lineTo(pBottom.x, pBottom.y);
+    ctx.lineTo(pLeft.x, pLeft.y);
+    ctx.closePath();
+    ctx.stroke();
+
+    if ((tile.crowns || 0) > 0) {
+      ctx.save();
+      ctx.font = '700 18px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(20, 16, 6, 0.72)';
+      ctx.fillText(crownsText(tile.crowns), cx + 2, cy - 1);
+      ctx.fillStyle = '#ffd96e';
+      ctx.fillText(crownsText(tile.crowns), cx, cy - 3);
+      ctx.restore();
+    }
+  }
+
+  #drawDominoPreview(canvas, domino) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const connectedEdge = domino.getConnectedEdge(DominoEnd.LEFT);
+    const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge) ?? { x: 1, y: 0 };
+    const tiles = [
+      { x: 0, y: 0, tile: domino.leftEnd },
+      { x: offset.x, y: offset.y, tile: domino.rightEnd },
+    ];
+    const tileW = 124;
+    const tileH = 72;
+    const depth = 16;
+    const iso = (x, y) => ({
+      x: (x - y) * tileW / 2,
+      y: (x + y) * tileH / 2,
+    });
+
+    const projected = tiles.map((t) => ({ ...t, ...iso(t.x, t.y) }));
+    const minX = Math.min(...projected.map((p) => p.x - tileW / 2));
+    const maxX = Math.max(...projected.map((p) => p.x + tileW / 2));
+    const minY = Math.min(...projected.map((p) => p.y - tileH / 2));
+    const maxY = Math.max(...projected.map((p) => p.y + tileH / 2 + depth));
+    const ox = (canvas.width - (maxX - minX)) / 2 - minX;
+    const oy = (canvas.height - (maxY - minY)) / 2 - minY - 1;
+
+    projected
+      .sort((a, b) => (a.x + a.y) - (b.x + b.y))
+      .forEach((p, i) => {
+        this.#drawIsoTile(ctx, p.tile, p.x + ox, p.y + oy, tileW, tileH, depth, `preview|${domino.number}|${i}`);
+      });
+  }
+
+  #playerDraftColor(playerIndex) {
+    const colors = ['#8fc7ff', '#87e39f', '#f2c96f', '#d6a0ff'];
+    return colors[Math.max(0, playerIndex) % colors.length];
+  }
+
+  #createDraftPlayerToken(playerIndex, current = false) {
+    const token = document.createElement('div');
+    token.className = 'draftPlayerToken';
+    token.classList.toggle('isCurrent', current);
+    token.style.setProperty('--player-color', this.#playerDraftColor(playerIndex));
+    token.textContent = `P${playerIndex + 1}`;
+    const name = this.#playerNames[playerIndex] ?? this.#game?.players[playerIndex]?.name ?? `P${playerIndex + 1}`;
+    token.title = name;
+    token.setAttribute('aria-label', name);
+    return token;
   }
 
   #collectLandscapeRegions(board) {
@@ -2777,68 +2999,61 @@ export class GameLayout extends HTMLElement {
       const nextSlotByDominoNumber = new Map(
         nextOrderByNumber.map((slot, i) => [slot.domino.number, i + 1])
       );
-
-      const slotsByPlayer = new Map();
-      for (let i = 0; i < g.players.length; i++) slotsByPlayer.set(i, []);
-      for (let i = 0; i < nextOrderByNumber.length; i++) {
-        const slot = nextOrderByNumber[i];
-        if (slot.player == null) continue;
-        slotsByPlayer.get(slot.player)?.push(i + 1);
-      }
-
-      const forecast = document.createElement('div');
-      forecast.className = 'muted';
-      forecast.style.marginTop = '6px';
-      const parts = [];
-      for (let i = 0; i < g.players.length; i++) {
-        const name = this.#playerNames[i] ?? g.players[i].name ?? `P${i + 1}`;
-        const slots = slotsByPlayer.get(i) ?? [];
-        parts.push(slots.length ? `${name}: #${slots.join(', #')}` : `${name}: —`);
-      }
-      forecast.textContent = `Next order (so far): ${parts.join(' · ')}`;
-      this.#hudBody.append(forecast);
+      const pickOrder = g.pickOrder ?? [];
+      const pickedCount = g.pickCursor ?? g.currentDraft.filter((slot) => slot.player != null).length;
 
       const list = document.createElement('div');
       list.className = 'draftList';
       g.currentDraft.forEach((slot, idx) => {
-        const item = document.createElement('div');
+        const item = document.createElement('button');
+        item.type = 'button';
         item.className = 'draftItem';
+        item.classList.toggle('isPicked', slot.player != null);
 
-        const left = `${landscapeLabel(slot.domino.leftEnd.landscape)}(${slot.domino.leftEnd.crowns})`;
-        const right = `${landscapeLabel(slot.domino.rightEnd.landscape)}(${slot.domino.rightEnd.crowns})`;
         const nextSlot = nextSlotByDominoNumber.get(slot.domino.number) ?? '?';
-        const pickedBy = slot.player == null
-          ? `Next #${nextSlot} · Available`
-          : `Next #${nextSlot} · Picked by ${this.#playerNames[slot.player] ?? g.players[slot.player].name}`;
+        const ownerName = slot.player == null
+          ? null
+          : this.#playerNames[slot.player] ?? g.players[slot.player].name;
+        const queuedPlayerIndex = idx >= pickedCount ? pickOrder[idx] : null;
+        const queuedPlayerName = queuedPlayerIndex == null
+          ? null
+          : this.#playerNames[queuedPlayerIndex] ?? g.players[queuedPlayerIndex].name;
 
-        const label = document.createElement('div');
-        label.className = 'draftMeta';
+        const turnSlot = document.createElement('div');
+        turnSlot.className = 'draftTurnSlot';
+        turnSlot.classList.toggle('isEmpty', queuedPlayerIndex == null);
+        if (queuedPlayerIndex != null) {
+          turnSlot.append(this.#createDraftPlayerToken(queuedPlayerIndex, idx === pickedCount));
+        }
 
-        const top = document.createElement('div');
-        top.className = 'draftTop';
+        const preview = this.#createDominoPreview(slot.domino);
+        const statusLabel = ownerName ? `picked by ${ownerName}` : `available as next order ${nextSlot}`;
+        item.setAttribute(
+          'aria-label',
+          `Domino ${slot.domino.number}, ${statusLabel}. ${landscapeLabel(slot.domino.leftEnd.landscape)} with ${slot.domino.leftEnd.crowns || 0} crowns and ${landscapeLabel(slot.domino.rightEnd.landscape)} with ${slot.domino.rightEnd.crowns || 0} crowns.`
+        );
 
-        const topMain = document.createElement('div');
-        topMain.className = 'draftTopMain';
-        topMain.innerHTML = `<span class="tag">#${slot.domino.number}</span> ${left} | ${right}`;
+        const claimSlot = document.createElement('div');
+        claimSlot.className = 'draftClaimSlot';
+        claimSlot.classList.toggle('isEmpty', slot.player == null);
+        if (ownerName) {
+          claimSlot.append(this.#createDraftPlayerToken(slot.player));
+        }
+        item.title = queuedPlayerName
+          ? `${queuedPlayerName} is in this pick-order position.`
+          : ownerName
+            ? `${ownerName} claimed this tile.`
+            : '';
 
-        const topStatus = document.createElement('div');
-        topStatus.className = 'draftTopStatus';
-        topStatus.textContent = pickedBy;
+        item.append(turnSlot, preview, claimSlot);
 
-        top.append(topMain, topStatus);
-
-        label.append(top, this.#createDominoPreview(slot.domino));
-
-        const btn = document.createElement('button');
-        btn.textContent = 'Pick';
-        btn.disabled = slot.player != null || !this.#isMyTurnToPick() || this.#isGameplayPausedForUndo();
-        btn.addEventListener('click', () => {
+        item.disabled = slot.player != null || !this.#isMyTurnToPick() || this.#isGameplayPausedForUndo();
+        item.addEventListener('click', () => {
           if (!this.#isMyTurnToPick()) return;
           if (this.#isGameplayPausedForUndo()) return;
           this.#mp?.sendAction('pickDraft', { index: idx });
         });
 
-        item.append(label, btn);
         list.append(item);
       });
       this.#hudBody.append(list);
@@ -2850,7 +3065,7 @@ export class GameLayout extends HTMLElement {
       if (drafted) {
         const info = document.createElement('div');
         info.className = 'muted';
-        info.textContent = `Placing #${drafted.domino.number} — click the board to move the preview; Rotate changes orientation.`;
+        info.textContent = `Selected #${drafted.domino.number}`;
         this.#hudBody.append(info);
 
         const choices = g.getCurrentPlacingChoices();
@@ -2860,7 +3075,7 @@ export class GameLayout extends HTMLElement {
 
           const label = document.createElement('div');
           label.className = 'placementChoiceTitle';
-          label.textContent = 'Tile to place';
+          label.textContent = 'Tile rack';
           chooser.append(label);
 
           const list = document.createElement('div');
@@ -2879,7 +3094,7 @@ export class GameLayout extends HTMLElement {
             number.textContent = `#${n}`;
             const state = document.createElement('span');
             state.className = 'placementChoiceStatus';
-            state.textContent = selected ? 'Placing' : 'Choose';
+            state.textContent = selected ? 'Active' : 'Pick';
             header.append(number, state);
 
             b.append(header, this.#createDominoPreview(choice.domino, true));
