@@ -689,19 +689,13 @@ export class GameLayout extends HTMLElement {
       const r = overlayRect(el);
       if (r) visibleLeft = Math.max(visibleLeft, r.right + gap);
     };
-    const insetByVerticalPosition = (el) => {
-      const r = overlayRect(el);
-      if (!r) return;
-      if ((r.top + r.bottom) / 2 < h / 2) {
-        visibleTop = Math.max(visibleTop, r.bottom + gap);
-      } else {
-        visibleBottom = Math.min(visibleBottom, r.top - gap);
-      }
-    };
     const mobile = this.#isMobileViewport();
     insetTop(this.#topBar);
-    if (mobile) {
-      insetByVerticalPosition(this.#miniMapDock);
+    if (this.#isSplitViewport()) {
+      insetBottom(this.#miniMapDock);
+      insetBottom(this.#hud);
+    } else if (mobile) {
+      insetTop(this.#miniMapDock);
       insetBottom(this.#hud);
     } else {
       insetLeft(this.#hud);
@@ -1332,7 +1326,7 @@ export class GameLayout extends HTMLElement {
           gap: 3px;
         }
         .miniMapDock {
-          top: 64px;
+          top: 78px;
           left: 8px;
           bottom: auto;
           max-width: calc(100vw - 78px);
@@ -1346,22 +1340,15 @@ export class GameLayout extends HTMLElement {
         .endCard { padding: 15px; }
         .endTitle { font-size: 23px; }
       }
-      @media (max-width: 520px) {
-        .draftItem {
-          grid-template-columns: 27px max-content 27px;
-          gap: 3px;
-        }
-        .draftItem .dominoPreview { width: min(118px, calc(100vw - 88px)); }
-        .draftPlayerToken {
-          width: 26px;
-          height: 26px;
-          font-size: 9px;
-        }
-      }
-      @media (min-width: 560px) and (max-width: 760px) {
+      @media (min-width: 521px) {
         .hud {
+          top: auto;
+          bottom: 74px;
+          left: 8px;
           width: min(310px, calc(52vw - 8px));
           max-height: min(44dvh, 380px);
+          padding: 8px;
+          border-radius: 12px;
           right: auto;
         }
         .miniMapDock {
@@ -1373,6 +1360,7 @@ export class GameLayout extends HTMLElement {
           width: min(230px, calc(48vw - 10px));
           max-width: 230px;
           max-height: min(44dvh, 380px);
+          padding: 6px;
           overflow: auto;
         }
         .miniRow {
@@ -1384,16 +1372,42 @@ export class GameLayout extends HTMLElement {
         .miniCard {
           min-width: 0;
           justify-items: center;
+          padding: 5px;
+          gap: 4px;
         }
         .miniTitle {
           max-width: 100%;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          font-size: 11px;
         }
         canvas.mini {
           width: min(140px, calc(48vw - 46px));
           height: min(140px, calc(48vw - 46px));
+        }
+      }
+      @media (max-width: 520px) {
+        .miniMapDock {
+          top: 78px;
+          padding: 7px;
+        }
+        .miniRow { gap: 7px; }
+        .miniCard { padding: 6px; }
+        .miniTitle { font-size: 11px; }
+        canvas.mini {
+          width: min(96px, calc((100vw - 118px) / 2));
+          height: min(96px, calc((100vw - 118px) / 2));
+        }
+        .draftItem {
+          grid-template-columns: 27px max-content 27px;
+          gap: 3px;
+        }
+        .draftItem .dominoPreview { width: min(118px, calc(100vw - 88px)); }
+        .draftPlayerToken {
+          width: 26px;
+          height: 26px;
+          font-size: 9px;
         }
       }
     `;
@@ -1877,6 +1891,11 @@ export class GameLayout extends HTMLElement {
 
   #isMobileViewport() {
     return (window.innerWidth || 0) <= 760;
+  }
+
+  #isSplitViewport() {
+    const w = window.innerWidth || 0;
+    return w > 520;
   }
 
   #syncMobilePanelForPhase() {
