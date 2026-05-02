@@ -2559,6 +2559,87 @@ export class GameLayout extends HTMLElement {
     return { projected, other };
   }
 
+  #placementOptionCells(option) {
+    const choice = this.#game.getCurrentPlacingChoices?.()
+      ?.find((c) => c.domino.number === option.dominoNumber);
+    const domino = choice?.domino;
+    if (!domino) return [{ x: option.x, y: option.y }];
+
+    const originalOrientation = domino.orientation;
+    try {
+      let guard = 0;
+      while (domino.orientation !== option.orientation && guard < 4) {
+        domino.rotate();
+        guard += 1;
+      }
+
+      const connectedEdge = domino.getConnectedEdge(option.anchorEnd);
+      const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+      return [
+        { x: option.x, y: option.y },
+        { x: option.x + offset.x, y: option.y + offset.y },
+      ];
+    } finally {
+      while (domino.orientation !== originalOrientation) {
+        domino.rotate();
+      }
+    }
+  }
+
+  #validPlacementAnchorCells(options) {
+    const cells = new Map();
+    for (const option of options) {
+      for (const cell of this.#placementOptionCells(option)) {
+        cells.set(keyOf(cell.x, cell.y), cell);
+      }
+    }
+
+    for (const cell of this.#orderedPlacementCandidateAnchors()) {
+      if (this.#placementOptionsForGrid(cell, options).length) {
+        cells.set(keyOf(cell.x, cell.y), cell);
+      }
+    }
+
+    return cells.values();
+  }
+
+  #renderValidAnchorHighlights(options) {
+    if (this.#localPlacementFocus || !options.length) return;
+
+    const ringGeo = new THREE.RingGeometry(0.20, 0.31, 32);
+    const fillGeo = new THREE.CircleGeometry(0.20, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x8fc7ff,
+      transparent: true,
+      opacity: 0.66,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const fillMat = new THREE.MeshBasicMaterial({
+      color: 0x8fc7ff,
+      transparent: true,
+      opacity: 0.08,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+
+    for (const cell of this.#validPlacementAnchorCells(options)) {
+      const fill = new THREE.Mesh(fillGeo, fillMat);
+      fill.rotation.x = -Math.PI / 2;
+      fill.position.set(cell.x, 0.215, cell.y);
+      fill.renderOrder = 20;
+      this.#ghostGroup.add(fill);
+
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(cell.x, 0.22, cell.y);
+      ring.renderOrder = 21;
+      this.#ghostGroup.add(ring);
+    }
+  }
+
   #initThree() {
     const debugParam = new URL(location.href).searchParams.get('debug');
     const debugLevel = debugParam == null ? 0 : Number.parseInt(debugParam, 10);
@@ -2998,6 +3079,19 @@ export class GameLayout extends HTMLElement {
 
     const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     if (!feedback.ok) {
+      const rotatedOption = this.#placementOptionsForGrid(grid).find((option) =>
+        option.dominoNumber === this.#game.currentPlacingDraftedTile?.domino.number
+      );
+      if (rotatedOption) {
+        if (localize) this.#localPlacementFocus = { x: grid.x, y: grid.y };
+        this.#applyPlacementOption(rotatedOption);
+        this.#hoverAnchorAuto = auto;
+        this.#placementHint = '';
+        this.#setCanvasNotice('');
+        if (render) this.#renderGhost();
+        return true;
+      }
+
       if (showError) {
         this.#placementHint = feedback.reason;
         this.#setCanvasNotice(this.#placementHint || 'Invalid placement.', 'error');
@@ -4398,14 +4492,12 @@ export class GameLayout extends HTMLElement {
     this.#syncLocalPlacementDock();
   }
 
-  #optionUsesLocalFocus(option) {
-    const focus = this.#localPlacementFocus;
-    if (!focus) return false;
-
+  #optionUsesGrid(option, grid) {
+    if (!grid) return false;
     const choice = this.#game.getCurrentPlacingChoices?.()
       ?.find((c) => c.domino.number === option.dominoNumber);
     const domino = choice?.domino;
-    if (!domino) return option.x === focus.x && option.y === focus.y;
+    if (!domino) return option.x === grid.x && option.y === grid.y;
 
     const originalOrientation = domino.orientation;
     try {
@@ -4418,8 +4510,8 @@ export class GameLayout extends HTMLElement {
       const connectedEdge = domino.getConnectedEdge(option.anchorEnd);
       const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
       const other = { x: option.x + offset.x, y: option.y + offset.y };
-      return (option.x === focus.x && option.y === focus.y)
-        || (other.x === focus.x && other.y === focus.y);
+      return (option.x === grid.x && option.y === grid.y)
+        || (other.x === grid.x && other.y === grid.y);
     } finally {
       while (domino.orientation !== originalOrientation) {
         domino.rotate();
@@ -4427,14 +4519,21 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #optionUsesLocalFocus(option) {
+    return this.#optionUsesGrid(option, this.#localPlacementFocus);
+  }
+
+  #placementOptionsForGrid(grid, allValid = null) {
+    if (!grid) return [];
+    const options = allValid ?? this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? []);
+    return this.#uniqueVisiblePlacementOptions(options.filter((option) => this.#optionUsesGrid(option, grid)));
+  }
+
   #localPlacementOptions(allValid = null) {
     if (!this.#localPlacementFocus) return [];
     const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
-    const options = allValid ?? this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? []);
-    return this.#uniqueVisiblePlacementOptions(options.filter((option) =>
-      option.dominoNumber === selectedDominoNumber
-      && this.#optionUsesLocalFocus(option)
-    ));
+    return this.#placementOptionsForGrid(this.#localPlacementFocus, allValid)
+      .filter((option) => option.dominoNumber === selectedDominoNumber);
   }
 
   #placementDockOptions(allValid = null) {
@@ -4468,6 +4567,8 @@ export class GameLayout extends HTMLElement {
     if (!this.#localPlacementFocus) return;
     this.#localPlacementFocus = null;
     this.#setCanvasNotice('Showing all valid moves.', 'info', 900);
+    this.#renderGhost();
+    this.#syncMobileActions();
     this.#syncLocalPlacementDock();
     this.#refreshHud();
   }
@@ -4727,6 +4828,10 @@ export class GameLayout extends HTMLElement {
         this.#hoverAnchorAuto = true;
       }
     }
+
+    this.#renderValidAnchorHighlights(
+      g.getCurrentPlacementOptions?.() ?? []
+    );
 
     const anchor = this.#hoverAnchor;
     const feedback = this.#placementFeedbackForAnchor(anchor);
