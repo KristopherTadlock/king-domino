@@ -918,6 +918,9 @@ export class GameLayout extends HTMLElement {
   /** @type {boolean} */
   #libraryOpen = false;
 
+  /** @type {string | null} */
+  #libraryFilter = null;
+
   /** @type {THREE.WebGLRenderer} */
   #renderer;
   /** @type {THREE.Scene} */
@@ -1505,6 +1508,21 @@ export class GameLayout extends HTMLElement {
       }
       .libraryStats.lifecycle .libraryStat {
         padding: 6px 8px;
+      }
+      .libraryFilter {
+        width: 100%;
+        min-height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      .libraryFilter.active {
+        border-color: rgba(255,255,255,0.36);
+        background: rgba(255,255,255,0.16);
+        box-shadow: 0 0 0 2px rgba(255,255,255,0.08);
       }
       .libraryStat {
         display: flex;
@@ -3793,6 +3811,7 @@ export class GameLayout extends HTMLElement {
 
   #setLibraryOpen(open) {
     this.#libraryOpen = Boolean(open);
+    if (!this.#libraryOpen) this.#libraryFilter = null;
     this.#moreOpen = this.#libraryOpen ? true : this.#moreOpen;
     this.#hoverAnchor = null;
     this.#localPlacementFocus = null;
@@ -3808,6 +3827,12 @@ export class GameLayout extends HTMLElement {
       this.#centerOnFocusedBoard(true);
       this.#renderGhost();
     }
+    this.#refreshHud();
+  }
+
+  #setLibraryFilter(kind) {
+    this.#libraryFilter = this.#libraryFilter === kind ? null : kind;
+    this.#renderBoard();
     this.#refreshHud();
   }
 
@@ -3929,8 +3954,11 @@ export class GameLayout extends HTMLElement {
       const lifecycle = document.createElement('div');
       lifecycle.className = 'libraryStats lifecycle';
       for (const item of this.#dominoLibraryLifecycleStats(statusByNumber)) {
-        const row = document.createElement('div');
-        row.className = 'libraryStat';
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'libraryStat libraryFilter';
+        row.classList.toggle('active', this.#libraryFilter === item.kind);
+        row.setAttribute('aria-pressed', this.#libraryFilter === item.kind ? 'true' : 'false');
         const name = document.createElement('span');
         const swatch = document.createElement('span');
         swatch.className = 'librarySwatch';
@@ -3941,6 +3969,7 @@ export class GameLayout extends HTMLElement {
         const count = document.createElement('span');
         count.textContent = String(item.count);
         row.append(name, count);
+        row.addEventListener('click', () => this.#setLibraryFilter(item.kind));
         lifecycle.append(row);
       }
 
@@ -4423,6 +4452,7 @@ export class GameLayout extends HTMLElement {
 
     deck.forEach((domino, i) => {
       const status = statusByNumber.get(domino.number) ?? { kind: 'played', label: 'Played', color: 0x5b6170 };
+      const filtered = !!this.#libraryFilter && status.kind !== this.#libraryFilter;
       const col = i % cols;
       const row = Math.floor(i / cols);
       const baseX = xOffset + col * cellX;
@@ -4441,11 +4471,17 @@ export class GameLayout extends HTMLElement {
       };
 
       const statusColor = status.color ?? 0x5b6170;
-      const baseOpacity = status.kind === 'deck' ? 0.34 : status.kind === 'played' ? 0.30 : 0.46;
+      const baseOpacity = filtered
+        ? 0.14
+        : status.kind === 'deck'
+          ? 0.34
+          : status.kind === 'played'
+            ? 0.30
+            : 0.46;
       const base = new THREE.Mesh(
         new THREE.PlaneGeometry(2.26, 1.20),
         new THREE.MeshBasicMaterial({
-          color: statusColor,
+          color: filtered ? 0x1c2028 : statusColor,
           transparent: true,
           opacity: baseOpacity,
           depthWrite: false,
@@ -4460,11 +4496,11 @@ export class GameLayout extends HTMLElement {
       const rail = new THREE.Mesh(
         new THREE.BoxGeometry(2.12, 0.026, 0.070),
         new THREE.MeshStandardMaterial({
-          color: statusColor,
+          color: filtered ? 0x252a32 : statusColor,
           roughness: 0.42,
           metalness: 0.18,
-          emissive: statusColor,
-          emissiveIntensity: ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
+          emissive: filtered ? 0x000000 : statusColor,
+          emissiveIntensity: filtered ? 0 : ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
         })
       );
       rail.position.set(baseX + 0.5, 0.244, baseZ + 0.64);
@@ -4474,20 +4510,28 @@ export class GameLayout extends HTMLElement {
         const seedKey = `library|${domino.number}|${endName}`;
         const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, seedKey, false);
         const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
+        if (filtered) {
+          tileMesh.material = material.clone();
+          tileMesh.material.color = new THREE.Color(0x535861);
+          tileMesh.material.transparent = true;
+          tileMesh.material.opacity = 0.34;
+        }
         tileMesh.position.set(tile.x, 0.11, tile.y);
         this.#addTileObjects(tileMesh);
-        this.#addLandscapeDetail(tile, seedKey);
-        if ((tile.crowns || 0) > 0) {
-          this.#addCrownedLandmark(tile, seedKey);
-          this.#addCrownStars(tile.x, tile.y, tile.crowns);
+        if (!filtered) {
+          this.#addLandscapeDetail(tile, seedKey);
+          if ((tile.crowns || 0) > 0) {
+            this.#addCrownedLandmark(tile, seedKey);
+            this.#addCrownStars(tile.x, tile.y, tile.crowns);
+          }
         }
       }
 
       const number = createTextSprite(String(domino.number), {
         font: '800 36px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-        fillStyle: '#e9eef5',
-        background: 'rgba(20,22,28,0.74)',
-        border: 'rgba(255,255,255,0.20)',
+        fillStyle: filtered ? 'rgba(233,238,245,0.46)' : '#e9eef5',
+        background: filtered ? 'rgba(20,22,28,0.38)' : 'rgba(20,22,28,0.74)',
+        border: filtered ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.20)',
         size: 96,
       });
       number.position.set(baseX - 0.52, 0.32, baseZ - 0.58);
@@ -4505,9 +4549,11 @@ export class GameLayout extends HTMLElement {
               : 'Played';
       const badge = createTextSprite(statusLabel, {
         font: '800 28px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-        fillStyle: '#f5fbff',
-        background: `rgba(${(statusColor >> 16) & 255}, ${(statusColor >> 8) & 255}, ${statusColor & 255}, 0.76)`,
-        border: 'rgba(255,255,255,0.28)',
+        fillStyle: filtered ? 'rgba(245,251,255,0.50)' : '#f5fbff',
+        background: filtered
+          ? 'rgba(30,34,42,0.42)'
+          : `rgba(${(statusColor >> 16) & 255}, ${(statusColor >> 8) & 255}, ${statusColor & 255}, 0.76)`,
+        border: filtered ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.28)',
         size: 128,
       });
       badge.position.set(baseX + 1.06, 0.34, baseZ + 0.58);
@@ -5686,7 +5732,7 @@ export class GameLayout extends HTMLElement {
       xMax: xOffset + (cols - 1) * cellX + 1.72,
       yMin: zOffset - 0.82,
       yMax: zOffset + (rows - 1) * cellZ + 0.82,
-    }, 0.35, { x: 0, z: 0 }, animate);
+    }, 2.2, { x: 0, z: 0 }, animate);
   }
 
   #ensureMiniMaps() {
