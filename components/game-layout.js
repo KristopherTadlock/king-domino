@@ -941,6 +941,7 @@ export class GameLayout extends HTMLElement {
       insetLeft(this.#hud);
     }
     insetBottom(this.#primaryControlsRow);
+    insetBottom(this.#localPlacementDock);
 
     const usableW = Math.max(120, visibleRight - visibleLeft);
     const usableH = Math.max(120, visibleBottom - visibleTop);
@@ -1135,7 +1136,7 @@ export class GameLayout extends HTMLElement {
       .canvasNotice {
         position: absolute;
         left: 50%;
-        bottom: 76px;
+        bottom: var(--placement-notice-bottom, 76px);
         transform: translateX(-50%);
         max-width: min(70vw, 720px);
         padding: 7px 10px;
@@ -1163,6 +1164,10 @@ export class GameLayout extends HTMLElement {
       }
       .localPlacementDock {
         position: absolute;
+        left: var(--placement-dock-left, 50%);
+        right: auto;
+        top: auto;
+        bottom: var(--placement-dock-bottom, 12px);
         display: flex;
         align-items: center;
         gap: 4px;
@@ -1172,7 +1177,7 @@ export class GameLayout extends HTMLElement {
         background: rgba(20, 22, 28, 0.88);
         backdrop-filter: blur(8px);
         box-shadow: 0 8px 28px rgba(0,0,0,0.34);
-        transform: translate(-50%, -100%);
+        transform: translateX(-50%);
         z-index: 7;
       }
       .localPlacementDock[hidden] { display: none !important; }
@@ -1690,17 +1695,17 @@ export class GameLayout extends HTMLElement {
         .canvasNotice {
           left: 8px;
           right: 8px;
-          bottom: var(--mobile-notice-bottom, 64px);
+          bottom: var(--placement-notice-bottom, 64px);
           transform: none;
           max-width: none;
           text-align: center;
           z-index: 10;
         }
         .localPlacementDock {
-          left: 50% !important;
+          left: var(--placement-dock-left, 50%) !important;
           right: auto;
           top: auto !important;
-          bottom: var(--mobile-dock-bottom, 64px);
+          bottom: var(--placement-dock-bottom, 64px);
           transform: translateX(-50%);
           z-index: 10;
         }
@@ -1709,13 +1714,13 @@ export class GameLayout extends HTMLElement {
           max-height: min(30dvh, 230px);
         }
         .root.hasCanvasNotice .canvasNotice {
-          bottom: var(--mobile-notice-bottom, 188px);
+          bottom: var(--placement-notice-bottom, 188px);
         }
         .root.hasLocalPlacementDock .canvasNotice {
-          bottom: var(--mobile-notice-bottom, 198px);
+          bottom: var(--placement-notice-bottom, 198px);
         }
         .root.hasLocalPlacementDock .localPlacementDock {
-          bottom: var(--mobile-dock-bottom, 150px);
+          bottom: var(--placement-dock-bottom, 150px);
         }
         .root.hasLocalPlacementDock .hud {
           bottom: var(--mobile-hud-bottom, 8px);
@@ -1725,7 +1730,7 @@ export class GameLayout extends HTMLElement {
           width: calc(100vw - 16px);
           max-height: min(44dvh, 380px);
           top: auto;
-          bottom: 74px;
+          bottom: 8px;
           left: 8px;
           padding: 8px;
           border-radius: 12px;
@@ -1801,7 +1806,7 @@ export class GameLayout extends HTMLElement {
       @media (min-width: 521px) {
         .hud {
           top: auto;
-          bottom: 74px;
+          bottom: 8px;
           left: 8px;
           width: min(310px, calc(52vw - 8px));
           max-height: min(44dvh, 380px);
@@ -1812,7 +1817,7 @@ export class GameLayout extends HTMLElement {
         .miniMapDock {
           top: auto;
           right: 8px;
-          bottom: 74px;
+          bottom: 8px;
           left: auto;
           box-sizing: border-box;
           width: min(230px, calc(48vw - 10px));
@@ -2086,13 +2091,17 @@ export class GameLayout extends HTMLElement {
         this.#renderMiniMaps();
       },
       onAction: (action) => {
+        const previousState = this.#game?.state;
         this.#actionHistory.push(action);
         this.#applyNetworkAction(action);
         const focusChanged = this.#syncFocusedBoardToPhase();
+        const phaseChanged = previousState != null && previousState !== this.#game?.state;
         this.#refreshHud();
         this.#renderBoard();
-        if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard(focusChanged);
         this.#renderGhost();
+        if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
+          this.#centerOnFocusedBoard(focusChanged || phaseChanged);
+        }
         this.#autoResolveForcedDraft();
       },
       onError: (message) => {
@@ -2120,14 +2129,18 @@ export class GameLayout extends HTMLElement {
   }
 
   #applyLocalAction(action) {
+    const previousState = this.#game?.state;
     this.#actionHistory.push(action);
     this.#applyNetworkAction(action);
     this.#syncHotseatPlayerIndex();
     const focusChanged = this.#syncFocusedBoardToPhase();
+    const phaseChanged = previousState != null && previousState !== this.#game?.state;
     this.#refreshHud();
     this.#renderBoard();
-    if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard(focusChanged);
     this.#renderGhost();
+    if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
+      this.#centerOnFocusedBoard(focusChanged || phaseChanged);
+    }
     this.#renderMiniMaps();
     this.#autoResolveForcedDraft();
   }
@@ -2462,10 +2475,24 @@ export class GameLayout extends HTMLElement {
 
   #syncMobilePlacementStack() {
     if (!this.#root) return;
+    const rootRect = this.#root.getBoundingClientRect();
+    const hudRect = this.#hud && !this.#hud.hidden ? this.#hud.getBoundingClientRect() : null;
+    const dockLeft = hudRect
+      ? Math.round(hudRect.left - rootRect.left + hudRect.width / 2)
+      : Math.round(rootRect.width / 2);
+    this.#root.style.setProperty('--placement-dock-left', `${dockLeft}px`);
+
     if (!this.#isMobileViewport()) {
       this.#root.style.removeProperty('--mobile-hud-bottom');
-      this.#root.style.removeProperty('--mobile-dock-bottom');
-      this.#root.style.removeProperty('--mobile-notice-bottom');
+      const gap = 8;
+      const dockVisible = this.#localPlacementDock && !this.#localPlacementDock.hidden;
+      const dockHeight = dockVisible ? this.#localPlacementDock.getBoundingClientRect().height : 0;
+      const dockBottom = hudRect
+        ? Math.round(rootRect.bottom - hudRect.top + gap)
+        : 12;
+      const noticeBottom = dockVisible ? dockBottom + dockHeight + gap : 76;
+      this.#root.style.setProperty('--placement-dock-bottom', `${dockBottom}px`);
+      this.#root.style.setProperty('--placement-notice-bottom', `${noticeBottom}px`);
       return;
     }
 
@@ -2473,7 +2500,7 @@ export class GameLayout extends HTMLElement {
     const primaryVisible = this.#primaryControlsRow && !this.#primaryControlsRow.hidden;
     const primaryHeight = primaryVisible ? this.#primaryControlsRow.getBoundingClientRect().height : 0;
     const hudBottom = primaryVisible ? Math.round(primaryHeight + 16) : 8;
-    const hudHeight = this.#hud && !this.#hud.hidden ? this.#hud.getBoundingClientRect().height : 0;
+    const hudHeight = hudRect ? hudRect.height : 0;
     const dockVisible = this.#localPlacementDock && !this.#localPlacementDock.hidden;
     const dockHeight = dockVisible ? this.#localPlacementDock.getBoundingClientRect().height : 0;
     const dockBottom = Math.round(hudBottom + hudHeight + gap);
@@ -2482,8 +2509,8 @@ export class GameLayout extends HTMLElement {
       : hudBottom + hudHeight + gap);
 
     this.#root.style.setProperty('--mobile-hud-bottom', `${hudBottom}px`);
-    this.#root.style.setProperty('--mobile-dock-bottom', `${dockBottom}px`);
-    this.#root.style.setProperty('--mobile-notice-bottom', `${noticeBottom}px`);
+    this.#root.style.setProperty('--placement-dock-bottom', `${dockBottom}px`);
+    this.#root.style.setProperty('--placement-notice-bottom', `${noticeBottom}px`);
   }
 
   #setCanvasNotice(message, tone = 'error', autoHideMs = 0) {
@@ -3363,22 +3390,16 @@ export class GameLayout extends HTMLElement {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
-    const repeatSelectedSpot = this.#gridMatchesLocalPlacementAnchor(grid);
-    const selected = this.#trySelectPlacementAnchor(grid, {
+    this.#trySelectPlacementAnchor(grid, {
       localize: true,
       showError: e.pointerType === 'touch',
       render: true,
     });
 
     if (e.pointerType === 'touch') {
-      if (selected && !repeatSelectedSpot) this.#setCanvasNotice('Use the board controls to adjust or place.', 'info');
       this.#syncMobileActions();
       this.#resetTouchInteraction();
       return;
-    }
-
-    if (selected && !repeatSelectedSpot) {
-      this.#setCanvasNotice('Spot selected. Use board controls to cycle or confirm.', 'info', 1400);
     }
   }
 
@@ -5023,8 +5044,7 @@ export class GameLayout extends HTMLElement {
     const currentIndex = this.#currentPlacementOptionIndex(valid);
     const nextIndex = ((currentIndex < 0 ? 0 : currentIndex + delta) + valid.length) % valid.length;
     this.#applyPlacementOption(valid[nextIndex]);
-    const label = this.#localPlacementFocus ? 'Spot move' : 'Valid move';
-    this.#setCanvasNotice(`${label} ${nextIndex + 1}/${valid.length}`, 'info', 900);
+    this.#setCanvasNotice('');
     this.#renderGhost();
     this.#syncMobileActions();
     this.#syncLocalPlacementDock();
@@ -5039,18 +5059,6 @@ export class GameLayout extends HTMLElement {
     this.#syncMobileActions();
     this.#syncLocalPlacementDock();
     this.#refreshHud();
-  }
-
-  #screenPointForGrid(grid) {
-    if (!grid || !this.#camera || !this.#canvasHost || !this.#root) return null;
-    const rootRect = this.#root.getBoundingClientRect();
-    const canvasRect = this.#canvasHost.getBoundingClientRect();
-    const origin = this.#placementBoardOrigin();
-    const point = new THREE.Vector3(grid.x + origin.x, 0.72, grid.y + origin.z).project(this.#camera);
-    return {
-      x: canvasRect.left - rootRect.left + ((point.x + 1) / 2) * canvasRect.width,
-      y: canvasRect.top - rootRect.top + ((-point.y + 1) / 2) * canvasRect.height,
-    };
   }
 
   #syncLocalPlacementDock() {
@@ -5086,28 +5094,11 @@ export class GameLayout extends HTMLElement {
     this.#btnLocalNext.title = nextLabel;
     this.#btnLocalNext.setAttribute('aria-label', nextLabel);
 
-    if (this.#isMobileViewport()) {
-      this.#localPlacementDock.style.left = '';
-      this.#localPlacementDock.style.top = '';
-      this.#root?.classList.add('hasLocalPlacementDock');
-      this.#localPlacementDock.hidden = false;
-      this.#syncMobilePlacementStack();
-      return;
-    }
-
-    const point = this.#screenPointForGrid(this.#localPlacementFocus || this.#hoverAnchor);
-    if (!point) {
-      this.#hideLocalPlacementDock();
-      return;
-    }
-
-    const rootRect = this.#root.getBoundingClientRect();
-    const x = Math.max(76, Math.min(rootRect.width - 76, point.x));
-    const y = Math.max(96, Math.min(rootRect.height - 78, point.y - 26));
-    this.#localPlacementDock.style.left = `${Math.round(x)}px`;
-    this.#localPlacementDock.style.top = `${Math.round(y)}px`;
-    this.#root?.classList.remove('hasLocalPlacementDock');
+    this.#localPlacementDock.style.left = '';
+    this.#localPlacementDock.style.top = '';
+    this.#root?.classList.add('hasLocalPlacementDock');
     this.#localPlacementDock.hidden = false;
+    this.#syncMobilePlacementStack();
   }
 
   #hideLocalPlacementDock() {
@@ -5199,12 +5190,7 @@ export class GameLayout extends HTMLElement {
     const next = valid[nextIndex];
 
     this.#applyPlacementOption(next);
-    if (valid.length === 1) {
-      this.#setCanvasNotice(localValid.length ? 'Only one move for this spot.' : 'Only one valid spot is available.', 'info', 1100);
-    } else {
-      const label = localValid.length ? 'Spot move' : 'Valid move';
-      this.#setCanvasNotice(`${label} ${nextIndex + 1}/${valid.length}`, 'info', 900);
-    }
+    this.#setCanvasNotice('');
     this.#renderGhost();
     this.#centerOnFocusedBoard();
     this.#syncMobileActions();
