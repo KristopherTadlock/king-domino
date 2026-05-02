@@ -63,22 +63,22 @@ export class DrawBoard {
                 this.ctx.fillStyle = "#888";
                 break;
             case Landscapes.WHEAT:
-                this.ctx.fillStyle = "#fcb13b";
+                this.ctx.fillStyle = "#eaa83a";
                 break;
             case Landscapes.FOREST:
-                this.ctx.fillStyle = "#145A32a";
+                this.ctx.fillStyle = "#176a3b";
                 break;
             case Landscapes.MINE:
-                this.ctx.fillStyle = "#5F6A6A";
+                this.ctx.fillStyle = "#2e3a47";
                 break;
             case Landscapes.PASTURE:
-                this.ctx.fillStyle = "#52BE80";
+                this.ctx.fillStyle = "#67c864";
                 break;
             case Landscapes.BOG:
-                this.ctx.fillStyle = "#655780";
+                this.ctx.fillStyle = "#6b4388";
                 break;
             case Landscapes.WATER:
-                this.ctx.fillStyle = "#03a9f4";
+                this.ctx.fillStyle = "#1aa7d8";
                 break;
             default:
                 this.ctx.fillStyle = "#EEE";
@@ -126,4 +126,3 @@ export class DrawBoard {
         return this.canvas;
     }
 }
-

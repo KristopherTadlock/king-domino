@@ -11,12 +11,64 @@ import { randomSeed } from '../classes/utils/rng.js';
 
 const LANDSCAPE_COLORS = Object.freeze({
   [Landscapes.CASTLE]: 0x888888,
-  [Landscapes.WHEAT]: 0xfcb13b,
-  [Landscapes.FOREST]: 0x145a32,
-  [Landscapes.MINE]: 0x5f6a6a,
-  [Landscapes.PASTURE]: 0x52be80,
-  [Landscapes.BOG]: 0x655780,
-  [Landscapes.WATER]: 0x03a9f4,
+  [Landscapes.WHEAT]: 0xeaa83a,
+  [Landscapes.FOREST]: 0x176a3b,
+  [Landscapes.MINE]: 0x2e3a47,
+  [Landscapes.PASTURE]: 0x67c864,
+  [Landscapes.BOG]: 0x6b4388,
+  [Landscapes.WATER]: 0x1aa7d8,
+});
+
+const LANDSCAPE_TEXTURES = Object.freeze({
+  [Landscapes.CASTLE]: {
+    top: '#d8dadd',
+    mid: '#b8bec4',
+    bottom: '#939ca4',
+    dark: 'rgba(60,64,72,0.34)',
+    light: 'rgba(255,255,255,0.18)',
+  },
+  [Landscapes.WHEAT]: {
+    top: '#ffe08a',
+    mid: '#eab047',
+    bottom: '#b96f25',
+    dark: 'rgba(119,70,18,0.28)',
+    light: 'rgba(255,246,190,0.32)',
+  },
+  [Landscapes.FOREST]: {
+    top: '#3f9960',
+    mid: '#1d743f',
+    bottom: '#0f4427',
+    dark: 'rgba(6,36,18,0.36)',
+    light: 'rgba(159,232,174,0.24)',
+  },
+  [Landscapes.WATER]: {
+    top: '#66d4ec',
+    mid: '#2099c4',
+    bottom: '#116a95',
+    dark: 'rgba(10,68,99,0.32)',
+    light: 'rgba(202,248,255,0.30)',
+  },
+  [Landscapes.PASTURE]: {
+    top: '#b1ed89',
+    mid: '#6fca61',
+    bottom: '#3d9843',
+    dark: 'rgba(38,105,42,0.24)',
+    light: 'rgba(245,255,205,0.30)',
+  },
+  [Landscapes.BOG]: {
+    top: '#9270aa',
+    mid: '#6b4388',
+    bottom: '#3f2759',
+    dark: 'rgba(41,23,60,0.36)',
+    light: 'rgba(193,183,113,0.28)',
+  },
+  [Landscapes.MINE]: {
+    top: '#657484',
+    mid: '#394655',
+    bottom: '#1c2530',
+    dark: 'rgba(8,14,20,0.40)',
+    light: 'rgba(199,218,232,0.24)',
+  },
 });
 
 const ALL_EDGES = [Edges.TOP, Edges.BOTTOM, Edges.LEFT, Edges.RIGHT];
@@ -272,22 +324,22 @@ function landscapeCssBackground(landscape, crowns = 0) {
   let base;
   switch (landscape) {
     case Landscapes.WHEAT:
-      base = 'linear-gradient(145deg, #ffd980 0%, #f3bf58 58%, #d69a35 100%), repeating-linear-gradient(110deg, rgba(255,255,255,0.16) 0 3px, rgba(0,0,0,0) 3px 8px)';
+      base = 'linear-gradient(145deg, #ffe08a 0%, #eab047 58%, #b96f25 100%), repeating-linear-gradient(110deg, rgba(255,246,190,0.22) 0 3px, rgba(119,70,18,0) 3px 8px)';
       break;
     case Landscapes.FOREST:
-      base = 'linear-gradient(145deg, #3f8f5f 0%, #1f6f43 58%, #155431 100%), radial-gradient(circle at 28% 68%, rgba(172,235,192,0.28) 0 18%, rgba(0,0,0,0) 20%)';
+      base = 'linear-gradient(145deg, #3f9960 0%, #1d743f 58%, #0f4427 100%), radial-gradient(circle at 28% 68%, rgba(159,232,174,0.28) 0 18%, rgba(0,0,0,0) 20%)';
       break;
     case Landscapes.WATER:
-      base = 'linear-gradient(150deg, #5fc9df 0%, #2aa0c0 46%, #186f96 100%), repeating-linear-gradient(8deg, rgba(144,230,255,0.14) 0 2px, rgba(0,0,0,0) 2px 9px), radial-gradient(circle at 24% 74%, rgba(20,116,146,0.34) 0 18%, rgba(0,0,0,0) 22%)';
+      base = 'linear-gradient(150deg, #66d4ec 0%, #2099c4 46%, #116a95 100%), repeating-linear-gradient(8deg, rgba(202,248,255,0.18) 0 2px, rgba(0,0,0,0) 2px 9px), radial-gradient(circle at 24% 74%, rgba(10,68,99,0.34) 0 18%, rgba(0,0,0,0) 22%)';
       break;
     case Landscapes.PASTURE:
-      base = 'linear-gradient(145deg, #a6e89a 0%, #6fce6a 58%, #46a84a 100%), radial-gradient(circle at 72% 34%, rgba(255,255,255,0.26) 0 17%, rgba(0,0,0,0) 19%)';
+      base = 'linear-gradient(145deg, #b1ed89 0%, #6fca61 58%, #3d9843 100%), radial-gradient(circle at 72% 34%, rgba(245,255,205,0.30) 0 17%, rgba(0,0,0,0) 19%)';
       break;
     case Landscapes.BOG:
-      base = 'linear-gradient(145deg, #9b83b5 0%, #7a629b 58%, #584478 100%), radial-gradient(circle at 62% 66%, rgba(235,210,255,0.20) 0 20%, rgba(0,0,0,0) 22%)';
+      base = 'linear-gradient(145deg, #9270aa 0%, #6b4388 58%, #3f2759 100%), radial-gradient(circle at 62% 66%, rgba(193,183,113,0.24) 0 20%, rgba(0,0,0,0) 22%)';
       break;
     case Landscapes.MINE:
-      base = 'linear-gradient(145deg, #9ca7ad 0%, #7f8a91 56%, #5c676f 100%), repeating-linear-gradient(45deg, rgba(255,255,255,0.12) 0 3px, rgba(0,0,0,0) 3px 8px)';
+      base = 'linear-gradient(145deg, #657484 0%, #394655 56%, #1c2530 100%), repeating-linear-gradient(45deg, rgba(199,218,232,0.16) 0 3px, rgba(0,0,0,0) 3px 8px)';
       break;
     case Landscapes.CASTLE:
       base = 'linear-gradient(145deg, #d8dadd 0%, #b8bec4 56%, #939ca4 100%), repeating-linear-gradient(0deg, rgba(40,44,50,0.28) 0 2px, rgba(0,0,0,0) 2px 12px)';
@@ -314,21 +366,49 @@ function landscapeCssBackground(landscape, crowns = 0) {
 function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
   const seed = hash32(`${landscapeKey(landscape)}|${crowns}|${seedKey}`);
   const rand = mulberry32(seed);
-  const base = LANDSCAPE_COLORS[landscape] ?? 0xeeeeee;
-  const c = new THREE.Color(base);
+  const theme = LANDSCAPE_TEXTURES[landscape] ?? LANDSCAPE_TEXTURES[Landscapes.CASTLE];
 
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
 
-  const c1 = c.clone().offsetHSL(0, -0.04, 0.12).getStyle();
-  const c2 = c.clone().offsetHSL(0, 0.01, -0.10).getStyle();
   const grad = ctx.createLinearGradient(0, 0, size, size);
-  grad.addColorStop(0, c1);
-  grad.addColorStop(1, c2);
+  grad.addColorStop(0, theme.top);
+  grad.addColorStop(0.56, theme.mid);
+  grad.addColorStop(1, theme.bottom);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
+
+  if (landscape === Landscapes.WHEAT) {
+    ctx.strokeStyle = 'rgba(126,75,20,0.20)';
+    ctx.lineWidth = 5;
+    for (let x = -size; x < size * 2; x += 24) {
+      ctx.beginPath();
+      ctx.moveTo(x, size + 12);
+      ctx.lineTo(x + size * 0.72, -12);
+      ctx.stroke();
+    }
+  } else if (landscape === Landscapes.MINE) {
+    ctx.strokeStyle = 'rgba(8,14,20,0.24)';
+    ctx.lineWidth = 4;
+    for (let x = -size; x < size * 2; x += 34) {
+      ctx.beginPath();
+      ctx.moveTo(x, size + 8);
+      ctx.lineTo(x + size * 0.80, -8);
+      ctx.stroke();
+    }
+  } else if (landscape === Landscapes.WATER) {
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    for (let y = 18; y < size; y += 34) ctx.fillRect(0, y, size, 2);
+  } else if (landscape === Landscapes.PASTURE) {
+    ctx.fillStyle = 'rgba(255,248,185,0.08)';
+    for (let y = -20; y < size; y += 42) {
+      ctx.beginPath();
+      ctx.ellipse(size * 0.5, y, size * 0.58, 7, 0.08, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   const featureCount = 24 + Math.floor(rand() * 18);
   for (let i = 0; i < featureCount; i++) {
@@ -338,13 +418,13 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
     if (landscape === Landscapes.WATER) {
       const w = 20 + rand() * 56;
       const h = 3 + rand() * 7;
-      ctx.fillStyle = `rgba(99,199,226,${0.10 + rand() * 0.14})`;
+      ctx.fillStyle = `rgba(202,248,255,${0.12 + rand() * 0.18})`;
       ctx.beginPath();
       ctx.ellipse(x, y, w, h, rand() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
 
       if (rand() > 0.55) {
-        ctx.strokeStyle = `rgba(187,241,255,${0.06 + rand() * 0.10})`;
+        ctx.strokeStyle = `rgba(255,255,255,${0.08 + rand() * 0.12})`;
         ctx.lineWidth = 1 + rand() * 1.2;
         ctx.beginPath();
         ctx.arc(x, y, 6 + rand() * 16, 0, Math.PI * 2);
@@ -352,35 +432,85 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
       }
     } else if (landscape === Landscapes.FOREST) {
       const r = 8 + rand() * 18;
-      ctx.fillStyle = `rgba(14,54,27,${0.12 + rand() * 0.22})`;
+      ctx.fillStyle = `rgba(5,34,18,${0.14 + rand() * 0.24})`;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
+
+      if (rand() > 0.55) {
+        ctx.fillStyle = `rgba(159,232,174,${0.08 + rand() * 0.10})`;
+        ctx.beginPath();
+        ctx.arc(x + rand() * 14 - 7, y + rand() * 14 - 7, r * 0.38, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else if (landscape === Landscapes.WHEAT) {
-      ctx.strokeStyle = `rgba(255,255,255,${0.12 + rand() * 0.2})`;
+      ctx.strokeStyle = `rgba(255,246,190,${0.16 + rand() * 0.22})`;
       ctx.lineWidth = 1 + rand() * 2;
       ctx.beginPath();
       ctx.moveTo(x - 12, y + 12);
       ctx.quadraticCurveTo(x, y, x + 10, y - 12);
       ctx.stroke();
+
+      if (rand() > 0.55) {
+        ctx.strokeStyle = `rgba(120,72,18,${0.10 + rand() * 0.12})`;
+        ctx.beginPath();
+        ctx.moveTo(x + 7, y + 10);
+        ctx.lineTo(x + 12, y - 9);
+        ctx.stroke();
+      }
     } else if (landscape === Landscapes.PASTURE) {
       const r = 4 + rand() * 10;
-      ctx.fillStyle = `rgba(255,255,255,${0.10 + rand() * 0.18})`;
+      ctx.fillStyle = `rgba(245,255,205,${0.13 + rand() * 0.22})`;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
+
+      if (rand() > 0.68) {
+        ctx.strokeStyle = `rgba(38,105,42,${0.13 + rand() * 0.15})`;
+        ctx.lineWidth = 1 + rand();
+        ctx.beginPath();
+        ctx.moveTo(x, y + 8);
+        ctx.quadraticCurveTo(x + 4, y, x + 9, y - 8);
+        ctx.stroke();
+      }
     } else if (landscape === Landscapes.MINE) {
-      const w = 10 + rand() * 20;
-      const h = 8 + rand() * 16;
-      ctx.fillStyle = `rgba(35,42,48,${0.13 + rand() * 0.2})`;
-      ctx.fillRect(x - w / 2, y - h / 2, w, h);
+      const r = 9 + rand() * 22;
+      const sides = 5 + Math.floor(rand() * 3);
+      ctx.fillStyle = `rgba(8,14,20,${0.20 + rand() * 0.28})`;
+      ctx.beginPath();
+      for (let p = 0; p < sides; p++) {
+        const a = rand() * 0.4 + (p / sides) * Math.PI * 2;
+        const pr = r * (0.65 + rand() * 0.55);
+        const px = x + Math.cos(a) * pr;
+        const py = y + Math.sin(a) * pr;
+        if (p === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      if (rand() > 0.58) {
+        ctx.strokeStyle = rand() > 0.45 ? 'rgba(139,226,255,0.30)' : 'rgba(255,220,116,0.24)';
+        ctx.lineWidth = 1.4 + rand() * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x - r * 0.8, y + rand() * r - r * 0.5);
+        ctx.lineTo(x + r * 0.8, y + rand() * r - r * 0.5);
+        ctx.stroke();
+      }
     } else if (landscape === Landscapes.BOG) {
-      const rx = 9 + rand() * 20;
-      const ry = 6 + rand() * 14;
-      ctx.fillStyle = `rgba(61,36,86,${0.12 + rand() * 0.2})`;
+      const rx = 12 + rand() * 26;
+      const ry = 6 + rand() * 16;
+      ctx.fillStyle = `rgba(42,25,57,${0.18 + rand() * 0.24})`;
       ctx.beginPath();
       ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
+
+      if (rand() > 0.42) {
+        ctx.fillStyle = `rgba(193,183,113,${0.10 + rand() * 0.16})`;
+        ctx.beginPath();
+        ctx.arc(x + rand() * 18 - 9, y + rand() * 14 - 7, 3 + rand() * 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else if (landscape === Landscapes.CASTLE) {
       ctx.strokeStyle = `rgba(70,74,82,${0.14 + rand() * 0.2})`;
       ctx.lineWidth = 2;
@@ -392,6 +522,15 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
       ctx.stroke();
     }
   }
+
+  ctx.save();
+  const grainCount = 140 + Math.floor(rand() * 90);
+  for (let i = 0; i < grainCount; i++) {
+    ctx.globalAlpha = 0.22 + rand() * 0.38;
+    ctx.fillStyle = rand() > 0.76 ? theme.light : theme.dark;
+    ctx.fillRect(rand() * size, rand() * size, 1 + rand() * 1.4, 1 + rand() * 1.4);
+  }
+  ctx.restore();
 
   ctx.strokeStyle = 'rgba(0,0,0,0.30)';
   ctx.lineWidth = Math.max(4, Math.floor(size * 0.03));
@@ -3613,7 +3752,8 @@ export class GameLayout extends HTMLElement {
     switch (landscape) {
       case Landscapes.FOREST: {
         const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6d4c33, roughness: 0.75, metalness: 0.02 });
-        const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7a43, roughness: 0.68, metalness: 0.02 });
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0x236f3d, roughness: 0.68, metalness: 0.02 });
+        const tipMat = new THREE.MeshStandardMaterial({ color: 0x55b56a, roughness: 0.66, metalness: 0.02 });
         const treeCount = 2 + Math.floor(rand() * 3);
         const trees = [];
         for (let i = 0; i < treeCount; i++) {
@@ -3635,12 +3775,20 @@ export class GameLayout extends HTMLElement {
           canopy.position.set(x + t.dx, 0.22 + t.h + 0.07, y + t.dz);
           canopy.rotation.y = rand() * Math.PI * 2;
           this.#tilesGroup.add(canopy);
+
+          if (rand() > 0.55) {
+            const tip = new THREE.Mesh(new THREE.ConeGeometry(t.cr * 0.68, t.ch * 0.72, 8), tipMat);
+            tip.position.set(x + t.dx, 0.22 + t.h + t.ch * 0.58, y + t.dz);
+            tip.rotation.y = rand() * Math.PI * 2;
+            this.#tilesGroup.add(tip);
+          }
         }
         break;
       }
       case Landscapes.WHEAT: {
-        const stalkMat = new THREE.MeshStandardMaterial({ color: 0xe8c36a, roughness: 0.62, metalness: 0.04 });
-        const stalkCount = 4 + Math.floor(rand() * 4);
+        const stalkMat = new THREE.MeshStandardMaterial({ color: 0xf3d06d, roughness: 0.62, metalness: 0.04 });
+        const seedMat = new THREE.MeshStandardMaterial({ color: 0xc8852d, roughness: 0.66, metalness: 0.04 });
+        const stalkCount = 5 + Math.floor(rand() * 5);
         for (let i = 0; i < stalkCount; i++) {
           const dx = -0.2 + rand() * 0.4;
           const dz = -0.2 + rand() * 0.4;
@@ -3650,6 +3798,12 @@ export class GameLayout extends HTMLElement {
           stalk.rotation.z = (-0.25 + rand() * 0.5);
           stalk.rotation.y = rand() * Math.PI * 2;
           this.#tilesGroup.add(stalk);
+
+          const head = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.045, 6), seedMat);
+          head.position.set(x + dx, 0.31 + h * 0.56, y + dz);
+          head.rotation.z = stalk.rotation.z;
+          head.rotation.y = stalk.rotation.y;
+          this.#tilesGroup.add(head);
         }
         break;
       }
@@ -3693,6 +3847,7 @@ export class GameLayout extends HTMLElement {
       }
       case Landscapes.PASTURE: {
         const tuftMat = new THREE.MeshStandardMaterial({ color: 0x63b85f, roughness: 0.76, metalness: 0.02 });
+        const flowerMat = new THREE.MeshStandardMaterial({ color: 0xf5f7a6, roughness: 0.58, metalness: 0.02 });
         const tuftCount = 3 + Math.floor(rand() * 4);
         for (let i = 0; i < tuftCount; i++) {
           const dx = -0.2 + rand() * 0.4;
@@ -3703,11 +3858,19 @@ export class GameLayout extends HTMLElement {
           tuft.position.set(x + dx, 0.24, y + dz);
           tuft.rotation.y = rand() * Math.PI * 2;
           this.#tilesGroup.add(tuft);
+
+          if (rand() > 0.66) {
+            const flower = new THREE.Mesh(new THREE.SphereGeometry(0.018 + rand() * 0.01, 8, 6), flowerMat);
+            flower.scale.set(1, 0.45, 1);
+            flower.position.set(x + dx + rand() * 0.06 - 0.03, 0.285, y + dz + rand() * 0.06 - 0.03);
+            this.#tilesGroup.add(flower);
+          }
         }
         break;
       }
       case Landscapes.BOG: {
-        const muckMat = new THREE.MeshStandardMaterial({ color: 0x4a355e, roughness: 0.82, metalness: 0.04 });
+        const muckMat = new THREE.MeshStandardMaterial({ color: 0x3c244f, roughness: 0.82, metalness: 0.04 });
+        const mossMat = new THREE.MeshStandardMaterial({ color: 0x9b9854, roughness: 0.78, metalness: 0.03 });
         const puddleCount = 3 + Math.floor(rand() * 2);
         for (let i = 0; i < puddleCount; i++) {
           const dx = -0.2 + rand() * 0.4;
@@ -3718,11 +3881,27 @@ export class GameLayout extends HTMLElement {
           puddle.position.set(x + dx, 0.22, y + dz);
           puddle.rotation.y = rand() * Math.PI * 2;
           this.#tilesGroup.add(puddle);
+
+          if (rand() > 0.38) {
+            const moss = new THREE.Mesh(new THREE.SphereGeometry(0.024 + rand() * 0.018, 8, 6), mossMat);
+            moss.scale.set(1.3 + rand() * 0.5, 0.22, 0.8 + rand() * 0.4);
+            moss.position.set(x + dx + rand() * 0.12 - 0.06, 0.255, y + dz + rand() * 0.12 - 0.06);
+            moss.rotation.y = rand() * Math.PI * 2;
+            this.#tilesGroup.add(moss);
+          }
         }
         break;
       }
       case Landscapes.MINE: {
-        const rockMat = new THREE.MeshStandardMaterial({ color: 0x7f878d, roughness: 0.74, metalness: 0.08 });
+        const rockMat = new THREE.MeshStandardMaterial({ color: 0x566371, roughness: 0.72, metalness: 0.12 });
+        const darkRockMat = new THREE.MeshStandardMaterial({ color: 0x202b36, roughness: 0.76, metalness: 0.10 });
+        const crystalMat = new THREE.MeshStandardMaterial({
+          color: 0x89dbff,
+          emissive: 0x1d526f,
+          emissiveIntensity: 0.24,
+          roughness: 0.28,
+          metalness: 0.26,
+        });
         const rockCount = 3 + Math.floor(rand() * 3);
         for (let i = 0; i < rockCount; i++) {
           const r = {
@@ -3730,10 +3909,17 @@ export class GameLayout extends HTMLElement {
             dz: -0.2 + rand() * 0.4,
             s: 0.05 + rand() * 0.05,
           };
-          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r.s, 0), rockMat);
+          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r.s, 0), rand() > 0.45 ? rockMat : darkRockMat);
           rock.position.set(x + r.dx, 0.25 + r.s * 0.4, y + r.dz);
           rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
           this.#tilesGroup.add(rock);
+
+          if (rand() > 0.62) {
+            const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(r.s * 0.48, 0), crystalMat);
+            crystal.position.set(x + r.dx + rand() * 0.06 - 0.03, 0.30 + r.s * 0.8, y + r.dz + rand() * 0.06 - 0.03);
+            crystal.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            this.#tilesGroup.add(crystal);
+          }
         }
         break;
       }
@@ -4048,11 +4234,19 @@ export class GameLayout extends HTMLElement {
     if (cached) return cached;
 
     const texture = this.#getTileTexture(landscape, crowns, seedKey);
+    const metalness = landscape === Landscapes.MINE ? 0.12 : landscape === Landscapes.WATER ? 0.08 : 0.03;
+    const roughness = ghost
+      ? 0.74
+      : landscape === Landscapes.WATER
+        ? 0.46
+        : landscape === Landscapes.MINE
+          ? 0.56
+          : 0.62;
     const material = new THREE.MeshStandardMaterial({
       map: texture,
       color: 0xffffff,
-      roughness: ghost ? 0.74 : 0.60,
-      metalness: 0.03,
+      roughness,
+      metalness,
       transparent: ghost,
       opacity: ghost ? 0.78 : 1,
     });
