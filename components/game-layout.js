@@ -3218,12 +3218,13 @@ export class GameLayout extends HTMLElement {
 
     const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     if (!feedback.ok) {
-      const rotatedOption = this.#placementOptionsForGrid(grid).find((option) =>
-        option.dominoNumber === this.#game.currentPlacingDraftedTile?.domino.number
-      );
-      if (rotatedOption) {
+      const gridOptions = this.#placementOptionsForGrid(grid);
+      const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+      const matchedOption = gridOptions.find((option) => option.dominoNumber === selectedDominoNumber)
+        ?? gridOptions[0];
+      if (matchedOption) {
         if (localize) this.#localPlacementFocus = { x: grid.x, y: grid.y };
-        this.#applyPlacementOption(rotatedOption);
+        this.#applyPlacementOption(matchedOption);
         this.#hoverAnchorAuto = auto;
         this.#placementHint = '';
         this.#setCanvasNotice('');
