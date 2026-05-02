@@ -1007,7 +1007,8 @@ export class GameLayout extends HTMLElement {
         display: flex;
         gap: 6px;
         flex-direction: column;
-        align-items: center;
+        align-items: stretch;
+        min-width: 104px;
         padding: 8px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.10);
@@ -1053,6 +1054,10 @@ export class GameLayout extends HTMLElement {
       }
       .primaryAction:hover { background: rgba(44, 132, 85, 0.84); }
       .secondaryAction {
+        width: 100%;
+        min-height: 34px;
+        display: grid;
+        place-items: center;
         padding: 5px 8px;
         font-size: 12px;
         color: rgba(233,238,245,0.82);
@@ -1409,7 +1414,7 @@ export class GameLayout extends HTMLElement {
         .canvasNotice {
           left: 8px;
           right: 8px;
-          bottom: 64px;
+          bottom: var(--mobile-notice-bottom, 64px);
           transform: none;
           max-width: none;
           text-align: center;
@@ -1419,25 +1424,25 @@ export class GameLayout extends HTMLElement {
           left: 50% !important;
           right: auto;
           top: auto !important;
-          bottom: 64px;
+          bottom: var(--mobile-dock-bottom, 64px);
           transform: translateX(-50%);
           z-index: 10;
         }
         .root.hasCanvasNotice .hud {
-          bottom: 8px;
+          bottom: var(--mobile-hud-bottom, 8px);
           max-height: min(30dvh, 230px);
         }
         .root.hasCanvasNotice .canvasNotice {
-          bottom: 188px;
+          bottom: var(--mobile-notice-bottom, 188px);
         }
         .root.hasLocalPlacementDock .canvasNotice {
-          bottom: 198px;
+          bottom: var(--mobile-notice-bottom, 198px);
         }
         .root.hasLocalPlacementDock .localPlacementDock {
-          bottom: 150px;
+          bottom: var(--mobile-dock-bottom, 150px);
         }
         .root.hasLocalPlacementDock .hud {
-          bottom: 8px;
+          bottom: var(--mobile-hud-bottom, 8px);
           max-height: min(30dvh, 230px);
         }
         .hud {
@@ -1448,6 +1453,9 @@ export class GameLayout extends HTMLElement {
           left: 8px;
           padding: 8px;
           border-radius: 12px;
+        }
+        .root.isDraftPhase .hud {
+          bottom: 8px;
         }
         .controlsPrimary {
           left: 8px;
@@ -1461,6 +1469,7 @@ export class GameLayout extends HTMLElement {
         .controlsSecondary {
           top: 74px;
           right: 8px;
+          min-width: 96px;
           padding: 6px;
         }
         .controlsTertiary {
@@ -2175,6 +2184,32 @@ export class GameLayout extends HTMLElement {
     this.#btnMobilePlace.textContent = 'Place';
   }
 
+  #syncMobilePlacementStack() {
+    if (!this.#root) return;
+    if (!this.#isMobileViewport()) {
+      this.#root.style.removeProperty('--mobile-hud-bottom');
+      this.#root.style.removeProperty('--mobile-dock-bottom');
+      this.#root.style.removeProperty('--mobile-notice-bottom');
+      return;
+    }
+
+    const gap = 8;
+    const primaryVisible = this.#primaryControlsRow && !this.#primaryControlsRow.hidden;
+    const primaryHeight = primaryVisible ? this.#primaryControlsRow.getBoundingClientRect().height : 0;
+    const hudBottom = primaryVisible ? Math.round(primaryHeight + 16) : 8;
+    const hudHeight = this.#hud && !this.#hud.hidden ? this.#hud.getBoundingClientRect().height : 0;
+    const dockVisible = this.#localPlacementDock && !this.#localPlacementDock.hidden;
+    const dockHeight = dockVisible ? this.#localPlacementDock.getBoundingClientRect().height : 0;
+    const dockBottom = Math.round(hudBottom + hudHeight + gap);
+    const noticeBottom = Math.round(dockVisible
+      ? dockBottom + dockHeight + gap
+      : hudBottom + hudHeight + gap);
+
+    this.#root.style.setProperty('--mobile-hud-bottom', `${hudBottom}px`);
+    this.#root.style.setProperty('--mobile-dock-bottom', `${dockBottom}px`);
+    this.#root.style.setProperty('--mobile-notice-bottom', `${noticeBottom}px`);
+  }
+
   #setCanvasNotice(message, tone = 'error', autoHideMs = 0) {
     if (!this.#canvasNotice) return;
     if (this.#canvasNoticeTimer != null) {
@@ -2187,6 +2222,7 @@ export class GameLayout extends HTMLElement {
       this.#canvasNotice.textContent = '';
       this.#canvasNotice.classList.remove('show', 'error', 'info');
       this.#root?.classList.remove('hasCanvasNotice');
+      this.#syncMobilePlacementStack();
       return;
     }
 
@@ -2194,6 +2230,7 @@ export class GameLayout extends HTMLElement {
     this.#canvasNotice.classList.remove('error', 'info');
     this.#canvasNotice.classList.add(tone === 'info' ? 'info' : 'error', 'show');
     this.#root?.classList.add('hasCanvasNotice');
+    this.#syncMobilePlacementStack();
 
     if (autoHideMs > 0) {
       this.#canvasNoticeTimer = setTimeout(() => {
@@ -3038,6 +3075,8 @@ export class GameLayout extends HTMLElement {
     this.#hudTitle.textContent = g.isGameOver
       ? 'End of Game'
       : `Round ${g.round} — ${titleActiveName} ${titlePhase} · ${playerScores}`;
+    this.#root?.classList.toggle('isDraftPhase', g.state === GameState.DRAFT && !g.isGameOver);
+    this.#root?.classList.toggle('isPlacementPhase', g.state === GameState.PLACE && !g.isGameOver);
     if (this.#hud) this.#hud.hidden = g.isGameOver;
     if (this.#endOverlay) this.#endOverlay.hidden = !g.isGameOver;
 
@@ -3213,6 +3252,7 @@ export class GameLayout extends HTMLElement {
 
       this.#renderMiniMaps();
       this.#syncMobileActions();
+      this.#syncMobilePlacementStack();
       return;
     }
 
@@ -3377,6 +3417,7 @@ export class GameLayout extends HTMLElement {
 
     this.#renderMiniMaps();
     this.#syncMobileActions();
+    this.#syncMobilePlacementStack();
   }
 
   #renderBoard() {
@@ -4480,6 +4521,7 @@ export class GameLayout extends HTMLElement {
       this.#localPlacementDock.style.top = '';
       this.#root?.classList.add('hasLocalPlacementDock');
       this.#localPlacementDock.hidden = false;
+      this.#syncMobilePlacementStack();
       return;
     }
 
@@ -4504,6 +4546,7 @@ export class GameLayout extends HTMLElement {
     this.#localPlacementDock.style.left = '';
     this.#localPlacementDock.style.top = '';
     this.#root?.classList.remove('hasLocalPlacementDock');
+    this.#syncMobilePlacementStack();
   }
 
   #repairSelectedPlacementAfterDominoChange() {
