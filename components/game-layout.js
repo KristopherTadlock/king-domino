@@ -2899,7 +2899,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #renderValidAnchorHighlights(options) {
-    if (this.#localPlacementFocus || !options.length) return;
+    if (!options.length) return;
 
     const highlights = this.#placementHighlightCells(options);
     const tileGeo = new THREE.PlaneGeometry(0.86, 0.86);
@@ -3252,7 +3252,6 @@ export class GameLayout extends HTMLElement {
     this.#renderer.domElement.addEventListener('pointermove', (e) => this.#onPointerMove(e));
     this.#renderer.domElement.addEventListener('pointerup', (e) => this.#onPointerUp(e));
     this.#renderer.domElement.addEventListener('pointercancel', () => this.#onPointerCancel());
-    this.#renderer.domElement.addEventListener('click', (e) => this.#onCanvasClick(e));
 
     window.addEventListener('resize', this.#onResize);
     window.addEventListener('keydown', this.#onKeyDown);
@@ -3364,6 +3363,7 @@ export class GameLayout extends HTMLElement {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
+    const repeatSelectedSpot = this.#gridMatchesLocalPlacementAnchor(grid);
     const selected = this.#trySelectPlacementAnchor(grid, {
       localize: true,
       showError: e.pointerType === 'touch',
@@ -3371,21 +3371,20 @@ export class GameLayout extends HTMLElement {
     });
 
     if (e.pointerType === 'touch') {
-      if (selected) this.#setCanvasNotice('Use the board controls to adjust or place.', 'info');
+      if (selected && !repeatSelectedSpot) this.#setCanvasNotice('Use the board controls to adjust or place.', 'info');
       this.#syncMobileActions();
       this.#resetTouchInteraction();
       return;
     }
+
+    if (selected && !repeatSelectedSpot) {
+      this.#setCanvasNotice('Spot selected. Use board controls to cycle or confirm.', 'info', 1400);
+    }
   }
 
-  #onCanvasClick(e) {
-    if (!this.#isMyTurnToPlace()) return;
-    if (e.pointerType === 'touch') return;
-
-    const grid = this.#gridFromClient(e.clientX, e.clientY);
-    if (!grid) return;
-    const selected = this.#trySelectPlacementAnchor(grid, { localize: true, showError: true, render: true });
-    if (selected) this.#setCanvasNotice('Spot selected. Use board controls to cycle or confirm.', 'info', 1400);
+  #gridMatchesLocalPlacementAnchor(grid) {
+    if (!grid || !this.#localPlacementFocus) return false;
+    return this.#localPlacementFocus.x === grid.x && this.#localPlacementFocus.y === grid.y;
   }
 
   #onPointerCancel() {
@@ -3416,9 +3415,17 @@ export class GameLayout extends HTMLElement {
     if (!grid) return false;
     if (!this.#game || this.#game.state !== GameState.PLACE) return false;
 
+    // Keep the selected anchor stable while cycling. Other valid cells,
+    // including cells that appear in this anchor's move family, should
+    // re-anchor around the clicked board tile.
+    if (localize && this.#gridMatchesLocalPlacementAnchor(grid)) {
+      this.#cycleLocalPlacement(1);
+      return true;
+    }
+
+    const gridOptions = this.#placementOptionsForGrid(grid, null, { preserveDomino: true });
     const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     if (!feedback.ok) {
-      const gridOptions = this.#placementOptionsForGrid(grid);
       const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
       const matchedOption = gridOptions.find((option) => option.dominoNumber === selectedDominoNumber)
         ?? gridOptions[0];
@@ -4842,6 +4849,10 @@ export class GameLayout extends HTMLElement {
     });
   }
 
+  #dominoPreservingPlacementOptionKey(option) {
+    return `${option.dominoNumber}|${this.#visiblePlacementOptionKey(option)}`;
+  }
+
   #visiblePlacementOptionKey(option) {
     const choice = this.#game.getCurrentPlacingChoices?.()
       ?.find((c) => c.domino.number === option.dominoNumber);
@@ -4892,12 +4903,13 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #uniqueVisiblePlacementOptions(options) {
+  #uniqueVisiblePlacementOptions(options, { preserveDomino = false } = {}) {
     if (!options.length) return [];
     const currentDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
     const byKey = new Map();
     for (const option of options) {
-      const key = this.#visiblePlacementOptionKey(option);
+      const visibleKey = this.#visiblePlacementOptionKey(option);
+      const key = preserveDomino ? this.#dominoPreservingPlacementOptionKey(option) : visibleKey;
       const existing = byKey.get(key);
       if (!existing || (option.dominoNumber === currentDominoNumber && existing.dominoNumber !== currentDominoNumber)) {
         byKey.set(key, option);
@@ -4980,29 +4992,28 @@ export class GameLayout extends HTMLElement {
     return this.#optionUsesGrid(option, this.#localPlacementFocus);
   }
 
-  #placementOptionsForGrid(grid, allValid = null) {
+  #placementOptionsForGrid(grid, allValid = null, { preserveDomino = false } = {}) {
     if (!grid) return [];
-    const options = allValid ?? this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? []);
-    return this.#uniqueVisiblePlacementOptions(options.filter((option) => this.#optionUsesGrid(option, grid)));
+    const options = allValid
+      ? this.#uniqueVisiblePlacementOptions(allValid, { preserveDomino })
+      : this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? [], { preserveDomino });
+    return this.#uniqueVisiblePlacementOptions(options.filter((option) => this.#optionUsesGrid(option, grid)), { preserveDomino });
   }
 
   #localPlacementOptions(allValid = null) {
     if (!this.#localPlacementFocus) return [];
-    const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
-    return this.#placementOptionsForGrid(this.#localPlacementFocus, allValid)
-      .filter((option) => option.dominoNumber === selectedDominoNumber);
+    return this.#placementOptionsForGrid(this.#localPlacementFocus, allValid, { preserveDomino: true });
   }
 
   #placementDockOptions(allValid = null) {
-    const options = allValid ?? this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? []);
-    const localValid = this.#localPlacementOptions(options);
-    return localValid.length ? localValid : options;
+    const rawOptions = allValid ?? this.#game?.getCurrentPlacementOptions?.() ?? [];
+    const localValid = this.#localPlacementOptions(rawOptions);
+    return localValid.length ? localValid : this.#uniqueVisiblePlacementOptions(rawOptions);
   }
 
   #cycleLocalPlacement(delta) {
     if (!this.#isMyTurnToPlace()) return;
-    const allValid = this.#uniqueVisiblePlacementOptions(this.#game.getCurrentPlacementOptions?.() ?? []);
-    const valid = this.#placementDockOptions(allValid);
+    const valid = this.#placementDockOptions();
     if (!valid.length) {
       this.#setCanvasNotice(this.#localPlacementFocus ? 'No moves for this spot.' : 'No valid moves.', 'info', 1000);
       this.#syncLocalPlacementDock();

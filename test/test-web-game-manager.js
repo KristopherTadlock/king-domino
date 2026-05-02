@@ -5,6 +5,13 @@ import { DominoEnd } from '../classes/enums/domino-end.js';
 import { EdgeOffset } from '../classes/enums/edges.js';
 
 function projectedPlacementKey(game, option) {
+  return [
+    option.dominoNumber,
+    ...projectedPlacementCells(game, option).map((cell) => `${cell.x},${cell.y}:${cell.landscape}:${cell.crowns}`),
+  ].join('|');
+}
+
+function projectedPlacementCells(game, option) {
   const drafted = game.currentDraft.find((slot) => slot.domino.number === option.dominoNumber);
   const domino = drafted.domino;
   const originalOrientation = domino.orientation;
@@ -34,13 +41,22 @@ function projectedPlacementKey(game, option) {
       },
     ].sort((a, b) => a.x - b.x || a.y - b.y);
 
-    return [
-      option.dominoNumber,
-      ...cells.map((cell) => `${cell.x},${cell.y}:${cell.landscape}:${cell.crowns}`),
-    ].join('|');
+    return cells;
   } finally {
     while (domino.orientation !== originalOrientation) domino.rotate();
   }
+}
+
+function countPlacementOptionsByCell(game, options) {
+  const byCell = new Map();
+  for (const option of options) {
+    for (const cell of projectedPlacementCells(game, option)) {
+      const key = `${cell.x},${cell.y}`;
+      if (!byCell.has(key)) byCell.set(key, []);
+      byCell.get(key).push(option);
+    }
+  }
+  return byCell;
 }
 
 (function() {
@@ -102,5 +118,24 @@ function projectedPlacementKey(game, option) {
     assert(game.currentPlacingDraftedTile.domino.number === beforeNumber);
     assert(game.currentPlacingDraftedTile.domino.orientation === beforeOrientation);
     assert(game.canSkipCurrentPlacement() === false);
+  });
+
+  it('should keep both drafted domino choices in castle-adjacent placement cells', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    assert(game.state.description === 'place');
+    assert(game.getCurrentPlacingChoices().map((choice) => choice.domino.number).join(',') === '15,40');
+
+    const options = game.getCurrentPlacementOptions();
+    const byCell = countPlacementOptionsByCell(game, options);
+
+    for (const cell of ['-1,0', '0,-1', '0,1', '1,0']) {
+      const cellOptions = byCell.get(cell) ?? [];
+      assert(cellOptions.length === 8);
+      assert(cellOptions.filter((option) => option.dominoNumber === 15).length === 4);
+      assert(cellOptions.filter((option) => option.dominoNumber === 40).length === 4);
+    }
   });
 })();
