@@ -1524,7 +1524,7 @@ export class GameLayout extends HTMLElement {
     this.#btnResetTile.textContent = 'Reset Tile';
     this.#btnResetTile.className = 'secondaryAction';
     this.#btnScores = document.createElement('button');
-    this.#btnScores.textContent = 'Scores';
+    this.#btnScores.textContent = 'Score Preview';
     this.#btnScores.className = 'secondaryAction';
     this.#btnPlace = document.createElement('button');
     this.#btnPlace.textContent = 'Place';
@@ -2888,7 +2888,7 @@ export class GameLayout extends HTMLElement {
     this.#btnScores.disabled = !canPlaceUi;
     this.#btnScores.hidden = !isPlacementPhase || canSkip;
     this.#btnScores.classList.toggle('active', this.#showPlacementScores);
-    this.#btnScores.textContent = this.#showPlacementScores ? 'Scores On' : 'Scores';
+    this.#btnScores.textContent = this.#showPlacementScores ? 'Preview On' : 'Score Preview';
     this.#btnMore.classList.toggle('active', this.#moreOpen);
     this.#btnMore.textContent = this.#moreOpen ? 'Close' : 'More';
     if (canSkip && this.#btnSkip.parentElement !== this.#primaryControlsRow) {
@@ -3243,7 +3243,7 @@ export class GameLayout extends HTMLElement {
       }
     }
 
-    this.#renderRegionScoring(board);
+    this.#renderRegionScoring(null);
   }
 
   #castleGrowthState(board, boardManager) {
@@ -4264,19 +4264,22 @@ export class GameLayout extends HTMLElement {
     }
 
     const focusedBoard = g.players[this.#focusedPlayerIndex]?.board?.board || g.players[0].board.board;
-    if (g.isGameOver) return;
+    if (g.isGameOver) {
+      this.#renderRegionScoring(null);
+      return;
+    }
     if (g.state !== GameState.PLACE) {
-      this.#renderRegionScoring(focusedBoard);
+      this.#renderRegionScoring(null);
       return;
     }
     if (!this.#isMyTurnToPlace()) {
-      this.#renderRegionScoring(focusedBoard);
+      this.#renderRegionScoring(null);
       return;
     }
 
     const drafted = g.currentPlacingDraftedTile;
     if (!drafted) {
-      this.#renderRegionScoring(focusedBoard);
+      this.#renderRegionScoring(null);
       return;
     }
 
@@ -4337,9 +4340,8 @@ export class GameLayout extends HTMLElement {
     makeGhostCell(leftCoord.x, leftCoord.y, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns);
     makeGhostCell(rightCoord.x, rightCoord.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns);
 
-    if (!this.#showPlacementScores) this.#renderRegionScoring(null);
-    else if (valid && !occupied) this.#renderRegionScoring(built.projected);
-    else this.#renderRegionScoring(focusedBoard);
+    if (this.#showPlacementScores && valid && !occupied) this.#renderRegionScoring(built.projected);
+    else this.#renderRegionScoring(null);
   }
 
   #tick = () => {
