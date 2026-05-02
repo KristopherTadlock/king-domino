@@ -545,6 +545,9 @@ export class GameLayout extends HTMLElement {
   #showPlacementScores = false;
 
   /** @type {boolean} */
+  #endSummaryCollapsed = false;
+
+  /** @type {boolean} */
   #moreOpen = false;
 
   /** @type {THREE.WebGLRenderer} */
@@ -1261,6 +1264,9 @@ export class GameLayout extends HTMLElement {
         pointer-events: none;
         z-index: 6;
       }
+      .endOverlay.isCollapsed {
+        place-items: end start;
+      }
       .endOverlay[hidden] { display: none !important; }
       .endCard {
         width: min(440px, calc(100vw - 32px));
@@ -1275,6 +1281,21 @@ export class GameLayout extends HTMLElement {
         backdrop-filter: blur(10px);
         box-shadow: 0 18px 60px rgba(0,0,0,0.38);
         pointer-events: auto;
+      }
+      .endCard.isCollapsed {
+        width: min(300px, calc(100vw - 32px));
+        gap: 8px;
+        padding: 12px;
+      }
+      .endCard.isCollapsed .endKicker,
+      .endCard.isCollapsed .endScoreList {
+        display: none;
+      }
+      .endCard.isCollapsed .endTitle {
+        font-size: 18px;
+      }
+      .endCard.isCollapsed .muted {
+        font-size: 12px;
       }
       .endKicker {
         font-size: 12px;
@@ -1296,6 +1317,10 @@ export class GameLayout extends HTMLElement {
         padding: 8px 10px;
         border-radius: 8px;
         background: rgba(255,255,255,0.07);
+      }
+      .endActions {
+        display: flex;
+        justify-content: flex-end;
       }
 
       @media (max-width: 760px) {
@@ -1377,6 +1402,7 @@ export class GameLayout extends HTMLElement {
         .miniTitle { font-size: 11px; }
         canvas.mini { width: 76px; height: 76px; }
         .endOverlay { padding: 132px 12px 128px; }
+        .endOverlay.isCollapsed { padding: 132px 8px 92px; }
         .endCard { padding: 15px; }
         .endTitle { font-size: 23px; }
       }
@@ -2990,6 +3016,8 @@ export class GameLayout extends HTMLElement {
       if (this.#endOverlay) {
         const card = document.createElement('div');
         card.className = 'endCard';
+        card.classList.toggle('isCollapsed', this.#endSummaryCollapsed);
+        this.#endOverlay.classList.toggle('isCollapsed', this.#endSummaryCollapsed);
 
         const kicker = document.createElement('div');
         kicker.className = 'endKicker';
@@ -3013,14 +3041,25 @@ export class GameLayout extends HTMLElement {
           const row = document.createElement('div');
           row.className = 'endScoreRow';
           const left = document.createElement('div');
-          left.textContent = `#${i + 1} P${s.index + 1} ${s.name}`;
+          left.textContent = `#${i + 1} ${s.name}`;
           const right = document.createElement('strong');
           right.textContent = `${s.score}`;
           row.append(left, right);
           rank.append(row);
         });
 
-        card.append(kicker, title, summary, rank);
+        const actions = document.createElement('div');
+        actions.className = 'endActions';
+        const inspect = document.createElement('button');
+        inspect.className = 'secondaryAction';
+        inspect.textContent = this.#endSummaryCollapsed ? 'Show Results' : 'Inspect Board';
+        inspect.addEventListener('click', () => {
+          this.#endSummaryCollapsed = !this.#endSummaryCollapsed;
+          this.#refreshHud();
+        });
+        actions.append(inspect);
+
+        card.append(kicker, title, summary, rank, actions);
         this.#endOverlay.append(card);
       }
 
