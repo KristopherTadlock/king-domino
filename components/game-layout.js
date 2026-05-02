@@ -495,6 +495,11 @@ export class GameLayout extends HTMLElement {
   #btnMobileUndo;
   #btnMobileNext;
   #btnMobilePlace;
+  #localPlacementDock;
+  #btnLocalPrev;
+  #btnLocalNext;
+  #btnLocalPlace;
+  #localPlacementLabel;
   #miniMapRow;
   /** @type {HTMLCanvasElement[]} */
   #miniMapCanvases = [];
@@ -596,6 +601,12 @@ export class GameLayout extends HTMLElement {
 
   /** @type {{x:number,y:number} | null} */
   #hoverAnchor = null;
+
+  /** @type {{x:number,y:number} | null} */
+  #localPlacementFocus = null;
+
+  /** @type {boolean} */
+  #isApplyingPlacementOption = false;
 
   /** @type {boolean} */
   #hoverAnchorAuto = false;
@@ -857,6 +868,50 @@ export class GameLayout extends HTMLElement {
       .canvasNotice.info {
         border-color: rgba(126, 192, 255, 0.6);
         color: #d8ecff;
+      }
+      .localPlacementDock {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(20, 22, 28, 0.88);
+        backdrop-filter: blur(8px);
+        box-shadow: 0 8px 28px rgba(0,0,0,0.34);
+        transform: translate(-50%, -100%);
+        z-index: 7;
+      }
+      .localPlacementDock[hidden] { display: none !important; }
+      .localPlacementDock button {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.08);
+        color: #e9eef5;
+        font-size: 16px;
+        font-weight: 900;
+        line-height: 1;
+      }
+      .localPlacementDock button:disabled {
+        opacity: 0.45;
+      }
+      .localPlacementDock .localPlace {
+        border-color: rgba(115, 232, 150, 0.78);
+        background: rgba(28, 91, 57, 0.94);
+        color: #d7ffe6;
+      }
+      .localPlacementLabel {
+        min-width: 34px;
+        text-align: center;
+        color: rgba(233,238,245,0.88);
+        font-size: 12px;
+        font-weight: 900;
       }
       .topBar {
         position: absolute;
@@ -1515,6 +1570,30 @@ export class GameLayout extends HTMLElement {
     this.#btnMobilePlace.textContent = 'Place';
     this.#mobileActions.append(this.#btnMobileRotate, this.#btnMobileSkip, this.#btnMobileUndo, this.#btnMobileNext, this.#btnMobilePlace);
 
+    this.#localPlacementDock = document.createElement('div');
+    this.#localPlacementDock.className = 'localPlacementDock';
+    this.#localPlacementDock.hidden = true;
+    this.#btnLocalPrev = document.createElement('button');
+    this.#btnLocalPrev.type = 'button';
+    this.#btnLocalPrev.textContent = '‹';
+    this.#btnLocalPrev.title = 'Previous move for this spot';
+    this.#btnLocalPrev.setAttribute('aria-label', 'Previous move for this spot');
+    this.#localPlacementLabel = document.createElement('div');
+    this.#localPlacementLabel.className = 'localPlacementLabel';
+    this.#localPlacementLabel.textContent = '1/1';
+    this.#btnLocalNext = document.createElement('button');
+    this.#btnLocalNext.type = 'button';
+    this.#btnLocalNext.textContent = '›';
+    this.#btnLocalNext.title = 'Next move for this spot';
+    this.#btnLocalNext.setAttribute('aria-label', 'Next move for this spot');
+    this.#btnLocalPlace = document.createElement('button');
+    this.#btnLocalPlace.type = 'button';
+    this.#btnLocalPlace.className = 'localPlace';
+    this.#btnLocalPlace.textContent = '✓';
+    this.#btnLocalPlace.title = 'Place here';
+    this.#btnLocalPlace.setAttribute('aria-label', 'Place here');
+    this.#localPlacementDock.append(this.#btnLocalPrev, this.#localPlacementLabel, this.#btnLocalNext, this.#btnLocalPlace);
+
     this.#hud = document.createElement('div');
     this.#hud.className = 'hud';
     this.#topBar = document.createElement('div');
@@ -1584,7 +1663,7 @@ export class GameLayout extends HTMLElement {
     this.#endOverlay.hidden = true;
 
     this.#hud.append(this.#hudBody);
-    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay);
+    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#localPlacementDock, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay);
     this.#shadow.append(style, this.#root);
   }
 
@@ -1878,8 +1957,12 @@ export class GameLayout extends HTMLElement {
   #applyNetworkAction(action) {
     if (this.#isGameplayActionType(action.type)) {
       this.#applyGameplayAction(action);
-      if (action.type === 'rotate' || action.type === 'selectPlacementTile') {
+      if ((action.type === 'rotate' || action.type === 'selectPlacementTile') && !this.#isApplyingPlacementOption) {
         this.#repairSelectedPlacementAfterDominoChange();
+      } else if (action.type === 'pickDraft' || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
+        this.#hoverAnchor = null;
+        this.#localPlacementFocus = null;
+        this.#hoverAnchorAuto = false;
       }
       return;
     }
@@ -2609,6 +2692,16 @@ export class GameLayout extends HTMLElement {
       this.#tryPlaceAtHover();
     });
 
+    this.#btnLocalPrev.addEventListener('click', () => {
+      this.#cycleLocalPlacement(-1);
+    });
+    this.#btnLocalNext.addEventListener('click', () => {
+      this.#cycleLocalPlacement(1);
+    });
+    this.#btnLocalPlace.addEventListener('click', () => {
+      this.#tryPlaceAtHover();
+    });
+
     this.#renderer.domElement.addEventListener('pointerdown', (e) => this.#onPointerDown(e));
     this.#renderer.domElement.addEventListener('pointermove', (e) => this.#onPointerMove(e));
     this.#renderer.domElement.addEventListener('pointerup', (e) => this.#onPointerUp(e));
@@ -2642,6 +2735,7 @@ export class GameLayout extends HTMLElement {
         this.#canvasTurn.style.top = `${y}px`;
       }
     }
+    this.#syncLocalPlacementDock();
   };
 
   #onKeyDown = (e) => {
@@ -2661,6 +2755,7 @@ export class GameLayout extends HTMLElement {
     if (!this.#isMyTurnToPlace()) {
       if (this.#hoverAnchor) {
         this.#hoverAnchor = null;
+        this.#localPlacementFocus = null;
         this.#hoverAnchorAuto = false;
         this.#renderGhost();
       }
@@ -2739,10 +2834,14 @@ export class GameLayout extends HTMLElement {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
-    const selected = this.#trySelectPlacementAnchor(grid, { showError: e.pointerType === 'touch', render: true });
+    const selected = this.#trySelectPlacementAnchor(grid, {
+      localize: true,
+      showError: e.pointerType === 'touch',
+      render: true,
+    });
 
     if (e.pointerType === 'touch') {
-      if (selected) this.#setCanvasNotice('Tap Place to confirm.', 'info');
+      if (selected) this.#setCanvasNotice('Use the board controls to adjust or place.', 'info');
       this.#syncMobileActions();
       this.#resetTouchInteraction();
       return;
@@ -2755,9 +2854,8 @@ export class GameLayout extends HTMLElement {
 
     const grid = this.#gridFromClient(e.clientX, e.clientY);
     if (!grid) return;
-    if (!this.#trySelectPlacementAnchor(grid, { showError: true, render: true })) return;
-
-    this.#tryPlaceAtHover();
+    const selected = this.#trySelectPlacementAnchor(grid, { localize: true, showError: true, render: true });
+    if (selected) this.#setCanvasNotice('Spot selected. Use board controls to cycle or confirm.', 'info', 1400);
   }
 
   #onPointerCancel() {
@@ -2810,7 +2908,7 @@ export class GameLayout extends HTMLElement {
     return { x: Math.round(p.x), y: Math.round(p.z) };
   }
 
-  #trySelectPlacementAnchor(grid, { showError = false, render = false, auto = false } = {}) {
+  #trySelectPlacementAnchor(grid, { localize = false, showError = false, render = false, auto = false } = {}) {
     if (!grid) return false;
     if (!this.#game || this.#game.state !== GameState.PLACE) return false;
 
@@ -2825,6 +2923,7 @@ export class GameLayout extends HTMLElement {
     }
 
     this.#hoverAnchor = { x: grid.x, y: grid.y, anchorEnd: feedback.anchorEnd };
+    if (localize) this.#localPlacementFocus = { x: grid.x, y: grid.y };
     this.#hoverAnchorAuto = auto;
     this.#placementHint = '';
     this.#setCanvasNotice('');
@@ -2853,6 +2952,8 @@ export class GameLayout extends HTMLElement {
     const anchorEnd = feedback.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT';
     this.#placementHint = '';
     this.#setCanvasNotice('');
+    this.#localPlacementFocus = null;
+    this.#syncLocalPlacementDock();
 
     this.#mp?.sendAction('place', {
       x,
@@ -3231,6 +3332,7 @@ export class GameLayout extends HTMLElement {
       if (!this.#isMyTurnToPlace()) {
         this.#placementHint = '';
         this.#hoverAnchor = null;
+        this.#localPlacementFocus = null;
         this.#hoverAnchorAuto = false;
         this.#setCanvasNotice('');
       }
@@ -4051,12 +4153,14 @@ export class GameLayout extends HTMLElement {
       const suggested = this.#findBestInitialHoverAnchor();
       if (suggested) {
         this.#hoverAnchor = suggested;
+        this.#localPlacementFocus = null;
         this.#hoverAnchorAuto = true;
         this.#placementHint = '';
         this.#setCanvasNotice('No valid placement. Use Skip if available.', 'info', 1200);
         this.#renderGhost();
         this.#centerOnFocusedBoard();
         this.#syncMobileActions();
+        this.#syncLocalPlacementDock();
         this.#refreshHud();
         return;
       }
@@ -4066,11 +4170,13 @@ export class GameLayout extends HTMLElement {
 
     this.#applyPlacementOption(options[0]);
     this.#hoverAnchorAuto = true;
+    this.#localPlacementFocus = null;
     this.#placementHint = '';
     this.#setCanvasNotice('Selected first valid move.', 'info', 900);
     this.#renderGhost();
     this.#centerOnFocusedBoard();
     this.#syncMobileActions();
+    this.#syncLocalPlacementDock();
     this.#refreshHud();
   }
 
@@ -4172,21 +4278,133 @@ export class GameLayout extends HTMLElement {
   #applyPlacementOption(option) {
     if (!option) return;
 
-    const drafted = this.#game.currentPlacingDraftedTile;
-    if (drafted?.domino.number !== option.dominoNumber) {
-      this.#mp?.sendAction('selectPlacementTile', { dominoNumber: option.dominoNumber });
-    }
+    this.#isApplyingPlacementOption = true;
+    try {
+      const drafted = this.#game.currentPlacingDraftedTile;
+      if (drafted?.domino.number !== option.dominoNumber) {
+        this.#mp?.sendAction('selectPlacementTile', { dominoNumber: option.dominoNumber });
+      }
 
-    const selected = this.#game.currentPlacingDraftedTile;
-    let guard = 0;
-    while (selected && selected.domino.orientation !== option.orientation && guard < 4) {
-      this.#mp?.sendAction('rotate');
-      guard += 1;
+      const selected = this.#game.currentPlacingDraftedTile;
+      let guard = 0;
+      while (selected && selected.domino.orientation !== option.orientation && guard < 4) {
+        this.#mp?.sendAction('rotate');
+        guard += 1;
+      }
+    } finally {
+      this.#isApplyingPlacementOption = false;
     }
 
     this.#hoverAnchor = { x: option.x, y: option.y, anchorEnd: option.anchorEnd };
     this.#hoverAnchorAuto = false;
     this.#placementHint = '';
+    this.#syncLocalPlacementDock();
+  }
+
+  #optionUsesLocalFocus(option) {
+    const focus = this.#localPlacementFocus;
+    if (!focus) return false;
+
+    const choice = this.#game.getCurrentPlacingChoices?.()
+      ?.find((c) => c.domino.number === option.dominoNumber);
+    const domino = choice?.domino;
+    if (!domino) return option.x === focus.x && option.y === focus.y;
+
+    const originalOrientation = domino.orientation;
+    try {
+      let guard = 0;
+      while (domino.orientation !== option.orientation && guard < 4) {
+        domino.rotate();
+        guard += 1;
+      }
+
+      const connectedEdge = domino.getConnectedEdge(option.anchorEnd);
+      const offset = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
+      const other = { x: option.x + offset.x, y: option.y + offset.y };
+      return (option.x === focus.x && option.y === focus.y)
+        || (other.x === focus.x && other.y === focus.y);
+    } finally {
+      while (domino.orientation !== originalOrientation) {
+        domino.rotate();
+      }
+    }
+  }
+
+  #localPlacementOptions(allValid = null) {
+    if (!this.#localPlacementFocus) return [];
+    const options = allValid ?? this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? []);
+    return options.filter((option) => this.#optionUsesLocalFocus(option));
+  }
+
+  #cycleLocalPlacement(delta) {
+    if (!this.#isMyTurnToPlace()) return;
+    const allValid = this.#uniqueVisiblePlacementOptions(this.#game.getCurrentPlacementOptions?.() ?? []);
+    const localValid = this.#localPlacementOptions(allValid);
+    if (!localValid.length) {
+      this.#setCanvasNotice('No moves for this spot.', 'info', 1000);
+      this.#syncLocalPlacementDock();
+      return;
+    }
+
+    const currentIndex = this.#currentPlacementOptionIndex(localValid);
+    const nextIndex = ((currentIndex < 0 ? 0 : currentIndex + delta) + localValid.length) % localValid.length;
+    this.#applyPlacementOption(localValid[nextIndex]);
+    this.#setCanvasNotice(`Spot move ${nextIndex + 1}/${localValid.length}`, 'info', 900);
+    this.#renderGhost();
+    this.#syncMobileActions();
+    this.#syncLocalPlacementDock();
+    this.#refreshHud();
+  }
+
+  #screenPointForGrid(grid) {
+    if (!grid || !this.#camera || !this.#canvasHost || !this.#root) return null;
+    const rootRect = this.#root.getBoundingClientRect();
+    const canvasRect = this.#canvasHost.getBoundingClientRect();
+    const point = new THREE.Vector3(grid.x, 0.72, grid.y).project(this.#camera);
+    return {
+      x: canvasRect.left - rootRect.left + ((point.x + 1) / 2) * canvasRect.width,
+      y: canvasRect.top - rootRect.top + ((-point.y + 1) / 2) * canvasRect.height,
+    };
+  }
+
+  #syncLocalPlacementDock() {
+    if (!this.#localPlacementDock) return;
+    const canShow = this.#localPlacementFocus
+      && this.#game?.state === GameState.PLACE
+      && this.#isMyTurnToPlace()
+      && !this.#game.isGameOver
+      && !this.#isGameplayPausedForUndo();
+
+    if (!canShow) {
+      this.#localPlacementDock.hidden = true;
+      return;
+    }
+
+    const localValid = this.#localPlacementOptions();
+    if (!localValid.length) {
+      this.#localPlacementDock.hidden = true;
+      return;
+    }
+
+    const currentIndex = this.#currentPlacementOptionIndex(localValid);
+    const index = currentIndex < 0 ? 0 : currentIndex;
+    this.#localPlacementLabel.textContent = `${index + 1}/${localValid.length}`;
+    this.#btnLocalPrev.disabled = localValid.length <= 1;
+    this.#btnLocalNext.disabled = localValid.length <= 1;
+    this.#btnLocalPlace.disabled = !this.#hoverAnchor || !this.#placementFeedbackForAnchor(this.#hoverAnchor).ok;
+
+    const point = this.#screenPointForGrid(this.#localPlacementFocus);
+    if (!point) {
+      this.#localPlacementDock.hidden = true;
+      return;
+    }
+
+    const rootRect = this.#root.getBoundingClientRect();
+    const x = Math.max(76, Math.min(rootRect.width - 76, point.x));
+    const y = Math.max(96, Math.min(rootRect.height - 78, point.y - 26));
+    this.#localPlacementDock.style.left = `${Math.round(x)}px`;
+    this.#localPlacementDock.style.top = `${Math.round(y)}px`;
+    this.#localPlacementDock.hidden = false;
   }
 
   #repairSelectedPlacementAfterDominoChange() {
@@ -4217,6 +4435,18 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
+    const localValid = this.#localPlacementOptions(valid);
+    if (localValid.length) {
+      const currentIndex = this.#currentPlacementOptionIndex(localValid);
+      const option = localValid[currentIndex >= 0 ? currentIndex : 0];
+      this.#hoverAnchor = { x: option.x, y: option.y, anchorEnd: option.anchorEnd };
+      this.#hoverAnchorAuto = false;
+      this.#placementHint = '';
+      this.#setCanvasNotice('');
+      this.#syncLocalPlacementDock();
+      return;
+    }
+
     valid.sort((a, b) => {
       if (!previous) return 0;
       const ad = Math.abs(a.x - previous.x) + Math.abs(a.y - previous.y);
@@ -4228,6 +4458,7 @@ export class GameLayout extends HTMLElement {
 
     this.#hoverAnchor = { x: valid[0].x, y: valid[0].y, anchorEnd: valid[0].anchorEnd };
     this.#hoverAnchorAuto = false;
+    this.#localPlacementFocus = null;
     this.#placementHint = '';
     this.#setCanvasNotice('');
   }
@@ -4243,25 +4474,29 @@ export class GameLayout extends HTMLElement {
     const activeIdx = g.currentPlacingPlayerIndex;
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const valid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []);
-    if (!valid.length) {
+    const allValid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []);
+    if (!allValid.length) {
       this.#setCanvasNotice('No valid placements. Use Skip if available.', 'info', 1300);
       return;
     }
 
+    const localValid = this.#localPlacementOptions(allValid);
+    const valid = localValid.length ? localValid : allValid;
     const currentIndex = this.#currentPlacementOptionIndex(valid);
     const nextIndex = (currentIndex + 1) % valid.length;
     const next = valid[nextIndex];
 
     this.#applyPlacementOption(next);
     if (valid.length === 1) {
-      this.#setCanvasNotice('Only one valid spot is available.', 'info', 1100);
+      this.#setCanvasNotice(localValid.length ? 'Only one move for this spot.' : 'Only one valid spot is available.', 'info', 1100);
     } else {
-      this.#setCanvasNotice(`Valid move ${nextIndex + 1}/${valid.length}`, 'info', 900);
+      const label = localValid.length ? 'Spot move' : 'Valid move';
+      this.#setCanvasNotice(`${label} ${nextIndex + 1}/${valid.length}`, 'info', 900);
     }
     this.#renderGhost();
     this.#centerOnFocusedBoard();
     this.#syncMobileActions();
+    this.#syncLocalPlacementDock();
     this.#refreshHud();
   }
 
@@ -4305,20 +4540,24 @@ export class GameLayout extends HTMLElement {
     const focusedBoard = g.players[this.#focusedPlayerIndex]?.board?.board || g.players[0].board.board;
     if (g.isGameOver) {
       this.#renderRegionScoring(null);
+      this.#syncLocalPlacementDock();
       return;
     }
     if (g.state !== GameState.PLACE) {
       this.#renderRegionScoring(null);
+      this.#syncLocalPlacementDock();
       return;
     }
     if (!this.#isMyTurnToPlace()) {
       this.#renderRegionScoring(null);
+      this.#syncLocalPlacementDock();
       return;
     }
 
     const drafted = g.currentPlacingDraftedTile;
     if (!drafted) {
       this.#renderRegionScoring(null);
+      this.#syncLocalPlacementDock();
       return;
     }
 
@@ -4381,6 +4620,7 @@ export class GameLayout extends HTMLElement {
 
     if (this.#showPlacementScores && valid && !occupied) this.#renderRegionScoring(built.projected);
     else this.#renderRegionScoring(null);
+    this.#syncLocalPlacementDock();
   }
 
   #tick = () => {
@@ -4454,6 +4694,7 @@ export class GameLayout extends HTMLElement {
     }
 
     if (this.#controls) this.#controls.update();
+    this.#syncLocalPlacementDock();
     if (this.#renderer && this.#scene && this.#camera) this.#renderer.render(this.#scene, this.#camera);
     requestAnimationFrame(this.#tick);
   };
