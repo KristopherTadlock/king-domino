@@ -1500,6 +1500,12 @@ export class GameLayout extends HTMLElement {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 5px;
       }
+      .libraryStats.lifecycle {
+        grid-template-columns: 1fr;
+      }
+      .libraryStats.lifecycle .libraryStat {
+        padding: 6px 8px;
+      }
       .libraryStat {
         display: flex;
         align-items: center;
@@ -3820,6 +3826,65 @@ export class GameLayout extends HTMLElement {
       .map((landscape) => ({ landscape, ...(stats.get(landscape) ?? { total: 0, max: 0 }) }));
   }
 
+  #dominoLibraryStatusByNumber() {
+    const result = new Map();
+    const remaining = new Set(this.#game?.remainingDominoNumbers ?? []);
+    const activePlacingNumber = this.#game?.currentPlacingDraftedTile?.domino?.number ?? null;
+
+    for (const domino of DominoPoolManager.getStartingDominoPool()) {
+      result.set(domino.number, remaining.has(domino.number)
+        ? { kind: 'deck', label: 'Deck', color: 0x7b8491 }
+        : { kind: 'played', label: 'Played', color: 0x5b6170 });
+    }
+
+    for (const slot of this.#game?.currentDraft ?? []) {
+      const number = slot.domino.number;
+      if (slot.player == null) {
+        result.set(number, { kind: 'available', label: 'Pick', color: 0xffd76a });
+        continue;
+      }
+
+      const ownerName = this.#playerNames[slot.player] ?? this.#game?.players?.[slot.player]?.name ?? `P${slot.player + 1}`;
+      const ownerColor = this.#playerColorHex(slot.player);
+      if (slot.placed) {
+        result.set(number, { kind: 'played-current', label: ownerName, color: ownerColor, playerIndex: slot.player });
+      } else if (this.#game?.state === GameState.PLACE && number === activePlacingNumber) {
+        result.set(number, { kind: 'placing', label: ownerName, color: ownerColor, playerIndex: slot.player });
+      } else {
+        result.set(number, { kind: 'claimed', label: ownerName, color: ownerColor, playerIndex: slot.player });
+      }
+    }
+
+    return result;
+  }
+
+  #dominoLibraryLifecycleStats(statusByNumber = this.#dominoLibraryStatusByNumber()) {
+    const labels = {
+      available: 'Pick now',
+      claimed: 'Claimed',
+      placing: 'Placing',
+      'played-current': 'Played this round',
+      played: 'Played',
+      deck: 'Still in deck',
+    };
+    const colors = {
+      available: 0xffd76a,
+      claimed: 0x8fc7ff,
+      placing: 0x73e896,
+      'played-current': 0x9fb2c8,
+      played: 0x5b6170,
+      deck: 0x7b8491,
+    };
+    const order = ['available', 'claimed', 'placing', 'played-current', 'played', 'deck'];
+    const counts = new Map();
+    for (const status of statusByNumber.values()) {
+      counts.set(status.kind, (counts.get(status.kind) ?? 0) + 1);
+    }
+    return order
+      .map((kind) => ({ kind, label: labels[kind], color: colors[kind], count: counts.get(kind) ?? 0 }))
+      .filter((item) => item.count > 0);
+  }
+
   #refreshHud() {
     const g = this.#game;
     this.#root?.classList.toggle('isLibraryMode', this.#libraryOpen);
@@ -3851,6 +3916,7 @@ export class GameLayout extends HTMLElement {
 
       const summary = document.createElement('div');
       summary.className = 'librarySummary';
+      const statusByNumber = this.#dominoLibraryStatusByNumber();
 
       const kicker = document.createElement('div');
       kicker.className = 'libraryKicker';
@@ -3858,7 +3924,25 @@ export class GameLayout extends HTMLElement {
 
       const copy = document.createElement('p');
       copy.className = 'libraryCopy';
-      copy.textContent = 'All 48 dominoes are laid out on the tabletop in number order. Crowned halves use the same 3D rendering path as the board, so this screen doubles as the art inspection wall.';
+      copy.textContent = 'All 48 dominoes are laid out in number order. Badges show what can be picked now, what players have claimed, what has already been played, and what is still waiting in the deck.';
+
+      const lifecycle = document.createElement('div');
+      lifecycle.className = 'libraryStats lifecycle';
+      for (const item of this.#dominoLibraryLifecycleStats(statusByNumber)) {
+        const row = document.createElement('div');
+        row.className = 'libraryStat';
+        const name = document.createElement('span');
+        const swatch = document.createElement('span');
+        swatch.className = 'librarySwatch';
+        swatch.style.background = `#${item.color.toString(16).padStart(6, '0')}`;
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        name.append(swatch, label);
+        const count = document.createElement('span');
+        count.textContent = String(item.count);
+        row.append(name, count);
+        lifecycle.append(row);
+      }
 
       const stats = document.createElement('div');
       stats.className = 'libraryStats';
@@ -3878,7 +3962,7 @@ export class GameLayout extends HTMLElement {
         stats.append(row);
       }
 
-      summary.append(kicker, copy, stats);
+      summary.append(kicker, copy, lifecycle, stats);
       this.#hudBody.append(summary);
       return;
     }
@@ -4322,6 +4406,7 @@ export class GameLayout extends HTMLElement {
     }
 
     const deck = DominoPoolManager.getStartingDominoPool();
+    const statusByNumber = this.#dominoLibraryStatusByNumber();
     const group = new THREE.Group();
     group.userData.library = true;
     this.#tilesGroup.add(group);
@@ -4336,15 +4421,8 @@ export class GameLayout extends HTMLElement {
     const xOffset = -((cols - 1) * cellX + 1) / 2;
     const zOffset = -((rows - 1) * cellZ) / 2;
 
-    const baseMat = new THREE.MeshBasicMaterial({
-      color: 0x151922,
-      transparent: true,
-      opacity: 0.42,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-
     deck.forEach((domino, i) => {
+      const status = statusByNumber.get(domino.number) ?? { kind: 'played', label: 'Played', color: 0x5b6170 };
       const col = i % cols;
       const row = Math.floor(i / cols);
       const baseX = xOffset + col * cellX;
@@ -4362,11 +4440,35 @@ export class GameLayout extends HTMLElement {
         crowns: domino.rightEnd.crowns,
       };
 
-      const base = new THREE.Mesh(new THREE.PlaneGeometry(2.26, 1.20), baseMat);
+      const statusColor = status.color ?? 0x5b6170;
+      const baseOpacity = status.kind === 'deck' ? 0.34 : status.kind === 'played' ? 0.30 : 0.46;
+      const base = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.26, 1.20),
+        new THREE.MeshBasicMaterial({
+          color: statusColor,
+          transparent: true,
+          opacity: baseOpacity,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+      );
       base.position.set(baseX + 0.5, 0.006, baseZ);
       base.rotation.x = -Math.PI / 2;
       base.renderOrder = -1;
       this.#addTileObjects(base);
+
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(2.12, 0.026, 0.070),
+        new THREE.MeshStandardMaterial({
+          color: statusColor,
+          roughness: 0.42,
+          metalness: 0.18,
+          emissive: statusColor,
+          emissiveIntensity: ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
+        })
+      );
+      rail.position.set(baseX + 0.5, 0.244, baseZ + 0.64);
+      this.#addTileObjects(rail);
 
       for (const [endName, tile] of [['left', left], ['right', right]]) {
         const seedKey = `library|${domino.number}|${endName}`;
@@ -4391,6 +4493,26 @@ export class GameLayout extends HTMLElement {
       number.position.set(baseX - 0.52, 0.32, baseZ - 0.58);
       number.scale.set(0.24, 0.24, 0.24);
       this.#addTileObjects(number);
+
+      const statusLabel = status.kind === 'deck'
+        ? 'Deck'
+        : status.kind === 'available'
+          ? 'Pick'
+          : status.kind === 'placing'
+            ? `${status.label}`
+            : status.kind === 'claimed'
+              ? `${status.label}`
+              : 'Played';
+      const badge = createTextSprite(statusLabel, {
+        font: '800 28px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+        fillStyle: '#f5fbff',
+        background: `rgba(${(statusColor >> 16) & 255}, ${(statusColor >> 8) & 255}, ${statusColor & 255}, 0.76)`,
+        border: 'rgba(255,255,255,0.28)',
+        size: 128,
+      });
+      badge.position.set(baseX + 1.06, 0.34, baseZ + 0.58);
+      badge.scale.set(0.34, 0.20, 0.20);
+      this.#addTileObjects(badge);
     });
 
     this.#currentTileRenderGroup = previousGroup;

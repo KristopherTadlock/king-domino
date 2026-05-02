@@ -134,6 +134,10 @@ export class WebGameManager {
     return this.#pickCursor;
   }
 
+  get remainingDominoNumbers() {
+    return this.#pool.remainingDominoNumbers();
+  }
+
   get currentPickingPlayerIndex() {
     return this.#pickOrder[this.#pickCursor];
   }

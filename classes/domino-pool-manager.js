@@ -69,6 +69,13 @@ export class DominoPoolManager {
     }
 
     /**
+     * @returns {number[]} domino numbers still waiting in the draw pool
+     */
+    remainingDominoNumbers() {
+        return this.#dominos.map((domino) => domino.number);
+    }
+
+    /**
      * @returns {void}
      * Shuffle the domino pool
      */

@@ -1,6 +1,7 @@
 import { it, assert } from './test-framework.js';
 import { GameConfiguration } from '../classes/game-configuration.js';
 import { WebGameManager } from '../classes/web-game-manager.js';
+import { DominoPoolManager } from '../classes/domino-pool-manager.js';
 import { DominoEnd } from '../classes/enums/domino-end.js';
 import { EdgeOffset } from '../classes/enums/edges.js';
 
@@ -68,6 +69,21 @@ function countPlacementOptionsByCell(game, options) {
     assert(game.players[0].name === 'Codex');
     assert(game.players[1].name === 'Player 2');
     assert(game.pickOrder.every((idx) => idx === 0 || idx === 1));
+  });
+
+  it('should expose remaining domino numbers for deck planning UI', () => {
+    const game = new WebGameManager(new GameConfiguration(2), 123);
+    game.start(['Codex', 'Helper']);
+
+    const draftNumbers = game.currentDraft.map((slot) => slot.domino.number);
+    const remainingNumbers = game.remainingDominoNumbers;
+    const deckNumbers = DominoPoolManager.getStartingDominoPool().map((domino) => domino.number);
+    const visibleNumbers = new Set([...draftNumbers, ...remainingNumbers]);
+
+    assert(draftNumbers.length === 4);
+    assert(remainingNumbers.length === deckNumbers.length - draftNumbers.length);
+    assert(draftNumbers.every((number) => !remainingNumbers.includes(number)));
+    assert(deckNumbers.every((number) => visibleNumbers.has(number)));
   });
 
   it('should expose valid placement options across choices and rotations without mutating selection', () => {
