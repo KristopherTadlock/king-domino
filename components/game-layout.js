@@ -7,6 +7,7 @@ import { DominoEnd } from '../classes/enums/domino-end.js';
 import { Edges, EdgeOffset } from '../classes/enums/edges.js';
 import { WebGameManager } from '../classes/web-game-manager.js';
 import { MultiplayerClient } from '../classes/multiplayer-client.js';
+import { DominoPoolManager } from '../classes/domino-pool-manager.js';
 import { randomSeed } from '../classes/utils/rng.js';
 
 const LANDSCAPE_COLORS = Object.freeze({
@@ -161,6 +162,39 @@ function createTextSprite(text, options = {}) {
   return sprite;
 }
 
+function createStarShapeGeometry(outer = 0.052, inner = 0.023) {
+  const shape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const radius = i % 2 === 0 ? outer : inner;
+    const angle = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape);
+}
+
+function createWaterShardGeometry(width = 0.18, depth = 0.06, rand = Math.random) {
+  const halfW = width / 2;
+  const halfD = depth / 2;
+  const points = [
+    [-halfW + rand() * width * 0.16, -halfD + rand() * depth * 0.34],
+    [-halfW * 0.20 + rand() * width * 0.20, -halfD - rand() * depth * 0.10],
+    [halfW - rand() * width * 0.16, -halfD * 0.36 + rand() * depth * 0.34],
+    [halfW * 0.54 + rand() * width * 0.20, halfD - rand() * depth * 0.22],
+    [-halfW + rand() * width * 0.18, halfD * 0.48 + rand() * depth * 0.20],
+  ];
+  const shape = new THREE.Shape();
+  points.forEach(([x, y], i) => {
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  });
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape);
+}
+
 function landscapeKey(landscape) {
   if (typeof landscape === 'symbol') {
     return landscape.description || String(landscape);
@@ -185,29 +219,6 @@ function mulberry32(seed) {
     r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-function drawCrownGlyph(ctx, x, y, size, fill = '#ffd86a', stroke = 'rgba(72,46,8,0.70)') {
-  const w = size;
-  const h = size * 0.72;
-  const left = x - w / 2;
-  const top = y - h / 2;
-
-  ctx.beginPath();
-  ctx.moveTo(left, top + h);
-  ctx.lineTo(left + w * 0.16, top + h * 0.32);
-  ctx.lineTo(left + w * 0.36, top + h * 0.58);
-  ctx.lineTo(left + w * 0.50, top + h * 0.16);
-  ctx.lineTo(left + w * 0.64, top + h * 0.58);
-  ctx.lineTo(left + w * 0.84, top + h * 0.32);
-  ctx.lineTo(left + w, top + h);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = Math.max(1, size * 0.08);
-  ctx.stroke();
 }
 
 function createSceneBackgroundTexture(debug = false, size = 1024, layer = 'front') {
@@ -400,26 +411,132 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
   ctx.fillRect(0, 0, size, size);
 
   if (landscape === Landscapes.WHEAT) {
-    ctx.strokeStyle = 'rgba(126,75,20,0.20)';
-    ctx.lineWidth = 5;
-    for (let x = -size; x < size * 2; x += 24) {
+    ctx.save();
+    for (let i = 0; i < 18; i++) {
+      const cx = rand() * size;
+      const cy = rand() * size;
+      const rx = 18 + rand() * 36;
+      const ry = 7 + rand() * 18;
+      ctx.fillStyle = rand() > 0.45
+        ? `rgba(255,239,158,${0.08 + rand() * 0.12})`
+        : `rgba(133,78,22,${0.05 + rand() * 0.08})`;
       ctx.beginPath();
-      ctx.moveTo(x, size + 12);
-      ctx.lineTo(x + size * 0.72, -12);
+      ctx.ellipse(cx, cy, rx, ry, -0.38 + rand() * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = 'rgba(255,244,183,0.20)';
+    ctx.lineWidth = 2.4;
+    for (let i = 0; i < 28; i++) {
+      const x0 = rand() * size;
+      const y0 = rand() * size;
+      const len = 14 + rand() * 28;
+      const bend = -7 + rand() * 14;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(x0 + len * 0.45, y0 + bend, x0 + len, y0 - len * 0.18);
       ctx.stroke();
     }
+    ctx.restore();
   } else if (landscape === Landscapes.MINE) {
-    ctx.strokeStyle = 'rgba(8,14,20,0.24)';
-    ctx.lineWidth = 4;
-    for (let x = -size; x < size * 2; x += 34) {
+    ctx.save();
+    for (let i = 0; i < 10; i++) {
+      const cx = rand() * size;
+      const cy = rand() * size;
+      const radius = 26 + rand() * 54;
+      const sides = 4 + Math.floor(rand() * 3);
+      const angle = rand() * Math.PI;
+      ctx.fillStyle = rand() > 0.48
+        ? `rgba(8,14,20,${0.10 + rand() * 0.16})`
+        : `rgba(184,204,218,${0.045 + rand() * 0.060})`;
       ctx.beginPath();
-      ctx.moveTo(x, size + 8);
-      ctx.lineTo(x + size * 0.80, -8);
+      for (let p = 0; p < sides; p++) {
+        const a = angle + (p / sides) * Math.PI * 2;
+        const r = radius * (0.62 + rand() * 0.58);
+        const px = cx + Math.cos(a) * r;
+        const py = cy + Math.sin(a) * r * (0.52 + rand() * 0.34);
+        if (p === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 9; i++) {
+      const x0 = rand() * size;
+      const y0 = rand() * size;
+      const len = 30 + rand() * 76;
+      const angle = -0.80 + rand() * 0.48;
+      ctx.strokeStyle = rand() > 0.58
+        ? `rgba(136,226,255,${0.14 + rand() * 0.18})`
+        : `rgba(255,212,94,${0.10 + rand() * 0.15})`;
+      ctx.lineWidth = 1.2 + rand() * 2.2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x0 + Math.cos(angle) * len, y0 + Math.sin(angle) * len);
       ctx.stroke();
     }
+    ctx.restore();
   } else if (landscape === Landscapes.WATER) {
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    for (let y = 18; y < size; y += 34) ctx.fillRect(0, y, size, 2);
+    ctx.save();
+    const waterStyle = Math.floor(rand() * 4);
+    const facetCount = [5, 8, 4, 7][waterStyle];
+    const glintCount = [3, 6, 1, 5][waterStyle];
+    for (let i = 0; i < facetCount; i++) {
+      const cx = rand() * size;
+      const cy = rand() * size;
+      const w = (waterStyle === 2 ? 14 : 20) + rand() * (waterStyle === 1 ? 74 : 48);
+      const h = (waterStyle === 0 ? 16 : 10) + rand() * (waterStyle === 3 ? 30 : 22);
+      const angle = -0.62 + rand() * 1.24;
+      const ca = Math.cos(angle);
+      const sa = Math.sin(angle);
+      const skew = -0.35 + rand() * 0.70;
+      const points = [
+        [-w * 0.50, -h * 0.45],
+        [w * 0.48, -h * 0.30 + skew * h],
+        [w * 0.42, h * 0.50],
+        [-w * 0.52, h * 0.30 - skew * h],
+      ].map(([px, py]) => ({
+        x: cx + px * ca - py * sa,
+        y: cy + px * sa + py * ca,
+      }));
+      ctx.fillStyle = rand() > 0.50
+        ? `rgba(185,242,255,${0.055 + rand() * 0.065})`
+        : `rgba(11,82,120,${0.060 + rand() * 0.085})`;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let p = 1; p < points.length; p++) ctx.lineTo(points[p].x, points[p].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    for (let i = 0; i < glintCount; i++) {
+      const cx = rand() * size;
+      const cy = rand() * size;
+      const w = 6 + rand() * (waterStyle === 1 ? 30 : 18);
+      const h = 3 + rand() * (waterStyle === 2 ? 5 : 9);
+      const angle = -0.65 + rand() * 1.30;
+      const ca = Math.cos(angle);
+      const sa = Math.sin(angle);
+      const points = [
+        [-w * 0.48, -h * 0.18],
+        [-w * 0.08, -h * 0.54],
+        [w * 0.50, -h * 0.10],
+        [w * 0.18, h * 0.56],
+        [-w * 0.52, h * 0.22],
+      ].map(([px, py]) => ({
+        x: cx + px * ca - py * sa,
+        y: cy + px * sa + py * ca,
+      }));
+      ctx.fillStyle = `rgba(220,252,255,${0.050 + rand() * 0.095})`;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let p = 1; p < points.length; p++) ctx.lineTo(points[p].x, points[p].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
   } else if (landscape === Landscapes.PASTURE) {
     ctx.fillStyle = 'rgba(255,248,185,0.08)';
     for (let y = -20; y < size; y += 42) {
@@ -427,6 +544,38 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
       ctx.ellipse(size * 0.5, y, size * 0.58, 7, 0.08, 0, Math.PI * 2);
       ctx.fill();
     }
+  } else if (landscape === Landscapes.BOG) {
+    ctx.save();
+    for (let i = 0; i < 8; i++) {
+      const cx = rand() * size;
+      const cy = rand() * size;
+      const rx = 20 + rand() * 52;
+      const ry = 9 + rand() * 25;
+      const angle = rand() * Math.PI;
+      ctx.fillStyle = rand() > 0.48
+        ? `rgba(38,20,55,${0.16 + rand() * 0.18})`
+        : `rgba(145,139,72,${0.08 + rand() * 0.12})`;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, angle, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 22; i++) {
+      const x0 = rand() * size;
+      const y0 = rand() * size;
+      const h = 10 + rand() * 28;
+      const lean = -7 + rand() * 14;
+      ctx.strokeStyle = rand() > 0.52
+        ? `rgba(117,128,65,${0.15 + rand() * 0.18})`
+        : `rgba(62,43,76,${0.14 + rand() * 0.18})`;
+      ctx.lineWidth = 1.2 + rand() * 2.0;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 + h * 0.5);
+      ctx.quadraticCurveTo(x0 + lean * 0.35, y0, x0 + lean, y0 - h * 0.5);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   const featureCount = 24 + Math.floor(rand() * 18);
@@ -435,19 +584,40 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
     const y = rand() * size;
 
     if (landscape === Landscapes.WATER) {
-      const w = 20 + rand() * 56;
-      const h = 3 + rand() * 7;
-      ctx.fillStyle = `rgba(202,248,255,${0.12 + rand() * 0.18})`;
-      ctx.beginPath();
-      ctx.ellipse(x, y, w, h, rand() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (rand() > 0.55) {
-        ctx.strokeStyle = `rgba(255,255,255,${0.08 + rand() * 0.12})`;
-        ctx.lineWidth = 1 + rand() * 1.2;
+      if (rand() > 0.78) {
+        const angle = rand() * Math.PI;
+        const len = 5 + rand() * 12;
+        const width = 2.2 + rand() * 4.2;
+        ctx.fillStyle = `rgba(218,252,255,${0.050 + rand() * 0.075})`;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
         ctx.beginPath();
-        ctx.arc(x, y, 6 + rand() * 16, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.moveTo(-len * 0.48, -width * 0.08);
+        ctx.lineTo(-len * 0.08, -width * 0.54);
+        ctx.lineTo(len * 0.50, -width * 0.08);
+        ctx.lineTo(len * 0.16, width * 0.50);
+        ctx.lineTo(-len * 0.52, width * 0.22);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      } else if (rand() > 0.58) {
+        const body = 4 + rand() * 7;
+        const angle = rand() * Math.PI * 2;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.fillStyle = rand() > 0.65 ? 'rgba(255,168,70,0.24)' : 'rgba(5,47,74,0.22)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, body * 1.25, body * 0.48, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-body * 1.0, 0);
+        ctx.lineTo(-body * 1.65, -body * 0.52);
+        ctx.lineTo(-body * 1.65, body * 0.52);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
       }
     } else if (landscape === Landscapes.FOREST) {
       const r = 8 + rand() * 18;
@@ -463,12 +633,17 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
         ctx.fill();
       }
     } else if (landscape === Landscapes.WHEAT) {
-      ctx.strokeStyle = `rgba(255,246,190,${0.16 + rand() * 0.22})`;
-      ctx.lineWidth = 1 + rand() * 2;
+      ctx.strokeStyle = `rgba(255,246,190,${0.18 + rand() * 0.24})`;
+      ctx.lineWidth = 1.2 + rand() * 2.1;
       ctx.beginPath();
       ctx.moveTo(x - 12, y + 12);
       ctx.quadraticCurveTo(x, y, x + 10, y - 12);
       ctx.stroke();
+
+      ctx.fillStyle = `rgba(194,122,38,${0.10 + rand() * 0.16})`;
+      ctx.beginPath();
+      ctx.ellipse(x + 8, y - 10, 4 + rand() * 4, 9 + rand() * 7, -0.42 + rand() * 0.35, 0, Math.PI * 2);
+      ctx.fill();
 
       if (rand() > 0.55) {
         ctx.strokeStyle = `rgba(120,72,18,${0.10 + rand() * 0.12})`;
@@ -478,24 +653,55 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
         ctx.stroke();
       }
     } else if (landscape === Landscapes.PASTURE) {
-      const r = 4 + rand() * 10;
-      ctx.fillStyle = `rgba(245,255,205,${0.13 + rand() * 0.22})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (rand() > 0.68) {
-        ctx.strokeStyle = `rgba(38,105,42,${0.13 + rand() * 0.15})`;
-        ctx.lineWidth = 1 + rand();
+      if (rand() > 0.74) {
+        const body = 4 + rand() * 5;
+        const angle = rand() * Math.PI * 2;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.fillStyle = 'rgba(255,255,238,0.30)';
         ctx.beginPath();
-        ctx.moveTo(x, y + 8);
-        ctx.quadraticCurveTo(x + 4, y, x + 9, y - 8);
-        ctx.stroke();
+        ctx.ellipse(0, 0, body * 1.45, body * 0.82, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(62,52,42,0.24)';
+        ctx.beginPath();
+        ctx.ellipse(body * 1.38, -body * 0.05, body * 0.48, body * 0.40, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(70,55,42,0.20)';
+        ctx.lineWidth = 1.2;
+        for (const lx of [-body * 0.45, body * 0.45]) {
+          ctx.beginPath();
+          ctx.moveTo(lx, body * 0.45);
+          ctx.lineTo(lx, body * 1.05);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else {
+        ctx.strokeStyle = `rgba(44,126,54,${0.13 + rand() * 0.18})`;
+        ctx.lineWidth = 1 + rand() * 1.6;
+        const bladeCount = 2 + Math.floor(rand() * 3);
+        for (let b = 0; b < bladeCount; b++) {
+          const lean = -8 + rand() * 16;
+          ctx.beginPath();
+          ctx.moveTo(x + rand() * 10 - 5, y + 8);
+          ctx.quadraticCurveTo(x + lean * 0.45, y, x + lean, y - 7 - rand() * 9);
+          ctx.stroke();
+        }
+        if (rand() > 0.58) {
+          ctx.fillStyle = rand() > 0.45
+            ? `rgba(255,246,174,${0.16 + rand() * 0.18})`
+            : `rgba(255,210,235,${0.14 + rand() * 0.18})`;
+          ctx.beginPath();
+          ctx.arc(x + rand() * 12 - 6, y + rand() * 10 - 5, 2.2 + rand() * 3.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     } else if (landscape === Landscapes.MINE) {
-      const r = 9 + rand() * 22;
-      const sides = 5 + Math.floor(rand() * 3);
-      ctx.fillStyle = `rgba(8,14,20,${0.20 + rand() * 0.28})`;
+      const r = 8 + rand() * 24;
+      const sides = 4 + Math.floor(rand() * 4);
+      ctx.fillStyle = rand() > 0.45
+        ? `rgba(8,14,20,${0.22 + rand() * 0.26})`
+        : `rgba(108,126,142,${0.15 + rand() * 0.20})`;
       ctx.beginPath();
       for (let p = 0; p < sides; p++) {
         const a = rand() * 0.4 + (p / sides) * Math.PI * 2;
@@ -508,27 +714,61 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
       ctx.closePath();
       ctx.fill();
 
-      if (rand() > 0.58) {
-        ctx.strokeStyle = rand() > 0.45 ? 'rgba(139,226,255,0.30)' : 'rgba(255,220,116,0.24)';
-        ctx.lineWidth = 1.4 + rand() * 1.6;
+      if (rand() > 0.42) {
+        const oreGold = rand() > 0.52;
+        ctx.strokeStyle = oreGold ? 'rgba(255,220,116,0.30)' : 'rgba(139,226,255,0.34)';
+        ctx.lineWidth = 1.2 + rand() * 1.8;
         ctx.beginPath();
         ctx.moveTo(x - r * 0.8, y + rand() * r - r * 0.5);
+        ctx.lineTo(x - r * 0.15, y + rand() * r - r * 0.5);
         ctx.lineTo(x + r * 0.8, y + rand() * r - r * 0.5);
         ctx.stroke();
+
+        if (rand() > 0.62) {
+          ctx.fillStyle = oreGold ? 'rgba(255,226,120,0.30)' : 'rgba(150,232,255,0.34)';
+          ctx.beginPath();
+          ctx.arc(x + rand() * r - r * 0.5, y + rand() * r - r * 0.5, 1.5 + rand() * 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     } else if (landscape === Landscapes.BOG) {
-      const rx = 12 + rand() * 26;
-      const ry = 6 + rand() * 16;
-      ctx.fillStyle = `rgba(42,25,57,${0.18 + rand() * 0.24})`;
-      ctx.beginPath();
-      ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (rand() > 0.42) {
-        ctx.fillStyle = `rgba(193,183,113,${0.10 + rand() * 0.16})`;
+      const featureRoll = rand();
+      if (featureRoll > 0.70) {
+        ctx.strokeStyle = `rgba(132,137,66,${0.20 + rand() * 0.22})`;
+        ctx.lineWidth = 1.2 + rand() * 1.6;
+        const reedCount = 2 + Math.floor(rand() * 3);
+        for (let r = 0; r < reedCount; r++) {
+          const dx = rand() * 14 - 7;
+          const h = 10 + rand() * 18;
+          ctx.beginPath();
+          ctx.moveTo(x + dx, y + h * 0.35);
+          ctx.quadraticCurveTo(x + dx + rand() * 6 - 3, y, x + dx + rand() * 8 - 4, y - h);
+          ctx.stroke();
+        }
+        if (rand() > 0.48) {
+          ctx.fillStyle = `rgba(87,58,35,${0.24 + rand() * 0.20})`;
+          ctx.beginPath();
+          ctx.ellipse(x + rand() * 14 - 7, y - 10 - rand() * 8, 2.4 + rand() * 2.2, 6 + rand() * 5, rand() * Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (featureRoll > 0.40) {
+        const rx = 8 + rand() * 20;
+        const ry = 5 + rand() * 13;
+        ctx.fillStyle = `rgba(44,24,62,${0.18 + rand() * 0.24})`;
         ctx.beginPath();
-        ctx.arc(x + rand() * 18 - 9, y + rand() * 14 - 7, 3 + rand() * 7, 0, Math.PI * 2);
+        ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
         ctx.fill();
+      } else {
+        ctx.fillStyle = `rgba(177,178,94,${0.11 + rand() * 0.18})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 5 + rand() * 13, 3 + rand() * 8, rand() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+        if (rand() > 0.62) {
+          ctx.fillStyle = `rgba(213,197,122,${0.16 + rand() * 0.18})`;
+          ctx.beginPath();
+          ctx.arc(x + rand() * 12 - 6, y + rand() * 10 - 5, 1.8 + rand() * 3.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     } else if (landscape === Landscapes.CASTLE) {
       ctx.strokeStyle = `rgba(70,74,82,${0.14 + rand() * 0.2})`;
@@ -561,49 +801,6 @@ function createLandscapeTileCanvas(landscape, crowns, seedKey, size = 256) {
   vignette.addColorStop(1, 'rgba(0,0,0,0.18)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, size, size);
-
-  const crownTier = Math.max(0, Math.min(3, crowns || 0));
-  if (crownTier > 0 && landscape !== Landscapes.CASTLE) {
-    const cx = size - 32;
-    const cy = 30;
-    const glow = ctx.createRadialGradient(cx, cy, 2, cx, cy, 24 + crownTier * 4);
-    glow.addColorStop(0, `rgba(255,246,196,${0.52 + crownTier * 0.08})`);
-    glow.addColorStop(1, 'rgba(255,224,130,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 24 + crownTier * 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    drawCrownGlyph(ctx, cx, cy, 20 + crownTier * 4, '#ffd96e', 'rgba(78, 50, 10, 0.72)');
-
-    const sparkleCount = 2 + crownTier * 2;
-    for (let i = 0; i < sparkleCount; i++) {
-      const a = (i / sparkleCount) * Math.PI * 2 + rand() * 0.8;
-      const r = 17 + rand() * (6 + crownTier * 4);
-      const sx = cx + Math.cos(a) * r;
-      const sy = cy + Math.sin(a) * r;
-      const s = 1.6 + rand() * (0.8 + crownTier * 0.8);
-      ctx.strokeStyle = `rgba(255,245,200,${0.34 + rand() * 0.36})`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(sx - s, sy);
-      ctx.lineTo(sx + s, sy);
-      ctx.moveTo(sx, sy - s);
-      ctx.lineTo(sx, sy + s);
-      ctx.stroke();
-    }
-
-    if (crownTier >= 2) {
-      ctx.strokeStyle = 'rgba(255, 222, 130, 0.60)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(5.5, 5.5, size - 11, size - 11);
-    }
-
-    if (crownTier >= 3) {
-      drawCrownGlyph(ctx, 26, size - 24, 12, 'rgba(255,225,135,0.78)', 'rgba(80,52,10,0.62)');
-      drawCrownGlyph(ctx, size - 64, size - 18, 10, 'rgba(255,225,135,0.72)', 'rgba(80,52,10,0.56)');
-    }
-  }
 
   return canvas;
 }
@@ -646,6 +843,7 @@ export class GameLayout extends HTMLElement {
   #btnPlace;
   #btnCenter;
   #btnMore;
+  #btnLibrary;
   #btnRestart;
   #mobileActions;
   #btnMobileRotate;
@@ -716,6 +914,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {boolean} */
   #moreOpen = false;
+
+  /** @type {boolean} */
+  #libraryOpen = false;
 
   /** @type {THREE.WebGLRenderer} */
   #renderer;
@@ -1035,6 +1236,7 @@ export class GameLayout extends HTMLElement {
 
   connectedCallback() {
     this.#buildDom();
+    this.#libraryOpen = new URL(location.href).searchParams.get('library') === '1';
     this.#safeInitThree();
     if (this.#threeOk) this.#wireEvents();
     this.#initMultiplayer();
@@ -1261,6 +1463,66 @@ export class GameLayout extends HTMLElement {
         overflow: auto;
         -webkit-overflow-scrolling: touch;
         z-index: 5;
+      }
+      .root.isLibraryMode .hud {
+        width: min(340px, calc(100vw - 24px));
+        max-height: calc(100dvh - 168px);
+      }
+      .root.isLibraryMode .controlsTertiary {
+        top: 76px;
+        right: 12px;
+        min-width: 160px;
+      }
+      .root.isLibraryMode .controlsSecondary {
+        top: 130px;
+        right: 12px;
+        min-width: 160px;
+      }
+      .librarySummary {
+        display: grid;
+        gap: 8px;
+      }
+      .libraryKicker {
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(233,238,245,0.66);
+      }
+      .libraryCopy {
+        margin: 0;
+        color: rgba(233,238,245,0.78);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .libraryStats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .libraryStat {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 5px 7px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.06);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .libraryStat span:first-child {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+      }
+      .librarySwatch {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.20);
       }
       .hudHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
       .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -1988,13 +2250,16 @@ export class GameLayout extends HTMLElement {
     this.#btnMore = document.createElement('button');
     this.#btnMore.textContent = 'More';
     this.#btnMore.className = 'secondaryAction iconAction';
+    this.#btnLibrary = document.createElement('button');
+    this.#btnLibrary.textContent = 'Domino Library';
+    this.#btnLibrary.className = 'secondaryAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
     this.#btnRestart.className = 'secondaryAction destructiveAction';
     this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
     this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnMore);
     this.#tertiaryControlsRow.hidden = true;
-    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnRestart);
+    this.#tertiaryControlsRow.append(this.#btnLibrary, this.#btnUndoRequest, this.#btnRestart);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -3214,6 +3479,10 @@ export class GameLayout extends HTMLElement {
       this.#refreshHud();
     });
 
+    this.#btnLibrary.addEventListener('click', () => {
+      this.#setLibraryOpen(!this.#libraryOpen);
+    });
+
     this.#btnPlace.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (!this.#hoverAnchor) {
@@ -3319,6 +3588,7 @@ export class GameLayout extends HTMLElement {
   };
 
   #onPointerMove(e) {
+    if (this.#libraryOpen) return;
     if (!this.#isMyTurnToPlace()) {
       if (this.#hoverAnchor) {
         this.#hoverAnchor = null;
@@ -3333,6 +3603,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #onPointerDown(e) {
+    if (this.#libraryOpen) return;
     // Prevent browser panning/zooming the page when interacting with the board.
     if (e.pointerType === 'touch') e.preventDefault();
     try {
@@ -3353,6 +3624,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #onPointerUp(e) {
+    if (this.#libraryOpen) return;
     if (e.pointerType === 'touch') e.preventDefault();
     if (!this.#isMyTurnToPlace()) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
@@ -3513,10 +3785,107 @@ export class GameLayout extends HTMLElement {
     this.#setCanvasNotice(message, 'error', 1400);
   }
 
+  #setLibraryOpen(open) {
+    this.#libraryOpen = Boolean(open);
+    this.#moreOpen = this.#libraryOpen ? true : this.#moreOpen;
+    this.#hoverAnchor = null;
+    this.#localPlacementFocus = null;
+    this.#hoverAnchorAuto = false;
+    this.#setCanvasNotice('');
+    const url = new URL(location.href);
+    if (this.#libraryOpen) url.searchParams.set('library', '1');
+    else url.searchParams.delete('library');
+    history.replaceState(null, '', url);
+    this.#renderBoard();
+    if (this.#libraryOpen) this.#centerOnDominoLibrary(true);
+    else {
+      this.#centerOnFocusedBoard(true);
+      this.#renderGhost();
+    }
+    this.#refreshHud();
+  }
+
+  #dominoLibraryStats() {
+    const stats = new Map();
+    for (const domino of DominoPoolManager.getStartingDominoPool()) {
+      for (const tile of [domino.leftEnd, domino.rightEnd]) {
+        const key = tile.landscape;
+        const current = stats.get(key) ?? { total: 0, max: 0 };
+        current.total += 1;
+        current.max = Math.max(current.max, tile.crowns || 0);
+        stats.set(key, current);
+      }
+    }
+    return [Landscapes.WHEAT, Landscapes.FOREST, Landscapes.WATER, Landscapes.PASTURE, Landscapes.BOG, Landscapes.MINE]
+      .map((landscape) => ({ landscape, ...(stats.get(landscape) ?? { total: 0, max: 0 }) }));
+  }
+
   #refreshHud() {
     const g = this.#game;
+    this.#root?.classList.toggle('isLibraryMode', this.#libraryOpen);
     this.#syncHotseatPlayerIndex();
     this.#syncMobilePanelForPhase();
+    if (this.#libraryOpen) {
+      this.#hudTitle.textContent = 'Domino Library';
+      this.#hudBody.innerHTML = '';
+      if (this.#endOverlay) this.#endOverlay.hidden = true;
+      if (this.#miniMapDock) this.#miniMapDock.hidden = true;
+      if (this.#canvasTurn) this.#canvasTurn.classList.remove('show');
+      if (this.#mobileActions) this.#mobileActions.classList.remove('show');
+      if (this.#localPlacementDock) this.#localPlacementDock.hidden = true;
+      this.#primaryControlsRow.hidden = true;
+      this.#secondaryControlsRow.hidden = false;
+      this.#tertiaryControlsRow.hidden = false;
+      this.#btnRotate.hidden = true;
+      this.#btnResetTile.hidden = true;
+      this.#btnScores.hidden = true;
+      this.#btnSkip.hidden = true;
+      this.#btnUndoRequest.hidden = true;
+      this.#btnRestart.hidden = true;
+      this.#btnMore.hidden = true;
+      this.#btnCenter.hidden = false;
+      this.#btnCenter.disabled = false;
+      this.#btnLibrary.hidden = false;
+      this.#btnLibrary.disabled = false;
+      this.#btnLibrary.textContent = 'Back to Game';
+
+      const summary = document.createElement('div');
+      summary.className = 'librarySummary';
+
+      const kicker = document.createElement('div');
+      kicker.className = 'libraryKicker';
+      kicker.textContent = 'Full Deck';
+
+      const copy = document.createElement('p');
+      copy.className = 'libraryCopy';
+      copy.textContent = 'All 48 dominoes are laid out on the tabletop in number order. Crowned halves use the same 3D rendering path as the board, so this screen doubles as the art inspection wall.';
+
+      const stats = document.createElement('div');
+      stats.className = 'libraryStats';
+      for (const item of this.#dominoLibraryStats()) {
+        const row = document.createElement('div');
+        row.className = 'libraryStat';
+        const name = document.createElement('span');
+        const swatch = document.createElement('span');
+        swatch.className = 'librarySwatch';
+        swatch.style.background = `#${(LANDSCAPE_COLORS[item.landscape] ?? 0xffffff).toString(16).padStart(6, '0')}`;
+        const label = document.createElement('span');
+        label.textContent = landscapeLabel(item.landscape);
+        name.append(swatch, label);
+        const max = document.createElement('span');
+        max.textContent = item.max > 0 ? `up to ${crownsText(item.max)}` : 'plain';
+        row.append(name, max);
+        stats.append(row);
+      }
+
+      summary.append(kicker, copy, stats);
+      this.#hudBody.append(summary);
+      return;
+    }
+    if (this.#miniMapDock) this.#miniMapDock.hidden = false;
+    this.#btnMore.hidden = false;
+    this.#btnLibrary.textContent = 'Domino Library';
+
     const standings = g.players
       .map((p, i) => ({
         index: i,
@@ -3884,6 +4253,10 @@ export class GameLayout extends HTMLElement {
 
   #renderBoard() {
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
+    if (this.#libraryOpen) {
+      this.#renderDominoLibraryScene();
+      return;
+    }
 
     const players = this.#game?.players ?? [];
     const focusedPlayerIndex = Math.max(0, Math.min(this.#focusedPlayerIndex, players.length - 1));
@@ -3902,7 +4275,8 @@ export class GameLayout extends HTMLElement {
 
       for (const k of Object.keys(board)) {
         const tile = board[k];
-        const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, `${playerIndex}|${tile.x},${tile.y}`, false);
+        const tileSeedKey = `${playerIndex}|${k}|${tile.x},${tile.y}`;
+        const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, tileSeedKey, false);
 
         const tileMesh = new THREE.Mesh(
           new THREE.BoxGeometry(0.98, 0.22, 0.98),
@@ -3914,22 +4288,19 @@ export class GameLayout extends HTMLElement {
         if (tile.landscape === Landscapes.CASTLE) {
           this.#addCastleDetail(tile.x, tile.y, board, boardManager, playerIndex);
         } else {
-          this.#addLandscapeDetail(tile);
+          this.#addLandscapeDetail(tile, tileSeedKey);
           if ((tile.crowns || 0) > 0) {
-            this.#addCrownDetail(tile, board);
+            this.#addCrownedLandmark(tile, tileSeedKey);
+            this.#addCrownStars(tile.x, tile.y, tile.crowns);
           }
         }
 
-        if (tile.crowns > 0 || tile.landscape === Landscapes.CASTLE) {
-          const isCastle = tile.landscape === Landscapes.CASTLE;
-          const text = isCastle ? '♜' : crownsText(tile.crowns);
-          const sprite = createTextSprite(text, {
-            font: text.length >= 2
-              ? '700 42px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
-              : '700 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-            fillStyle: isCastle ? '#f5fbff' : '#f5cc51',
-            background: isCastle ? this.#playerMiniMapColor(playerIndex, 0.82) : 'rgba(28,31,38,0.88)',
-            border: isCastle ? this.#playerMiniMapColor(playerIndex, 0.95) : 'rgba(255,255,255,0.32)',
+        if (tile.landscape === Landscapes.CASTLE) {
+          const sprite = createTextSprite('♜', {
+            font: '700 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+            fillStyle: '#f5fbff',
+            background: this.#playerMiniMapColor(playerIndex, 0.82),
+            border: this.#playerMiniMapColor(playerIndex, 0.95),
           });
           sprite.position.set(tile.x, 0.38, tile.y);
           this.#addTileObjects(sprite);
@@ -3938,6 +4309,91 @@ export class GameLayout extends HTMLElement {
     }
     this.#currentTileRenderGroup = previousGroup;
 
+    this.#syncBoardLayerPositions();
+    this.#renderRegionScoring(null);
+  }
+
+  #renderDominoLibraryScene() {
+    if (this.#ghostGroup) {
+      while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
+    }
+    if (this.#regionOverlayGroup) {
+      while (this.#regionOverlayGroup.children.length) this.#regionOverlayGroup.remove(this.#regionOverlayGroup.children[0]);
+    }
+
+    const deck = DominoPoolManager.getStartingDominoPool();
+    const group = new THREE.Group();
+    group.userData.library = true;
+    this.#tilesGroup.add(group);
+
+    const previousGroup = this.#currentTileRenderGroup;
+    this.#currentTileRenderGroup = group;
+
+    const cols = 6;
+    const cellX = 2.55;
+    const cellZ = 1.55;
+    const rows = Math.ceil(deck.length / cols);
+    const xOffset = -((cols - 1) * cellX + 1) / 2;
+    const zOffset = -((rows - 1) * cellZ) / 2;
+
+    const baseMat = new THREE.MeshBasicMaterial({
+      color: 0x151922,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    deck.forEach((domino, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const baseX = xOffset + col * cellX;
+      const baseZ = zOffset + row * cellZ;
+      const left = {
+        x: baseX,
+        y: baseZ,
+        landscape: domino.leftEnd.landscape,
+        crowns: domino.leftEnd.crowns,
+      };
+      const right = {
+        x: baseX + 1,
+        y: baseZ,
+        landscape: domino.rightEnd.landscape,
+        crowns: domino.rightEnd.crowns,
+      };
+
+      const base = new THREE.Mesh(new THREE.PlaneGeometry(2.26, 1.20), baseMat);
+      base.position.set(baseX + 0.5, 0.006, baseZ);
+      base.rotation.x = -Math.PI / 2;
+      base.renderOrder = -1;
+      this.#addTileObjects(base);
+
+      for (const [endName, tile] of [['left', left], ['right', right]]) {
+        const seedKey = `library|${domino.number}|${endName}`;
+        const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, seedKey, false);
+        const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
+        tileMesh.position.set(tile.x, 0.11, tile.y);
+        this.#addTileObjects(tileMesh);
+        this.#addLandscapeDetail(tile, seedKey);
+        if ((tile.crowns || 0) > 0) {
+          this.#addCrownedLandmark(tile, seedKey);
+          this.#addCrownStars(tile.x, tile.y, tile.crowns);
+        }
+      }
+
+      const number = createTextSprite(String(domino.number), {
+        font: '800 36px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+        fillStyle: '#e9eef5',
+        background: 'rgba(20,22,28,0.74)',
+        border: 'rgba(255,255,255,0.20)',
+        size: 96,
+      });
+      number.position.set(baseX - 0.52, 0.32, baseZ - 0.58);
+      number.scale.set(0.24, 0.24, 0.24);
+      this.#addTileObjects(number);
+    });
+
+    this.#currentTileRenderGroup = previousGroup;
     this.#syncBoardLayerPositions();
     this.#renderRegionScoring(null);
   }
@@ -4000,27 +4456,433 @@ export class GameLayout extends HTMLElement {
     return { tier, progress, perfectKingdom };
   }
 
-  #variationRand(tile, tag = 'v') {
-    return mulberry32(hash32(`${tag}|${tile.x},${tile.y}|${landscapeKey(tile.landscape)}|${tile.crowns || 0}`));
+  #variationRand(tile, tag = 'v', seedKey = '') {
+    return mulberry32(hash32(`${tag}|${seedKey}|${tile.x},${tile.y}|${landscapeKey(tile.landscape)}|${tile.crowns || 0}`));
   }
 
-  #addLandscapeDetail(tile) {
+  #detailSpot(rand, limit = 0.32) {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const dx = -limit + rand() * limit * 2;
+      const dz = -limit + rand() * limit * 2;
+      if (dx < 0.12 || dz > -0.12) return { dx, dz };
+    }
+    return {
+      dx: -limit + rand() * limit * 1.35,
+      dz: -limit + rand() * limit * 1.35,
+    };
+  }
+
+  #addCrownStars(x, y, crowns, options = {}) {
+    const count = Math.max(0, Math.min(3, crowns || 0));
+    if (!count) return;
+
+    const ghost = Boolean(options.ghost);
+    const target = options.target || null;
+    const add = (...objects) => {
+      if (target) target.add(...objects);
+      else this.#addTileObjects(...objects);
+    };
+
+    const plaqueMat = new THREE.MeshStandardMaterial({
+      color: 0x2c2430,
+      roughness: 0.52,
+      metalness: 0.18,
+      emissive: 0x231604,
+      emissiveIntensity: ghost ? 0.08 : 0.16,
+      transparent: true,
+      opacity: ghost ? 0.68 : 0.94,
+    });
+    const starMat = new THREE.MeshStandardMaterial({
+      color: 0xffd76a,
+      roughness: 0.30,
+      metalness: 0.64,
+      emissive: 0x7a4d08,
+      emissiveIntensity: ghost ? 0.16 : 0.30,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: ghost ? 0.76 : 1,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+
+    const plaque = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.030, 0.21), plaqueMat);
+    plaque.position.set(x + 0.27, ghost ? 0.205 : 0.245, y - 0.30);
+    plaque.rotation.y = -0.08;
+    add(plaque);
+
+    const starGeometry = createStarShapeGeometry(0.052, 0.023);
+    const offsets = count === 1 ? [0] : count === 2 ? [-0.055, 0.055] : [-0.078, 0, 0.078];
+    for (const offset of offsets) {
+      const star = new THREE.Mesh(starGeometry, starMat);
+      star.position.set(x + 0.27 + offset, ghost ? 0.224 : 0.266, y - 0.30);
+      star.rotation.x = -Math.PI / 2;
+      star.rotation.z = -0.10;
+      add(star);
+    }
+  }
+
+  #addWaterFish(x, y, dx, dz, angle, scale, bodyMat, tailMat) {
+    const fish = new THREE.Group();
+    fish.position.set(x + dx, 0.270, y + dz);
+    fish.rotation.y = angle;
+
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.052 * scale, 10, 7), bodyMat);
+    body.scale.set(1.45, 0.42, 0.62);
+    body.position.set(0, 0.010, 0);
+    fish.add(body);
+
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.026 * scale, 0.052 * scale, 3), tailMat);
+    tail.rotation.z = Math.PI / 2;
+    tail.rotation.y = Math.PI * 0.50;
+    tail.position.set(-0.070 * scale, 0.010, 0);
+    fish.add(tail);
+
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.015 * scale, 0.032 * scale, 3), tailMat);
+    fin.rotation.x = Math.PI / 2;
+    fin.position.set(0.006 * scale, 0.042 * scale, 0);
+    fish.add(fin);
+
+    this.#addTileObjects(fish);
+  }
+
+  #addWaterTurtle(x, y, dx, dz, angle, shellMat, bodyMat) {
+    const turtle = new THREE.Group();
+    turtle.position.set(x + dx, 0.268, y + dz);
+    turtle.rotation.y = angle;
+
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.064, 12, 8), shellMat);
+    shell.scale.set(1.18, 0.34, 0.92);
+    shell.position.set(0, 0.020, 0);
+    turtle.add(shell);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.024, 8, 6), bodyMat);
+    head.position.set(0.076, 0.016, 0);
+    turtle.add(head);
+
+    for (const [fx, fz, rz] of [
+      [-0.022, -0.044, -0.42],
+      [0.034, -0.044, 0.36],
+      [-0.022, 0.044, 0.42],
+      [0.034, 0.044, -0.36],
+    ]) {
+      const flipper = new THREE.Mesh(new THREE.BoxGeometry(0.040, 0.006, 0.014), bodyMat);
+      flipper.position.set(fx, 0.006, fz);
+      flipper.rotation.y = rz;
+      turtle.add(flipper);
+    }
+
+    this.#addTileObjects(turtle);
+  }
+
+  #addPastureSheep(x, y, dx, dz, angle, scale, sheepMat, woolMat, headMat) {
+    const sheep = new THREE.Group();
+    sheep.position.set(x + dx, 0, y + dz);
+    sheep.rotation.y = angle;
+
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.066 * scale, 12, 8), sheepMat);
+    body.scale.set(1.36, 0.72, 0.88);
+    body.position.set(0, 0.300, 0);
+    sheep.add(body);
+
+    const puffGeometry = new THREE.SphereGeometry(0.025 * scale, 8, 6);
+    for (const [px, py, pz, ps] of [
+      [-0.040, 0.322, -0.022, 1.02],
+      [0.000, 0.332, 0.016, 1.12],
+      [0.044, 0.318, -0.014, 0.92],
+    ]) {
+      const puff = new THREE.Mesh(puffGeometry, woolMat);
+      puff.scale.set(ps, 0.74, ps * 0.84);
+      puff.position.set(px * scale, py, pz * scale);
+      sheep.add(puff);
+    }
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.030 * scale, 9, 7), headMat);
+    head.scale.set(0.94, 0.82, 1.08);
+    head.position.set(0.088 * scale, 0.300, 0);
+    sheep.add(head);
+
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.010 * scale, 0.024 * scale, 5), headMat);
+      ear.position.set(0.091 * scale, 0.324, side * 0.020 * scale);
+      ear.rotation.x = side * 0.55;
+      ear.rotation.z = Math.PI / 2;
+      sheep.add(ear);
+    }
+
+    for (const [lx, lz] of [
+      [-0.042, -0.030],
+      [-0.042, 0.030],
+      [0.042, -0.030],
+      [0.042, 0.030],
+    ]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.010 * scale, 0.043 * scale, 0.010 * scale), headMat);
+      leg.position.set(lx * scale, 0.246, lz * scale);
+      sheep.add(leg);
+    }
+
+    this.#addTileObjects(sheep);
+  }
+
+  #addMineCart(x, y, dx, dz, angle, railMat, cartMat, darkRockMat, oreMat, rand) {
+    const cartGroup = new THREE.Group();
+    cartGroup.position.set(x + dx, 0.245, y + dz);
+    cartGroup.rotation.y = angle;
+
+    const railGeom = new THREE.BoxGeometry(0.38, 0.014, 0.012);
+    const railA = new THREE.Mesh(railGeom, railMat);
+    const railB = new THREE.Mesh(railGeom, railMat);
+    railA.position.set(0, 0, -0.046);
+    railB.position.set(0, 0, 0.046);
+    cartGroup.add(railA, railB);
+
+    for (const railX of [-0.13, 0, 0.13]) {
+      const tie = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.010, 0.14), railMat);
+      tie.position.set(railX, -0.007, 0);
+      cartGroup.add(tie);
+    }
+
+    const cart = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.074, 0.11), cartMat);
+    cart.position.set(0.050, 0.052, 0);
+    cartGroup.add(cart);
+
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.016, 0.124), cartMat);
+    lip.position.set(0.050, 0.096, 0);
+    cartGroup.add(lip);
+
+    for (const ox of [-0.018, 0.038, 0.092]) {
+      const ore = new THREE.Mesh(new THREE.DodecahedronGeometry(0.022, 0), oreMat);
+      ore.position.set(ox, 0.122 + Math.abs(0.038 - ox) * 0.20, -0.018 + rand() * 0.036);
+      ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+      cartGroup.add(ore);
+    }
+
+    for (const sx of [-0.026, 0.118]) {
+      for (const sz of [-0.063, 0.063]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.020, 0.014, 10), darkRockMat);
+        wheel.position.set(sx, 0.014, sz);
+        wheel.rotation.x = Math.PI / 2;
+        cartGroup.add(wheel);
+      }
+    }
+
+    this.#addTileObjects(cartGroup);
+  }
+
+  #addCrownedLandmark(tile, seedKey = '') {
+    const crowns = Math.max(0, Math.min(3, tile.crowns || 0));
+    if (!crowns) return;
+
+    const x = tile.x;
+    const y = tile.y;
+    const rand = this.#variationRand(tile, 'landmark', seedKey);
+    const group = new THREE.Group();
+    group.position.set(x - 0.14, 0, y + 0.13);
+    group.rotation.y = -0.22 + rand() * 0.44;
+
+    const addBox = (w, h, d, mat, px, py, pz, ry = 0) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(px, py, pz);
+      mesh.rotation.y = ry;
+      group.add(mesh);
+      return mesh;
+    };
+    const addCyl = (rTop, rBottom, h, sides, mat, px, py, pz) => {
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, h, sides), mat);
+      mesh.position.set(px, py, pz);
+      group.add(mesh);
+      return mesh;
+    };
+
+    switch (tile.landscape) {
+      case Landscapes.FOREST: {
+        const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4428, roughness: 0.74, metalness: 0.03 });
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0x2c8b4d, roughness: 0.68, metalness: 0.02 });
+        const deepLeafMat = new THREE.MeshStandardMaterial({ color: 0x155a32, roughness: 0.72, metalness: 0.02 });
+        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.34, metalness: 0.42, emissive: 0x7d4a08, emissiveIntensity: 0.28 });
+        addCyl(0.036, 0.052, 0.35, 9, trunkMat, 0, 0.22 + 0.35 / 2, 0);
+        const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.17, 13, 9), leafMat);
+        canopy.scale.set(1.10, 0.82, 1.02);
+        canopy.position.set(0, 0.62, 0);
+        group.add(canopy);
+        for (const [dx, dz, s] of [[-0.10, 0.04, 0.72], [0.11, 0.02, 0.66], [0.02, -0.10, 0.58]]) {
+          const cluster = new THREE.Mesh(new THREE.SphereGeometry(0.13 * s, 11, 8), deepLeafMat);
+          cluster.scale.set(1.12, 0.76, 0.96);
+          cluster.position.set(dx, 0.58 + s * 0.08, dz);
+          group.add(cluster);
+        }
+        addBox(0.18, 0.026, 0.14, trunkMat, 0.02, 0.46, -0.02);
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.026, 9, 7), lightMat);
+        lantern.position.set(0.11, 0.48, -0.03);
+        group.add(lantern);
+        break;
+      }
+      case Landscapes.WHEAT: {
+        const woodMat = new THREE.MeshStandardMaterial({ color: 0x9a6635, roughness: 0.70, metalness: 0.04 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x7d3f22, roughness: 0.64, metalness: 0.08 });
+        const grainMat = new THREE.MeshStandardMaterial({ color: 0xf1c452, roughness: 0.70, metalness: 0.04, emissive: 0x3b2104, emissiveIntensity: 0.06 });
+        const paleMat = new THREE.MeshStandardMaterial({ color: 0xffe7a1, roughness: 0.58, metalness: 0.04 });
+        if (crowns >= 2) {
+          const tower = addCyl(0.060, 0.085, 0.34, 10, woodMat, 0, 0.22 + 0.17, 0);
+          tower.rotation.y = rand() * Math.PI;
+          const roof = new THREE.Mesh(new THREE.ConeGeometry(0.105, 0.095, 4), roofMat);
+          roof.rotation.y = Math.PI / 4;
+          roof.position.set(0, 0.62, 0);
+          group.add(roof);
+          const hub = new THREE.Mesh(new THREE.SphereGeometry(0.027, 9, 7), paleMat);
+          hub.position.set(0.065, 0.51, -0.072);
+          group.add(hub);
+          for (const [sx, sy, rz] of [[0.11, 0.014, 0], [0.014, 0.11, Math.PI / 2]]) {
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.010, sy), paleMat);
+            blade.position.copy(hub.position);
+            blade.rotation.y = -Math.PI / 4;
+            blade.rotation.z = rz;
+            group.add(blade);
+          }
+          addBox(0.17, 0.074, 0.12, grainMat, -0.16, 0.26, 0.09, 0.18);
+        } else {
+          addBox(0.24, 0.17, 0.20, woodMat, 0, 0.22 + 0.085, 0);
+          const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.12, 4), roofMat);
+          roof.rotation.y = Math.PI / 4;
+          roof.position.set(0, 0.44, 0);
+          group.add(roof);
+          for (const dx of [-0.07, 0.02]) {
+            addBox(0.07, 0.05, 0.10, grainMat, dx, 0.25, -0.16, -0.14 + rand() * 0.28);
+          }
+        }
+        break;
+      }
+      case Landscapes.WATER: {
+        const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe8eef1, roughness: 0.46, metalness: 0.08 });
+        const redMat = new THREE.MeshStandardMaterial({ color: 0xb83b35, roughness: 0.48, metalness: 0.10 });
+        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffec9d, roughness: 0.28, metalness: 0.28, emissive: 0xffc846, emissiveIntensity: 0.55 });
+        const dockMat = new THREE.MeshStandardMaterial({ color: 0x7a5637, roughness: 0.78, metalness: 0.03 });
+        addBox(0.34, 0.030, 0.10, dockMat, -0.04, 0.245, 0.15, 0.06);
+        for (const px of [-0.18, 0.06]) addCyl(0.010, 0.012, 0.10, 6, dockMat, px, 0.28, 0.15);
+        addCyl(0.052, 0.074, 0.32, 12, stoneMat, 0.02, 0.22 + 0.16, -0.03);
+        addCyl(0.054, 0.056, 0.035, 12, redMat, 0.02, 0.37, -0.03);
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(0.076, 0.080, 12), redMat);
+        roof.position.set(0.02, 0.60, -0.03);
+        group.add(roof);
+        const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 8), lightMat);
+        beacon.position.set(0.02, 0.53, -0.03);
+        group.add(beacon);
+        break;
+      }
+      case Landscapes.PASTURE: {
+        const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b623a, roughness: 0.76, metalness: 0.03 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x5f7940, roughness: 0.68, metalness: 0.04 });
+        const woolMat = new THREE.MeshStandardMaterial({ color: 0xfff8df, roughness: 0.82, metalness: 0.01 });
+        const trimMat = new THREE.MeshStandardMaterial({ color: 0xf4e7b0, roughness: 0.70, metalness: 0.02 });
+        if (crowns >= 2) {
+          addBox(0.25, 0.15, 0.20, trimMat, -0.02, 0.22 + 0.075, 0.02);
+          const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.11, 4), roofMat);
+          roof.rotation.y = Math.PI / 4;
+          roof.position.set(-0.02, 0.43, 0.02);
+          group.add(roof);
+        }
+        for (const z of [-0.15, 0.18]) {
+          addBox(0.42, 0.025, 0.018, woodMat, 0.00, 0.30, z);
+          for (const px of [-0.20, 0.20]) addCyl(0.010, 0.012, 0.12, 6, woodMat, px, 0.27, z);
+        }
+        const flock = crowns >= 2 ? [[0.18, 0.04, 1.0], [0.06, -0.14, 0.78], [-0.20, 0.12, 0.70]] : [[0.10, 0.02, 0.9], [-0.13, -0.08, 0.68]];
+        for (const [dx, dz, s] of flock) {
+          const sheep = new THREE.Mesh(new THREE.SphereGeometry(0.045 * s, 10, 7), woolMat);
+          sheep.scale.set(1.45, 0.70, 0.92);
+          sheep.position.set(dx, 0.285, dz);
+          group.add(sheep);
+        }
+        break;
+      }
+      case Landscapes.BOG: {
+        const plankMat = new THREE.MeshStandardMaterial({ color: 0x6b5332, roughness: 0.84, metalness: 0.03 });
+        const hutMat = new THREE.MeshStandardMaterial({ color: 0x4e365d, roughness: 0.78, metalness: 0.05, emissive: 0x17091f, emissiveIntensity: 0.10 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x8b7c48, roughness: 0.80, metalness: 0.03 });
+        const glowMat = new THREE.MeshStandardMaterial({ color: 0xece184, roughness: 0.28, metalness: 0.18, emissive: 0xe6d65a, emissiveIntensity: 0.48 });
+        for (let i = 0; i < 4; i++) {
+          addBox(0.23, 0.018, 0.055, plankMat, -0.20 + i * 0.13, 0.245, 0.16 + (i % 2) * 0.018, 0.22);
+        }
+        if (crowns >= 2) {
+          for (const [px, pz] of [[-0.11, -0.11], [0.12, -0.09], [-0.10, 0.10], [0.12, 0.12]]) {
+            addCyl(0.010, 0.014, 0.16, 6, plankMat, px, 0.29, pz);
+          }
+          addBox(0.25, 0.15, 0.22, hutMat, 0.01, 0.39, 0);
+          const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.10, 4), roofMat);
+          roof.rotation.y = Math.PI / 4 + 0.14;
+          roof.position.set(0.01, 0.525, 0);
+          group.add(roof);
+        } else {
+          addCyl(0.028, 0.038, 0.16, 7, hutMat, 0.02, 0.31, -0.04);
+        }
+        const lantern = new THREE.Mesh(new THREE.SphereGeometry(crowns >= 2 ? 0.034 : 0.027, 10, 8), glowMat);
+        lantern.position.set(0.17, crowns >= 2 ? 0.43 : 0.36, -0.09);
+        group.add(lantern);
+        break;
+      }
+      case Landscapes.MINE: {
+        const timberMat = new THREE.MeshStandardMaterial({ color: 0x704e31, roughness: 0.76, metalness: 0.04 });
+        const darkMat = new THREE.MeshStandardMaterial({ color: 0x05080d, roughness: 0.86, metalness: 0.06, emissive: 0x020305, emissiveIntensity: 0.12 });
+        const oreMat = new THREE.MeshStandardMaterial({ color: 0xf0bc4a, roughness: 0.34, metalness: 0.45, emissive: 0x6b3d08, emissiveIntensity: 0.22 });
+        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x89dbff, roughness: 0.25, metalness: 0.30, emissive: 0x1d526f, emissiveIntensity: crowns >= 3 ? 0.44 : 0.26 });
+        const stoneMat = new THREE.MeshStandardMaterial({ color: 0x526272, roughness: 0.70, metalness: 0.16 });
+        const entrance = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 8), darkMat);
+        entrance.scale.set(1.25, 0.88, 0.40);
+        entrance.position.set(-0.05, 0.31, -0.10);
+        group.add(entrance);
+        addBox(0.035, 0.24, 0.035, timberMat, -0.18, 0.34, -0.10);
+        addBox(0.035, 0.24, 0.035, timberMat, 0.08, 0.34, -0.10);
+        addBox(0.32, 0.035, 0.040, timberMat, -0.05, 0.46, -0.10);
+        if (crowns >= 2) {
+          addBox(0.030, 0.36, 0.030, timberMat, 0.17, 0.40, 0.06, 0.18);
+          addBox(0.030, 0.36, 0.030, timberMat, 0.00, 0.40, 0.18, -0.18);
+          addBox(0.24, 0.026, 0.026, timberMat, 0.08, 0.58, 0.12, 0.58);
+          const pulley = new THREE.Mesh(new THREE.TorusGeometry(0.040, 0.007, 8, 18), stoneMat);
+          pulley.position.set(0.20, 0.57, 0.02);
+          pulley.rotation.y = Math.PI / 2;
+          group.add(pulley);
+        }
+        const oreCount = crowns >= 3 ? 5 : crowns >= 2 ? 3 : 2;
+        for (let i = 0; i < oreCount; i++) {
+          const ore = new THREE.Mesh(new THREE.OctahedronGeometry(0.025 + rand() * 0.022, 0), rand() > 0.42 ? crystalMat : oreMat);
+          ore.position.set(-0.22 + rand() * 0.46, 0.26 + rand() * 0.07, 0.12 + rand() * 0.15);
+          ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+          group.add(ore);
+        }
+        if (crowns >= 3) {
+          const spire = new THREE.Mesh(new THREE.ConeGeometry(0.070, 0.36, 5), crystalMat);
+          spire.position.set(0.18, 0.22 + 0.18, 0.18);
+          spire.rotation.y = rand() * Math.PI;
+          group.add(spire);
+          addBox(0.18, 0.070, 0.13, stoneMat, -0.19, 0.27, 0.12, -0.22);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    this.#addTileObjects(group);
+  }
+
+  #addLandscapeDetail(tile, seedKey = '') {
     const x = tile.x;
     const y = tile.y;
     const landscape = tile.landscape;
-    const rand = this.#variationRand(tile, 'landscape');
+    const rand = this.#variationRand(tile, 'landscape', seedKey);
 
     switch (landscape) {
       case Landscapes.FOREST: {
         const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6d4c33, roughness: 0.75, metalness: 0.02 });
         const leafMat = new THREE.MeshStandardMaterial({ color: 0x236f3d, roughness: 0.68, metalness: 0.02 });
         const tipMat = new THREE.MeshStandardMaterial({ color: 0x55b56a, roughness: 0.66, metalness: 0.02 });
-        const treeCount = 2 + Math.floor(rand() * 3);
+        const underbrushMat = new THREE.MeshStandardMaterial({ color: 0x164c2c, roughness: 0.78, metalness: 0.02 });
+        const treeCount = 4 + Math.floor(rand() * 4);
         const trees = [];
         for (let i = 0; i < treeCount; i++) {
+          const spot = this.#detailSpot(rand, 0.34);
           trees.push({
-            dx: -0.2 + rand() * 0.4,
-            dz: -0.2 + rand() * 0.4,
+            dx: spot.dx,
+            dz: spot.dz,
             h: 0.13 + rand() * 0.08,
             cr: 0.06 + rand() * 0.04,
             ch: 0.12 + rand() * 0.08,
@@ -4044,118 +4906,367 @@ export class GameLayout extends HTMLElement {
             this.#addTileObjects(tip);
           }
         }
+        if (rand() > 0.28) {
+          const spot = this.#detailSpot(rand, 0.28);
+          const nurseLog = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.24, 8), trunkMat);
+          nurseLog.position.set(x + spot.dx, 0.25, y + spot.dz);
+          nurseLog.rotation.z = Math.PI / 2;
+          nurseLog.rotation.y = rand() * Math.PI * 2;
+          this.#addTileObjects(nurseLog);
+        }
+        for (let i = 0; i < 2; i++) {
+          const spot = this.#detailSpot(rand, 0.34);
+          const brush = new THREE.Mesh(new THREE.SphereGeometry(0.035 + rand() * 0.018, 8, 6), underbrushMat);
+          brush.scale.set(1.2 + rand() * 0.5, 0.45, 0.8 + rand() * 0.4);
+          brush.position.set(x + spot.dx, 0.24, y + spot.dz);
+          brush.rotation.y = rand() * Math.PI * 2;
+          this.#addTileObjects(brush);
+        }
         break;
       }
       case Landscapes.WHEAT: {
-        const stalkMat = new THREE.MeshStandardMaterial({ color: 0xf3d06d, roughness: 0.62, metalness: 0.04 });
-        const seedMat = new THREE.MeshStandardMaterial({ color: 0xc8852d, roughness: 0.66, metalness: 0.04 });
-        const stalkCount = 5 + Math.floor(rand() * 5);
-        for (let i = 0; i < stalkCount; i++) {
-          const dx = -0.2 + rand() * 0.4;
-          const dz = -0.2 + rand() * 0.4;
-          const h = 0.14 + rand() * 0.08;
-          const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, h, 6), stalkMat);
-          stalk.position.set(x + dx, 0.31, y + dz);
-          stalk.rotation.z = (-0.25 + rand() * 0.5);
-          stalk.rotation.y = rand() * Math.PI * 2;
-          this.#addTileObjects(stalk);
+        const stalkMat = new THREE.MeshStandardMaterial({ color: 0xf4c95b, roughness: 0.62, metalness: 0.04, emissive: 0x2f1b04, emissiveIntensity: 0.06 });
+        const paleStalkMat = new THREE.MeshStandardMaterial({ color: 0xffe59a, roughness: 0.58, metalness: 0.04, emissive: 0x382004, emissiveIntensity: 0.07 });
+        const seedMat = new THREE.MeshStandardMaterial({ color: 0xf0b33e, roughness: 0.62, metalness: 0.04, emissive: 0x4b2904, emissiveIntensity: 0.08 });
+        const darkSeedMat = new THREE.MeshStandardMaterial({ color: 0xc57925, roughness: 0.68, metalness: 0.03, emissive: 0x321804, emissiveIntensity: 0.05 });
+        const twineMat = new THREE.MeshStandardMaterial({ color: 0x7a4d24, roughness: 0.72, metalness: 0.02 });
+        const baleMat = new THREE.MeshStandardMaterial({ color: 0xdfaa3d, roughness: 0.74, metalness: 0.03, emissive: 0x321a03, emissiveIntensity: 0.05 });
+        const shadowMat = new THREE.MeshStandardMaterial({ color: 0xa76c25, roughness: 0.78, metalness: 0.02, transparent: true, opacity: 0.42 });
+        const fieldStyle = Math.floor(rand() * 3);
+        const rowAngle = -0.38 + rand() * 0.16;
+        const rowCos = Math.cos(rowAngle);
+        const rowSin = Math.sin(rowAngle);
+        const rows = fieldStyle === 0
+          ? [-0.31, -0.18, -0.05, 0.08, 0.21]
+          : fieldStyle === 1
+            ? [-0.28, -0.08, 0.12, 0.28]
+            : [-0.25, -0.15, -0.02, 0.11, 0.24];
 
-          const head = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.045, 6), seedMat);
-          head.position.set(x + dx, 0.31 + h * 0.56, y + dz);
-          head.rotation.z = stalk.rotation.z;
-          head.rotation.y = stalk.rotation.y;
-          this.#addTileObjects(head);
+        for (let i = 0; i < (fieldStyle === 1 ? 2 : 3); i++) {
+          const spot = this.#detailSpot(rand, 0.27);
+          const patch = new THREE.Mesh(new THREE.SphereGeometry(0.055 + rand() * 0.035, 10, 6), shadowMat);
+          patch.scale.set(1.8 + rand() * 0.8, 0.08, 0.65 + rand() * 0.35);
+          patch.position.set(x + spot.dx, 0.232, y + spot.dz);
+          patch.rotation.y = rowAngle + (-0.18 + rand() * 0.36);
+          this.#addTileObjects(patch);
+        }
+
+        for (const rowZ of rows) {
+          const clusterCount = (fieldStyle === 1 ? 3 : 4) + Math.floor(rand() * 2);
+          const rowOffset = -0.03 + rand() * 0.06;
+          for (let i = 0; i < clusterCount; i++) {
+            const spread = fieldStyle === 1 ? 0.40 : 0.50;
+            const along = -spread / 2 + i * (spread / Math.max(1, clusterCount - 1)) + (-0.030 + rand() * 0.060);
+            const lateral = rowOffset + (-0.035 + rand() * 0.070);
+            const dx = along * rowCos - lateral * rowSin;
+            const dz = rowZ + along * rowSin + lateral * rowCos;
+            if (dx > 0.13 && dz < -0.13) continue;
+
+            const h = 0.12 + rand() * (fieldStyle === 2 ? 0.13 : 0.10);
+            const lean = -0.26 + rand() * 0.52;
+            const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.010, h, 6), rand() > 0.55 ? paleStalkMat : stalkMat);
+            stalk.position.set(x + dx, 0.23 + h / 2, y + dz);
+            stalk.rotation.z = lean;
+            stalk.rotation.x = -0.08 + rand() * 0.16;
+            stalk.rotation.y = rowAngle + (-0.20 + rand() * 0.40);
+            this.#addTileObjects(stalk);
+
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.030, 8, 6), rand() > 0.25 ? seedMat : darkSeedMat);
+            head.scale.set(0.54, 1.55 + rand() * 0.35, 0.54);
+            head.position.set(x + dx + Math.sin(lean) * 0.025, 0.23 + h + 0.012, y + dz);
+            head.rotation.z = lean;
+            head.rotation.y = stalk.rotation.y;
+            this.#addTileObjects(head);
+
+            if (rand() > 0.48) {
+              for (const side of [-1, 1]) {
+                const awn = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.003, 0.055, 5), paleStalkMat);
+                awn.position.set(x + dx + side * 0.014, 0.23 + h + 0.040, y + dz);
+                awn.rotation.z = lean + side * 0.72;
+                awn.rotation.y = stalk.rotation.y;
+                this.#addTileObjects(awn);
+              }
+            }
+          }
+        }
+
+        if (rand() > 0.18) {
+          const spot = this.#detailSpot(rand, 0.24);
+          const baleStyle = Math.floor(rand() * 3);
+          const bale = new THREE.Group();
+          bale.position.set(x + spot.dx, 0.275, y + spot.dz);
+          bale.rotation.y = rowAngle + Math.PI * 0.12 + rand() * 0.35;
+
+          if (baleStyle === 0) {
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.075, 0.13), baleMat);
+            bale.add(body);
+            for (const bandX of [-0.055, 0.055]) {
+              const band = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.081, 0.137), twineMat);
+              band.position.set(bandX, 0.002, 0);
+              bale.add(band);
+            }
+            for (const strandZ of [-0.035, 0.0, 0.035]) {
+              const strand = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.006, 0.006), paleStalkMat);
+              strand.position.set(0, 0.041, strandZ);
+              bale.add(strand);
+            }
+          } else if (baleStyle === 1) {
+            for (let i = 0; i < 2; i++) {
+              const body = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.062, 0.11), baleMat);
+              body.position.set(-0.035 + i * 0.07, i * 0.035, -0.018 + i * 0.036);
+              body.rotation.y = -0.12 + i * 0.24;
+              bale.add(body);
+              const band = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.068, 0.116), twineMat);
+              band.position.copy(body.position);
+              band.rotation.y = body.rotation.y;
+              bale.add(band);
+            }
+          } else {
+            const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.16, 14), baleMat);
+            roll.rotation.z = Math.PI / 2;
+            bale.add(roll);
+            for (const xOffset of [-0.045, 0.045]) {
+              const ring = new THREE.Mesh(new THREE.TorusGeometry(0.067, 0.004, 8, 18), twineMat);
+              ring.position.set(xOffset, 0, 0);
+              ring.rotation.y = Math.PI / 2;
+              bale.add(ring);
+            }
+          }
+          this.#addTileObjects(bale);
         }
         break;
       }
       case Landscapes.WATER: {
-        const waveMat = new THREE.MeshStandardMaterial({
-          color: 0x3aa8c7,
-          roughness: 0.30,
-          metalness: 0.22,
+        const glintMat = new THREE.MeshBasicMaterial({
+          color: 0xcaf8ff,
           transparent: true,
-          opacity: 0.88,
-          emissive: 0x0c3040,
-          emissiveIntensity: 0.14,
+          opacity: 0.46,
         });
+        const shadowMat = new THREE.MeshStandardMaterial({
+          color: 0x0b587a,
+          roughness: 0.50,
+          metalness: 0.10,
+          transparent: true,
+          opacity: 0.38,
+        });
+        const fishBlueMat = new THREE.MeshStandardMaterial({ color: 0x174f72, roughness: 0.42, metalness: 0.16, emissive: 0x092536, emissiveIntensity: 0.08 });
+        const fishOrangeMat = new THREE.MeshStandardMaterial({ color: 0xffa13e, roughness: 0.45, metalness: 0.10, emissive: 0x5b2604, emissiveIntensity: 0.08 });
+        const fishPaleMat = new THREE.MeshStandardMaterial({ color: 0x9ae2f1, roughness: 0.38, metalness: 0.18, emissive: 0x103447, emissiveIntensity: 0.10 });
+        const turtleShellMat = new THREE.MeshStandardMaterial({ color: 0x3f7f60, roughness: 0.68, metalness: 0.04, emissive: 0x0b2c1c, emissiveIntensity: 0.05 });
+        const turtleBodyMat = new THREE.MeshStandardMaterial({ color: 0x79b684, roughness: 0.72, metalness: 0.03 });
 
-        const waveCount = 2 + Math.floor(rand() * 3);
-        for (let i = 0; i < waveCount; i++) {
-          const points = [];
-          const segments = 6;
-          const diagOffset = -0.18 + rand() * 0.36;
-          const amp = 0.015 + rand() * 0.022;
-          const phase = rand() * Math.PI * 2;
+        const waterStyle = Math.floor(rand() * 4);
+        const glintCount = waterStyle === 0 ? 0 : waterStyle === 1 ? 1 : 2;
+        for (let i = 0; i < glintCount; i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.32);
+          const glint = new THREE.Mesh(
+            createWaterShardGeometry(0.10 + rand() * 0.13, 0.024 + rand() * 0.026, rand),
+            glintMat
+          );
+          glint.position.set(x + dx, 0.239 + rand() * 0.012, y + dz);
+          glint.rotation.x = -Math.PI / 2;
+          glint.rotation.y = -0.52 + rand() * 1.04;
+          this.#addTileObjects(glint);
+        }
 
-          for (let s = 0; s <= segments; s++) {
-            const t = s / segments;
-            // Primarily horizontal sweep (left->right) with a slight diagonal slant.
-            const px = -0.24 + t * 0.48;
-            const slant = (t - 0.5) * 0.20;
-            const wobble = Math.sin((t * Math.PI * 2) + phase) * amp;
-            const pz = diagOffset + slant + wobble;
-            points.push(new THREE.Vector3(px, 0, pz));
+        const shadowCount = waterStyle === 3 ? 0 : 1 + Math.floor(rand() * 2);
+        for (let i = 0; i < shadowCount; i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.26);
+          const shadow = new THREE.Mesh(
+            createWaterShardGeometry(0.15 + rand() * 0.16, 0.060 + rand() * 0.050, rand),
+            shadowMat
+          );
+          shadow.position.set(x + dx, 0.231, y + dz);
+          shadow.rotation.x = -Math.PI / 2;
+          shadow.rotation.y = -0.55 + rand() * 1.10;
+          this.#addTileObjects(shadow);
+        }
+
+        if (rand() > 0.82) {
+          const { dx, dz } = this.#detailSpot(rand, 0.23);
+          this.#addWaterTurtle(x, y, dx, dz, rand() * Math.PI * 2, turtleShellMat, turtleBodyMat);
+        } else {
+          const fishCount = waterStyle === 2 ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 3);
+          for (let i = 0; i < fishCount; i++) {
+            const { dx, dz } = this.#detailSpot(rand, 0.30);
+            const bodyMat = i === 0 && rand() > 0.40
+              ? fishOrangeMat
+              : rand() > 0.55
+                ? fishPaleMat
+                : fishBlueMat;
+            const tailMat = bodyMat === fishBlueMat ? fishPaleMat : bodyMat;
+            this.#addWaterFish(x, y, dx, dz, rand() * Math.PI * 2, 0.82 + rand() * 0.46, bodyMat, tailMat);
           }
-
-          const curve = new THREE.CatmullRomCurve3(points);
-          const radius = 0.007 + rand() * 0.006;
-          const wave = new THREE.Mesh(new THREE.TubeGeometry(curve, 26, radius, 8, false), waveMat);
-          wave.position.set(x, 0.245 + rand() * 0.02, y);
-          wave.rotation.y = (rand() - 0.5) * 0.04;
-          this.#addTileObjects(wave);
         }
         break;
       }
       case Landscapes.PASTURE: {
-        const tuftMat = new THREE.MeshStandardMaterial({ color: 0x63b85f, roughness: 0.76, metalness: 0.02 });
-        const flowerMat = new THREE.MeshStandardMaterial({ color: 0xf5f7a6, roughness: 0.58, metalness: 0.02 });
-        const tuftCount = 3 + Math.floor(rand() * 4);
-        for (let i = 0; i < tuftCount; i++) {
-          const dx = -0.2 + rand() * 0.4;
-          const dz = -0.2 + rand() * 0.4;
-          const r = 0.04 + rand() * 0.03;
-          const tuft = new THREE.Mesh(new THREE.SphereGeometry(r, 9, 7), tuftMat);
-          tuft.scale.set(1.0, 0.65, 1.0);
-          tuft.position.set(x + dx, 0.24, y + dz);
-          tuft.rotation.y = rand() * Math.PI * 2;
-          this.#addTileObjects(tuft);
+        const grassMat = new THREE.MeshStandardMaterial({ color: 0x58b957, roughness: 0.78, metalness: 0.02 });
+        const darkGrassMat = new THREE.MeshStandardMaterial({ color: 0x337f3d, roughness: 0.82, metalness: 0.02 });
+        const cloverMat = new THREE.MeshStandardMaterial({ color: 0xd8f2a0, roughness: 0.68, metalness: 0.02 });
+        const flowerMat = new THREE.MeshStandardMaterial({ color: 0xfff0a6, roughness: 0.58, metalness: 0.02 });
+        const pinkFlowerMat = new THREE.MeshStandardMaterial({ color: 0xffbad5, roughness: 0.62, metalness: 0.02 });
+        const sheepMat = new THREE.MeshStandardMaterial({ color: 0xf1efe2, roughness: 0.76, metalness: 0.02 });
+        const woolMat = new THREE.MeshStandardMaterial({ color: 0xfffbe8, roughness: 0.82, metalness: 0.01 });
+        const sheepHeadMat = new THREE.MeshStandardMaterial({ color: 0x3f352e, roughness: 0.78, metalness: 0.02 });
 
-          if (rand() > 0.66) {
-            const flower = new THREE.Mesh(new THREE.SphereGeometry(0.018 + rand() * 0.01, 8, 6), flowerMat);
-            flower.scale.set(1, 0.45, 1);
-            flower.position.set(x + dx + rand() * 0.06 - 0.03, 0.285, y + dz + rand() * 0.06 - 0.03);
-            this.#addTileObjects(flower);
+        const tuftCount = 7 + Math.floor(rand() * 5);
+        for (let i = 0; i < tuftCount; i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.34);
+          const bladeCount = 3 + Math.floor(rand() * 4);
+          for (let b = 0; b < bladeCount; b++) {
+            const h = 0.045 + rand() * 0.060;
+            const blade = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.0035, 0.009, h, 5),
+              rand() > 0.35 ? grassMat : darkGrassMat
+            );
+            blade.position.set(
+              x + dx + rand() * 0.055 - 0.027,
+              0.226 + h / 2,
+              y + dz + rand() * 0.055 - 0.027
+            );
+            blade.rotation.x = -0.28 + rand() * 0.56;
+            blade.rotation.z = -0.28 + rand() * 0.56;
+            blade.rotation.y = rand() * Math.PI * 2;
+            this.#addTileObjects(blade);
           }
+
+          if (rand() > 0.54) {
+            const cloverGroup = new THREE.Group();
+            cloverGroup.position.set(x + dx + rand() * 0.050 - 0.025, 0.246, y + dz + rand() * 0.050 - 0.025);
+            cloverGroup.rotation.y = rand() * Math.PI * 2;
+            for (let leaf = 0; leaf < 3; leaf++) {
+              const a = (leaf / 3) * Math.PI * 2;
+              const pad = new THREE.Mesh(new THREE.SphereGeometry(0.018 + rand() * 0.006, 7, 5), cloverMat);
+              pad.scale.set(1.18, 0.20, 0.82);
+              pad.position.set(Math.cos(a) * 0.019, 0, Math.sin(a) * 0.019);
+              pad.rotation.y = a;
+              cloverGroup.add(pad);
+            }
+            this.#addTileObjects(cloverGroup);
+          }
+
+          if (rand() > 0.68) {
+            const flowerGroup = new THREE.Group();
+            flowerGroup.position.set(x + dx + rand() * 0.060 - 0.030, 0.258, y + dz + rand() * 0.060 - 0.030);
+            const blossom = new THREE.Mesh(
+              new THREE.SphereGeometry(0.014 + rand() * 0.008, 8, 6),
+              rand() > 0.35 ? flowerMat : pinkFlowerMat
+            );
+            blossom.scale.set(1.0, 0.46, 1.0);
+            flowerGroup.add(blossom);
+            this.#addTileObjects(flowerGroup);
+          }
+        }
+
+        const sheepCount = 2 + Math.floor(rand() * 3);
+        const sheepSpots = [];
+        for (let i = 0; i < sheepCount; i++) {
+          let spot = this.#detailSpot(rand, 0.27);
+          for (let attempt = 0; attempt < 14; attempt++) {
+            const tooClose = sheepSpots.some((other) => {
+              const dx = other.dx - spot.dx;
+              const dz = other.dz - spot.dz;
+              return Math.hypot(dx, dz) < 0.145;
+            });
+            if (!tooClose) break;
+            spot = this.#detailSpot(rand, 0.30);
+          }
+          sheepSpots.push(spot);
+          const scale = (i === 0 ? 1.02 : 0.78) + rand() * 0.22;
+          this.#addPastureSheep(x, y, spot.dx, spot.dz, rand() * Math.PI * 2, scale, sheepMat, woolMat, sheepHeadMat);
         }
         break;
       }
       case Landscapes.BOG: {
-        const muckMat = new THREE.MeshStandardMaterial({ color: 0x3c244f, roughness: 0.82, metalness: 0.04 });
-        const mossMat = new THREE.MeshStandardMaterial({ color: 0x9b9854, roughness: 0.78, metalness: 0.03 });
-        const puddleCount = 3 + Math.floor(rand() * 2);
+        const muckMat = new THREE.MeshStandardMaterial({ color: 0x3c284d, roughness: 0.84, metalness: 0.04, emissive: 0x15091f, emissiveIntensity: 0.08 });
+        const poolMat = new THREE.MeshStandardMaterial({ color: 0x3a2449, roughness: 0.58, metalness: 0.08, emissive: 0x15091f, emissiveIntensity: 0.12, transparent: true, opacity: 0.92 });
+        const mossMat = new THREE.MeshStandardMaterial({ color: 0xaaa55c, roughness: 0.78, metalness: 0.03 });
+        const darkMossMat = new THREE.MeshStandardMaterial({ color: 0x5f6b3c, roughness: 0.82, metalness: 0.02 });
+        const reedMat = new THREE.MeshStandardMaterial({ color: 0x7c7f3e, roughness: 0.74, metalness: 0.02 });
+        const cattailMat = new THREE.MeshStandardMaterial({ color: 0x5b3c23, roughness: 0.72, metalness: 0.02 });
+        const lilyMat = new THREE.MeshStandardMaterial({ color: 0x8fae58, roughness: 0.72, metalness: 0.02 });
+        const fungusStemMat = new THREE.MeshStandardMaterial({ color: 0xd6caa2, roughness: 0.76, metalness: 0.02 });
+        const fungusCapMat = new THREE.MeshStandardMaterial({ color: 0xb889c9, roughness: 0.64, metalness: 0.03, emissive: 0x2a123c, emissiveIntensity: 0.08 });
+        const glowMat = new THREE.MeshBasicMaterial({ color: 0xe6df8d, transparent: true, opacity: 0.74 });
+        const puddleCount = 3 + Math.floor(rand() * 3);
         for (let i = 0; i < puddleCount; i++) {
-          const dx = -0.2 + rand() * 0.4;
-          const dz = -0.2 + rand() * 0.4;
-          const r = 0.045 + rand() * 0.05;
-          const puddle = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 7), muckMat);
-          puddle.scale.set(1.0 + rand() * 0.4, 0.22 + rand() * 0.12, 1.0 + rand() * 0.3);
-          puddle.position.set(x + dx, 0.22, y + dz);
+          const { dx, dz } = this.#detailSpot(rand, 0.34);
+          const r = 0.056 + rand() * 0.056;
+          const puddle = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 7), rand() > 0.34 ? poolMat : muckMat);
+          puddle.scale.set(1.22 + rand() * 0.42, 0.08 + rand() * 0.07, 0.68 + rand() * 0.36);
+          puddle.position.set(x + dx, 0.224, y + dz);
           puddle.rotation.y = rand() * Math.PI * 2;
           this.#addTileObjects(puddle);
 
-          if (rand() > 0.38) {
-            const moss = new THREE.Mesh(new THREE.SphereGeometry(0.024 + rand() * 0.018, 8, 6), mossMat);
-            moss.scale.set(1.3 + rand() * 0.5, 0.22, 0.8 + rand() * 0.4);
-            moss.position.set(x + dx + rand() * 0.12 - 0.06, 0.255, y + dz + rand() * 0.12 - 0.06);
+          if (rand() > 0.30) {
+            const moss = new THREE.Mesh(new THREE.SphereGeometry(0.030 + rand() * 0.024, 9, 6), rand() > 0.50 ? mossMat : darkMossMat);
+            moss.scale.set(1.35 + rand() * 0.65, 0.16, 0.72 + rand() * 0.44);
+            moss.position.set(x + dx + rand() * 0.14 - 0.07, 0.246, y + dz + rand() * 0.14 - 0.07);
             moss.rotation.y = rand() * Math.PI * 2;
             this.#addTileObjects(moss);
+          }
+        }
+        const reedCount = 5 + Math.floor(rand() * 5);
+        for (let i = 0; i < reedCount; i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.33);
+          const h = 0.13 + rand() * 0.12;
+          const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, h, 6), reedMat);
+          reed.position.set(x + dx, 0.24 + h / 2, y + dz);
+          reed.rotation.z = -0.18 + rand() * 0.36;
+          this.#addTileObjects(reed);
+
+          if (rand() > 0.45) {
+            const cattail = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.011, 0.042, 8), cattailMat);
+            cattail.position.set(x + dx, 0.25 + h, y + dz);
+            cattail.rotation.z = reed.rotation.z;
+            this.#addTileObjects(cattail);
+          }
+        }
+        for (let i = 0; i < 2 + Math.floor(rand() * 2); i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.28);
+          const pad = new THREE.Mesh(new THREE.SphereGeometry(0.036 + rand() * 0.026, 10, 6), lilyMat);
+          pad.scale.set(1.34, 0.10, 0.80);
+          pad.position.set(x + dx, 0.246, y + dz);
+          pad.rotation.y = rand() * Math.PI * 2;
+          this.#addTileObjects(pad);
+        }
+        if (rand() > 0.18) {
+          const mushroomCount = 1 + Math.floor(rand() * 3);
+          for (let i = 0; i < mushroomCount; i++) {
+            const { dx, dz } = this.#detailSpot(rand, 0.27);
+            const h = 0.040 + rand() * 0.032;
+            const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.013, h, 7), fungusStemMat);
+            stem.position.set(x + dx, 0.235 + h / 2, y + dz);
+            stem.rotation.z = -0.10 + rand() * 0.20;
+            this.#addTileObjects(stem);
+
+            const cap = new THREE.Mesh(new THREE.SphereGeometry(0.026 + rand() * 0.016, 9, 6), fungusCapMat);
+            cap.scale.set(1.18, 0.42, 0.92);
+            cap.position.set(x + dx, 0.245 + h, y + dz);
+            cap.rotation.y = rand() * Math.PI * 2;
+            this.#addTileObjects(cap);
+          }
+        }
+        if (rand() > 0.34) {
+          const glowCount = 1 + Math.floor(rand() * 3);
+          for (let i = 0; i < glowCount; i++) {
+            const { dx, dz } = this.#detailSpot(rand, 0.25);
+            const glow = new THREE.Mesh(new THREE.SphereGeometry(0.012 + rand() * 0.007, 8, 6), glowMat);
+            glow.position.set(x + dx, 0.36 + rand() * 0.08, y + dz);
+            this.#addTileObjects(glow);
           }
         }
         break;
       }
       case Landscapes.MINE: {
-        const rockMat = new THREE.MeshStandardMaterial({ color: 0x566371, roughness: 0.72, metalness: 0.12 });
-        const darkRockMat = new THREE.MeshStandardMaterial({ color: 0x202b36, roughness: 0.76, metalness: 0.10 });
+        const rockMat = new THREE.MeshStandardMaterial({ color: 0x657484, roughness: 0.72, metalness: 0.12 });
+        const slateMat = new THREE.MeshStandardMaterial({ color: 0x485867, roughness: 0.70, metalness: 0.14 });
+        const darkRockMat = new THREE.MeshStandardMaterial({ color: 0x192431, roughness: 0.76, metalness: 0.10 });
+        const caveMat = new THREE.MeshStandardMaterial({ color: 0x070b10, roughness: 0.86, metalness: 0.04, emissive: 0x020305, emissiveIntensity: 0.10 });
+        const railMat = new THREE.MeshStandardMaterial({ color: 0x6a4b32, roughness: 0.76, metalness: 0.04 });
+        const cartMat = new THREE.MeshStandardMaterial({ color: 0x655142, roughness: 0.62, metalness: 0.18 });
+        const oreGoldMat = new THREE.MeshStandardMaterial({ color: 0xf0bc4a, roughness: 0.34, metalness: 0.42, emissive: 0x6b3d08, emissiveIntensity: 0.16 });
         const crystalMat = new THREE.MeshStandardMaterial({
           color: 0x89dbff,
           emissive: 0x1d526f,
@@ -4163,24 +5274,63 @@ export class GameLayout extends HTMLElement {
           roughness: 0.28,
           metalness: 0.26,
         });
-        const rockCount = 3 + Math.floor(rand() * 3);
-        for (let i = 0; i < rockCount; i++) {
-          const r = {
-            dx: -0.2 + rand() * 0.4,
-            dz: -0.2 + rand() * 0.4,
-            s: 0.05 + rand() * 0.05,
-          };
-          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r.s, 0), rand() > 0.45 ? rockMat : darkRockMat);
-          rock.position.set(x + r.dx, 0.25 + r.s * 0.4, y + r.dz);
+
+        const ridgeCount = 3 + Math.floor(rand() * 2);
+        for (let i = 0; i < ridgeCount; i++) {
+          const { dx, dz } = this.#detailSpot(rand, 0.27);
+          const height = 0.18 + rand() * 0.19;
+          const radius = 0.086 + rand() * 0.060;
+          const sides = rand() > 0.50 ? 4 : 5;
+          const ridge = new THREE.Mesh(
+            new THREE.ConeGeometry(radius, height, sides),
+            rand() > 0.42 ? slateMat : rockMat
+          );
+          ridge.position.set(x + dx, 0.22 + height / 2, y + dz);
+          ridge.rotation.y = rand() * Math.PI * 2;
+          this.#addTileObjects(ridge);
+
+          if (rand() > 0.38) {
+            const seamMat = rand() > 0.52 ? crystalMat : oreGoldMat;
+            const seam = new THREE.Mesh(new THREE.BoxGeometry(0.016, height * 0.36, 0.010), seamMat);
+            const seamAngle = ridge.rotation.y + (-0.36 + rand() * 0.72);
+            seam.position.set(
+              x + dx + Math.cos(seamAngle) * radius * 0.46,
+              0.23 + height * 0.48,
+              y + dz + Math.sin(seamAngle) * radius * 0.46
+            );
+            seam.rotation.y = seamAngle;
+            seam.rotation.z = -0.16 + rand() * 0.32;
+            this.#addTileObjects(seam);
+          }
+        }
+
+        const caveSpot = this.#detailSpot(rand, 0.21);
+        const cave = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 7), caveMat);
+        cave.scale.set(1.44, 0.18, 0.88);
+        cave.position.set(x + caveSpot.dx, 0.242, y + caveSpot.dz);
+        cave.rotation.y = rand() * Math.PI * 2;
+        this.#addTileObjects(cave);
+
+        const rubbleCount = 3 + Math.floor(rand() * 4);
+        for (let i = 0; i < rubbleCount; i++) {
+          const spot = this.#detailSpot(rand, 0.34);
+          const size = 0.026 + rand() * 0.034;
+          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), rand() > 0.52 ? rockMat : darkRockMat);
+          rock.position.set(x + spot.dx, 0.238 + size * 0.55, y + spot.dz);
           rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
           this.#addTileObjects(rock);
 
-          if (rand() > 0.62) {
-            const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(r.s * 0.48, 0), crystalMat);
-            crystal.position.set(x + r.dx + rand() * 0.06 - 0.03, 0.30 + r.s * 0.8, y + r.dz + rand() * 0.06 - 0.03);
-            crystal.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-            this.#addTileObjects(crystal);
+          if (rand() > 0.70) {
+            const ore = new THREE.Mesh(new THREE.OctahedronGeometry(size * 0.44, 0), rand() > 0.45 ? crystalMat : oreGoldMat);
+            ore.position.set(x + spot.dx + rand() * 0.045 - 0.022, 0.275 + size * 0.65, y + spot.dz + rand() * 0.045 - 0.022);
+            ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            this.#addTileObjects(ore);
           }
+        }
+
+        if (rand() > 0.16) {
+          const cartSpot = this.#detailSpot(rand, 0.20);
+          this.#addMineCart(x, y, cartSpot.dx, cartSpot.dz, -0.45 + rand() * 0.9, railMat, cartMat, darkRockMat, oreGoldMat, rand);
         }
         break;
       }
@@ -4284,201 +5434,6 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #crownAnchor(tile, board) {
-    const n = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ];
-    const same = [];
-    for (const [dx, dy] of n) {
-      const other = board[keyOf(tile.x + dx, tile.y + dy)];
-      if (!other) continue;
-      if (other.landscape !== tile.landscape) continue;
-      same.push(other);
-    }
-    if (same.length === 1) {
-      const m = same[0];
-      return { x: (tile.x + m.x) / 2, y: (tile.y + m.y) / 2 };
-    }
-    return { x: tile.x, y: tile.y };
-  }
-
-  #addCrownDetail(tile, board) {
-    const x = tile.x;
-    const y = tile.y;
-    const crowns = tile.crowns || 0;
-    const tier = Math.max(1, Math.min(3, crowns));
-    const rand = this.#variationRand(tile, 'crown');
-    const anchor = this.#crownAnchor(tile, board);
-    const bx = anchor.x;
-    const by = anchor.y;
-
-    const style = Math.floor(rand() * 4);
-    const prominence = 1.18 + tier * 0.08;
-
-    let theme = {
-      base: 0x9b8452,
-      accent: 0xffd46e,
-      stone: 0xc9ced6,
-      emissiveAccent: 0x4a3210,
-      emissiveStone: 0x1a1e24,
-    };
-    switch (tile.landscape) {
-      case Landscapes.FOREST:
-        theme = { base: 0x6f5233, accent: 0x7ed086, stone: 0x9fb6a3, emissiveAccent: 0x1f4328, emissiveStone: 0x172a1b };
-        break;
-      case Landscapes.WHEAT:
-        theme = { base: 0x9f7440, accent: 0xffdc7a, stone: 0xd6caa4, emissiveAccent: 0x5a3c16, emissiveStone: 0x302514 };
-        break;
-      case Landscapes.WATER:
-        theme = { base: 0x3d6b7a, accent: 0x7bd9ff, stone: 0x9ec1cf, emissiveAccent: 0x13354a, emissiveStone: 0x182630 };
-        break;
-      case Landscapes.PASTURE:
-        theme = { base: 0x62834c, accent: 0xb8ef8e, stone: 0xbfd7ac, emissiveAccent: 0x2f4f22, emissiveStone: 0x24301f };
-        break;
-      case Landscapes.BOG:
-        theme = { base: 0x5a4768, accent: 0xc7a3ff, stone: 0xaea0bf, emissiveAccent: 0x31224d, emissiveStone: 0x251f33 };
-        break;
-      case Landscapes.MINE:
-        theme = { base: 0x6f767d, accent: 0x9be2ff, stone: 0xc4ccd4, emissiveAccent: 0x233f52, emissiveStone: 0x20262d };
-        break;
-    }
-
-    const plinth = new THREE.Mesh(
-      new THREE.CylinderGeometry((0.11 + rand() * 0.03) * prominence, (0.13 + rand() * 0.03) * prominence, (0.08 + rand() * 0.03) * prominence, 12),
-      new THREE.MeshStandardMaterial({ color: theme.base, roughness: 0.58, metalness: 0.14 })
-    );
-    plinth.position.set(bx, 0.29, by);
-    plinth.rotation.y = rand() * Math.PI * 2;
-    this.#addTileObjects(plinth);
-
-    const gold = new THREE.MeshStandardMaterial({
-      color: theme.accent,
-      roughness: 0.30,
-      metalness: 0.80,
-      emissive: theme.emissiveAccent,
-      emissiveIntensity: 0.18,
-    });
-
-    const stone = new THREE.MeshStandardMaterial({
-      color: theme.stone,
-      roughness: 0.48,
-      metalness: 0.16,
-      emissive: theme.emissiveStone,
-      emissiveIntensity: 0.10,
-    });
-
-    if (style === 0) {
-      // Classic crown monument.
-      const ringR = (0.10 + rand() * 0.04) * prominence;
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, (0.028 + rand() * 0.01) * prominence, 10, 24), gold);
-      ring.rotation.x = Math.PI / 2;
-      ring.rotation.z = rand() * Math.PI;
-      ring.position.set(bx, 0.37, by);
-      this.#addTileObjects(ring);
-
-      const spikeGeom = new THREE.ConeGeometry((0.028 + rand() * 0.012) * prominence, (0.09 + tier * 0.02 + rand() * 0.02) * prominence, 8);
-      const spikeCount = 4 + tier + Math.floor(rand() * 2);
-      const phase = rand() * Math.PI * 2;
-      for (let i = 0; i < spikeCount; i++) {
-        const a = phase + (i / spikeCount) * Math.PI * 2;
-        const s = new THREE.Mesh(spikeGeom, gold);
-        const rr = ringR - 0.01 + rand() * 0.02;
-        s.position.set(bx + Math.cos(a) * rr, 0.45 + tier * 0.012 + rand() * 0.01, by + Math.sin(a) * rr);
-        s.rotation.y = a;
-        this.#addTileObjects(s);
-      }
-    } else if (style === 1) {
-      // Mini tower.
-      const bodyH = (0.22 + tier * 0.04) * prominence;
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * prominence, 0.10 * prominence, bodyH, 10), stone);
-      body.position.set(bx, 0.32 + bodyH / 2, by);
-      this.#addTileObjects(body);
-
-      const roofH = (0.14 + tier * 0.02) * prominence;
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.13 * prominence, roofH, 8), gold);
-      roof.position.set(bx, 0.32 + bodyH + roofH * 0.45, by);
-      roof.rotation.y = rand() * Math.PI * 2;
-      this.#addTileObjects(roof);
-    } else if (style === 2) {
-      // Shrine gate.
-      const beamMat = new THREE.MeshStandardMaterial({ color: theme.base, roughness: 0.58, metalness: 0.10, emissive: theme.emissiveStone, emissiveIntensity: 0.06 });
-      const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.035 * prominence, 0.19 * prominence, 0.035 * prominence), beamMat);
-      const p2 = p1.clone();
-      p1.position.set(bx - 0.09 * prominence, 0.38, by);
-      p2.position.set(bx + 0.09 * prominence, 0.38, by);
-      this.#addTileObjects(p1, p2);
-      const top = new THREE.Mesh(new THREE.BoxGeometry(0.24 * prominence, 0.035 * prominence, 0.05 * prominence), gold);
-      top.position.set(bx, 0.49, by);
-      this.#addTileObjects(top);
-    } else {
-      // Obelisk.
-      const obH = (0.26 + tier * 0.05) * prominence;
-      const ob = new THREE.Mesh(new THREE.ConeGeometry(0.065 * prominence, obH, 4), stone);
-      ob.position.set(bx, 0.30 + obH / 2, by);
-      ob.rotation.y = rand() * Math.PI * 2;
-      this.#addTileObjects(ob);
-
-      const cap = new THREE.Mesh(new THREE.OctahedronGeometry((0.032 + tier * 0.006) * prominence, 0), gold);
-      cap.position.set(bx, 0.30 + obH + 0.05 * prominence, by);
-      this.#addTileObjects(cap);
-    }
-
-    // Landscape-themed ornament near the monument base.
-    if (tile.landscape === Landscapes.WATER) {
-      const wave = new THREE.Mesh(
-        new THREE.TorusGeometry(0.08 * prominence, 0.008 * prominence, 8, 20),
-        new THREE.MeshStandardMaterial({ color: theme.accent, roughness: 0.30, metalness: 0.30, emissive: theme.emissiveAccent, emissiveIntensity: 0.20 })
-      );
-      wave.rotation.x = Math.PI / 2;
-      wave.position.set(bx, 0.33, by);
-      this.#addTileObjects(wave);
-    } else if (tile.landscape === Landscapes.FOREST) {
-      const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.04 * prominence, 0.08 * prominence, 7), new THREE.MeshStandardMaterial({ color: theme.accent, roughness: 0.62, metalness: 0.08 }));
-      leaf.position.set(bx + 0.1 * prominence, 0.36, by - 0.02 * prominence);
-      this.#addTileObjects(leaf);
-    } else if (tile.landscape === Landscapes.MINE) {
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.025 * prominence, 0), new THREE.MeshStandardMaterial({ color: theme.accent, emissive: theme.emissiveAccent, emissiveIntensity: 0.22, roughness: 0.2, metalness: 0.28 }));
-      crystal.position.set(bx - 0.09 * prominence, 0.37, by + 0.03 * prominence);
-      this.#addTileObjects(crystal);
-    }
-
-    if (tier >= 2) {
-      const jewel = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.045 * prominence, 0),
-        new THREE.MeshStandardMaterial({
-          color: tier >= 3 ? 0x9ae0ff : 0xff8ec0,
-          emissive: tier >= 3 ? 0x1f3c5a : 0x4a1731,
-          emissiveIntensity: 0.32,
-          roughness: 0.18,
-          metalness: 0.34,
-        })
-      );
-      jewel.position.set(bx + (-0.015 + rand() * 0.03), 0.47 + tier * 0.01 + rand() * 0.01, by + (-0.015 + rand() * 0.03));
-      jewel.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-      this.#addTileObjects(jewel);
-
-      if (tier >= 3) {
-        const sideJewel = new THREE.Mesh(
-          new THREE.OctahedronGeometry((0.028 + rand() * 0.01) * prominence, 0),
-          new THREE.MeshStandardMaterial({
-            color: 0x8ef5cf,
-            emissive: 0x1e4a3d,
-            emissiveIntensity: 0.28,
-            roughness: 0.20,
-            metalness: 0.30,
-          })
-        );
-        const a = rand() * Math.PI * 2;
-        const rr = 0.10 + rand() * 0.04;
-        sideJewel.position.set(bx + Math.cos(a) * rr, 0.44 + rand() * 0.02, by + Math.sin(a) * rr);
-        this.#addTileObjects(sideJewel);
-      }
-    }
-  }
-
   #getTileTexture(landscape, crowns, seedKey) {
     const key = `${landscapeKey(landscape)}|${crowns}|${seedKey}`;
     const cached = this.#tileTextureCache.get(key);
@@ -4524,17 +5479,34 @@ export class GameLayout extends HTMLElement {
   #syncGridPresentation() {
     if (!this.#gridHelper) return;
     const placement = this.#game?.state === GameState.PLACE && !this.#game?.isGameOver;
+    const library = this.#libraryOpen;
     const materials = Array.isArray(this.#gridHelper.material)
       ? this.#gridHelper.material
       : [this.#gridHelper.material];
     for (const material of materials) {
       material.transparent = true;
-      material.opacity = placement ? 0.08 : 0.12;
+      material.opacity = library ? 0.035 : placement ? 0.08 : 0.12;
       material.needsUpdate = true;
     }
   }
 
   #syncBoardLayerPositions() {
+    if (this.#libraryOpen) {
+      if (this.#gridHelper) {
+        this.#gridHelper.position.x = 0;
+        this.#gridHelper.position.z = 0;
+      }
+      if (this.#ghostGroup) {
+        this.#ghostGroup.position.x = 0;
+        this.#ghostGroup.position.z = 0;
+      }
+      if (this.#regionOverlayGroup) {
+        this.#regionOverlayGroup.position.x = 0;
+        this.#regionOverlayGroup.position.z = 0;
+      }
+      return;
+    }
+
     const focused = this.#focusedBoardOrigin();
     const placement = this.#placementBoardOrigin();
     if (this.#gridHelper) {
@@ -4552,6 +5524,10 @@ export class GameLayout extends HTMLElement {
   }
 
   #centerOnActiveBoard(animate = false) {
+    if (this.#libraryOpen) {
+      this.#centerOnDominoLibrary(animate);
+      return;
+    }
     if (!this.#controls || !this.#camera) return;
 
     const activeIdx = this.#game.state === GameState.PLACE
@@ -4565,10 +5541,30 @@ export class GameLayout extends HTMLElement {
   }
 
   #centerOnFocusedBoard(animate = false) {
+    if (this.#libraryOpen) {
+      this.#centerOnDominoLibrary(animate);
+      return;
+    }
     if (!this.#game?.players?.length) return;
     const idx = Math.max(0, Math.min(this.#focusedPlayerIndex, this.#game.players.length - 1));
     const bs = this.#game.players[idx].board.boardSize;
     this.#frameToBoardSize(bs, 2, this.#boardOriginForPlayer(idx), animate);
+  }
+
+  #centerOnDominoLibrary(animate = false) {
+    const deck = DominoPoolManager.getStartingDominoPool();
+    const cols = 6;
+    const cellX = 2.55;
+    const cellZ = 1.55;
+    const rows = Math.ceil(deck.length / cols);
+    const xOffset = -((cols - 1) * cellX + 1) / 2;
+    const zOffset = -((rows - 1) * cellZ) / 2;
+    this.#frameToBoardSize({
+      xMin: xOffset - 0.72,
+      xMax: xOffset + (cols - 1) * cellX + 1.72,
+      yMin: zOffset - 0.82,
+      yMax: zOffset + (rows - 1) * cellZ + 0.82,
+    }, 0.35, { x: 0, z: 0 }, animate);
   }
 
   #ensureMiniMaps() {
@@ -5241,6 +6237,7 @@ export class GameLayout extends HTMLElement {
   #renderGhost() {
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
     this.#syncBoardLayerPositions();
+    if (this.#libraryOpen) return;
 
     const g = this.#game;
     const activeIdx = g.currentPlacingPlayerIndex;
@@ -5318,15 +6315,7 @@ export class GameLayout extends HTMLElement {
       this.#ghostGroup.add(edge);
 
       if ((crowns || 0) > 0) {
-        const star = createTextSprite(crownsText(crowns), {
-          font: '700 46px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-          fillStyle: '#f5cc51',
-          background: 'rgba(25,28,34,0.78)',
-          border: 'rgba(255,255,255,0.28)',
-        });
-        star.position.set(x, 0.34, y);
-        star.scale.set(0.30, 0.30, 1);
-        this.#ghostGroup.add(star);
+        this.#addCrownStars(x, y, crowns, { target: this.#ghostGroup, ghost: true });
       }
     };
 

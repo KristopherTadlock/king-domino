@@ -85,6 +85,13 @@ export class DominoPoolManager {
      * Get the starting pool of dominos
      */
     #getStartingDominoPool() {
+        return DominoPoolManager.getStartingDominoPool();
+    }
+
+    /**
+     * @returns {Domino[]} returns a fresh ordered copy of the complete domino deck
+     */
+    static getStartingDominoPool() {
         return dominosRaw.map((dominoRaw) =>
             new Domino(
                 new DominoTile(dominoRaw.left.type, dominoRaw.left.crowns),
