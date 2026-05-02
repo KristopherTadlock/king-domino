@@ -921,6 +921,9 @@ export class GameLayout extends HTMLElement {
   /** @type {string | null} */
   #libraryFilter = null;
 
+  /** @type {number | null} */
+  #libraryFocusedDominoNumber = null;
+
   /** @type {THREE.WebGLRenderer} */
   #renderer;
   /** @type {THREE.Scene} */
@@ -3627,13 +3630,18 @@ export class GameLayout extends HTMLElement {
   }
 
   #onPointerDown(e) {
-    if (this.#libraryOpen) return;
     // Prevent browser panning/zooming the page when interacting with the board.
     if (e.pointerType === 'touch') e.preventDefault();
     try {
       this.#renderer.domElement.setPointerCapture(e.pointerId);
     } catch {
       // ignore
+    }
+
+    if (this.#libraryOpen) {
+      if (e.pointerType === 'touch') this.#activeTouchPointerId = e.pointerId;
+      this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
+      return;
     }
 
     if (!this.#isMyTurnToPlace()) return;
@@ -3648,8 +3656,33 @@ export class GameLayout extends HTMLElement {
   }
 
   #onPointerUp(e) {
-    if (this.#libraryOpen) return;
     if (e.pointerType === 'touch') e.preventDefault();
+    if (this.#libraryOpen) {
+      if (e.pointerType === 'touch' && this.#activeTouchPointerId != null && this.#activeTouchPointerId !== e.pointerId) {
+        return;
+      }
+
+      const start = this.#pointerDown;
+      this.#pointerDown = null;
+      if (!start) {
+        if (e.pointerType === 'touch') this.#resetTouchInteraction();
+        return;
+      }
+
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      const dist2 = dx * dx + dy * dy;
+      const dt = performance.now() - start.t;
+      const TAP_DIST2 = e.pointerType === 'touch' ? 9 * 9 : 20 * 20;
+      const TAP_MS = 350;
+      const isTap = e.pointerType === 'touch'
+        ? dist2 <= TAP_DIST2 && dt <= TAP_MS
+        : dist2 <= TAP_DIST2;
+      if (isTap) this.#handleLibraryTap(e.clientX, e.clientY);
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
     if (!this.#isMyTurnToPlace()) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
@@ -3715,6 +3748,13 @@ export class GameLayout extends HTMLElement {
   }
 
   #gridFromClient(clientX, clientY) {
+    const p = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!p) return null;
+    const origin = this.#placementBoardOrigin();
+    return { x: Math.round(p.x - origin.x), y: Math.round(p.z - origin.z) };
+  }
+
+  #boardPlanePointFromClient(clientX, clientY) {
     const rect = this.#renderer.domElement.getBoundingClientRect();
     const w = rect.width || 1;
     const h = rect.height || 1;
@@ -3723,9 +3763,7 @@ export class GameLayout extends HTMLElement {
     this.#raycaster.setFromCamera(this.#pointer, this.#camera);
     const hits = this.#raycaster.intersectObject(this.#boardPlane);
     if (!hits.length) return null;
-    const p = hits[0].point;
-    const origin = this.#placementBoardOrigin();
-    return { x: Math.round(p.x - origin.x), y: Math.round(p.z - origin.z) };
+    return hits[0].point;
   }
 
   #trySelectPlacementAnchor(grid, { localize = false, showError = false, render = false, auto = false } = {}) {
@@ -3811,7 +3849,10 @@ export class GameLayout extends HTMLElement {
 
   #setLibraryOpen(open) {
     this.#libraryOpen = Boolean(open);
-    if (!this.#libraryOpen) this.#libraryFilter = null;
+    if (!this.#libraryOpen) {
+      this.#libraryFilter = null;
+      this.#libraryFocusedDominoNumber = null;
+    }
     this.#moreOpen = this.#libraryOpen ? true : this.#moreOpen;
     this.#hoverAnchor = null;
     this.#localPlacementFocus = null;
@@ -3832,8 +3873,87 @@ export class GameLayout extends HTMLElement {
 
   #setLibraryFilter(kind) {
     this.#libraryFilter = this.#libraryFilter === kind ? null : kind;
+    this.#libraryFocusedDominoNumber = null;
     this.#renderBoard();
+    this.#centerOnDominoLibrary(true);
     this.#refreshHud();
+  }
+
+  #dominoLibraryLayout() {
+    const deck = DominoPoolManager.getStartingDominoPool();
+    const cols = 6;
+    const cellX = 2.55;
+    const cellZ = 1.55;
+    const rows = Math.ceil(deck.length / cols);
+    const xOffset = -((cols - 1) * cellX + 1) / 2;
+    const zOffset = -((rows - 1) * cellZ) / 2;
+    return { deck, cols, cellX, cellZ, rows, xOffset, zOffset };
+  }
+
+  #dominoLibraryPlacement(index, layout = this.#dominoLibraryLayout()) {
+    const col = index % layout.cols;
+    const row = Math.floor(index / layout.cols);
+    return {
+      baseX: layout.xOffset + col * layout.cellX,
+      baseZ: layout.zOffset + row * layout.cellZ,
+    };
+  }
+
+  #dominoLibraryPlacementByNumber(number) {
+    const layout = this.#dominoLibraryLayout();
+    const index = layout.deck.findIndex((domino) => domino.number === number);
+    if (index < 0) return null;
+    return { ...this.#dominoLibraryPlacement(index, layout), domino: layout.deck[index], layout };
+  }
+
+  #dominoLibraryFilterKeyForStatus(kind) {
+    return `status:${kind}`;
+  }
+
+  #dominoLibraryFilterKeyForLandscape(landscape) {
+    return `terrain:${landscapeKey(landscape)}`;
+  }
+
+  #dominoMatchesLibraryFilter(domino, status) {
+    if (!this.#libraryFilter) return true;
+    const [type, value] = this.#libraryFilter.split(':');
+    if (type === 'status') return status.kind === value;
+    if (type === 'terrain') {
+      return landscapeKey(domino.leftEnd.landscape) === value || landscapeKey(domino.rightEnd.landscape) === value;
+    }
+    return true;
+  }
+
+  #libraryDominoAtClient(clientX, clientY) {
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!point) return null;
+    const layout = this.#dominoLibraryLayout();
+    for (let i = 0; i < layout.deck.length; i++) {
+      const { baseX, baseZ } = this.#dominoLibraryPlacement(i, layout);
+      if (
+        point.x >= baseX - 0.66
+        && point.x <= baseX + 1.66
+        && point.z >= baseZ - 0.70
+        && point.z <= baseZ + 0.72
+      ) {
+        return layout.deck[i].number;
+      }
+    }
+    return null;
+  }
+
+  #handleLibraryTap(clientX, clientY) {
+    const dominoNumber = this.#libraryDominoAtClient(clientX, clientY);
+    if (dominoNumber == null) {
+      this.#libraryFocusedDominoNumber = null;
+      this.#centerOnDominoLibrary(true);
+      this.#renderBoard();
+      return;
+    }
+
+    this.#libraryFocusedDominoNumber = dominoNumber;
+    this.#renderBoard();
+    this.#centerOnLibraryDomino(dominoNumber, true);
   }
 
   #dominoLibraryStats() {
@@ -3954,11 +4074,12 @@ export class GameLayout extends HTMLElement {
       const lifecycle = document.createElement('div');
       lifecycle.className = 'libraryStats lifecycle';
       for (const item of this.#dominoLibraryLifecycleStats(statusByNumber)) {
+        const filterKey = this.#dominoLibraryFilterKeyForStatus(item.kind);
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'libraryStat libraryFilter';
-        row.classList.toggle('active', this.#libraryFilter === item.kind);
-        row.setAttribute('aria-pressed', this.#libraryFilter === item.kind ? 'true' : 'false');
+        row.classList.toggle('active', this.#libraryFilter === filterKey);
+        row.setAttribute('aria-pressed', this.#libraryFilter === filterKey ? 'true' : 'false');
         const name = document.createElement('span');
         const swatch = document.createElement('span');
         swatch.className = 'librarySwatch';
@@ -3969,15 +4090,19 @@ export class GameLayout extends HTMLElement {
         const count = document.createElement('span');
         count.textContent = String(item.count);
         row.append(name, count);
-        row.addEventListener('click', () => this.#setLibraryFilter(item.kind));
+        row.addEventListener('click', () => this.#setLibraryFilter(filterKey));
         lifecycle.append(row);
       }
 
       const stats = document.createElement('div');
       stats.className = 'libraryStats';
       for (const item of this.#dominoLibraryStats()) {
-        const row = document.createElement('div');
-        row.className = 'libraryStat';
+        const filterKey = this.#dominoLibraryFilterKeyForLandscape(item.landscape);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'libraryStat libraryFilter';
+        row.classList.toggle('active', this.#libraryFilter === filterKey);
+        row.setAttribute('aria-pressed', this.#libraryFilter === filterKey ? 'true' : 'false');
         const name = document.createElement('span');
         const swatch = document.createElement('span');
         swatch.className = 'librarySwatch';
@@ -3988,6 +4113,7 @@ export class GameLayout extends HTMLElement {
         const max = document.createElement('span');
         max.textContent = item.max > 0 ? `up to ${crownsText(item.max)}` : 'plain';
         row.append(name, max);
+        row.addEventListener('click', () => this.#setLibraryFilter(filterKey));
         stats.append(row);
       }
 
@@ -4434,7 +4560,8 @@ export class GameLayout extends HTMLElement {
       while (this.#regionOverlayGroup.children.length) this.#regionOverlayGroup.remove(this.#regionOverlayGroup.children[0]);
     }
 
-    const deck = DominoPoolManager.getStartingDominoPool();
+    const layout = this.#dominoLibraryLayout();
+    const deck = layout.deck;
     const statusByNumber = this.#dominoLibraryStatusByNumber();
     const group = new THREE.Group();
     group.userData.library = true;
@@ -4443,20 +4570,11 @@ export class GameLayout extends HTMLElement {
     const previousGroup = this.#currentTileRenderGroup;
     this.#currentTileRenderGroup = group;
 
-    const cols = 6;
-    const cellX = 2.55;
-    const cellZ = 1.55;
-    const rows = Math.ceil(deck.length / cols);
-    const xOffset = -((cols - 1) * cellX + 1) / 2;
-    const zOffset = -((rows - 1) * cellZ) / 2;
-
     deck.forEach((domino, i) => {
       const status = statusByNumber.get(domino.number) ?? { kind: 'played', label: 'Played', color: 0x5b6170 };
-      const filtered = !!this.#libraryFilter && status.kind !== this.#libraryFilter;
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const baseX = xOffset + col * cellX;
-      const baseZ = zOffset + row * cellZ;
+      const filtered = !this.#dominoMatchesLibraryFilter(domino, status);
+      const focused = this.#libraryFocusedDominoNumber === domino.number;
+      const { baseX, baseZ } = this.#dominoLibraryPlacement(i, layout);
       const left = {
         x: baseX,
         y: baseZ,
@@ -4494,17 +4612,34 @@ export class GameLayout extends HTMLElement {
       this.#addTileObjects(base);
 
       const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(2.12, 0.026, 0.070),
+        new THREE.BoxGeometry(focused ? 2.20 : 2.12, focused ? 0.034 : 0.026, focused ? 0.090 : 0.070),
         new THREE.MeshStandardMaterial({
           color: filtered ? 0x252a32 : statusColor,
           roughness: 0.42,
           metalness: 0.18,
           emissive: filtered ? 0x000000 : statusColor,
-          emissiveIntensity: filtered ? 0 : ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
+          emissiveIntensity: filtered ? 0 : focused ? 0.34 : ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
         })
       );
-      rail.position.set(baseX + 0.5, 0.244, baseZ + 0.64);
+      rail.position.set(baseX + 0.5, focused ? 0.252 : 0.244, baseZ + 0.64);
       this.#addTileObjects(rail);
+
+      if (focused) {
+        const focusGlow = new THREE.Mesh(
+          new THREE.PlaneGeometry(2.46, 1.40),
+          new THREE.MeshBasicMaterial({
+            color: statusColor,
+            transparent: true,
+            opacity: 0.16,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          })
+        );
+        focusGlow.position.set(baseX + 0.5, 0.008, baseZ);
+        focusGlow.rotation.x = -Math.PI / 2;
+        focusGlow.renderOrder = -0.5;
+        this.#addTileObjects(focusGlow);
+      }
 
       for (const [endName, tile] of [['left', left], ['right', right]]) {
         const seedKey = `library|${domino.number}|${endName}`;
@@ -5720,19 +5855,28 @@ export class GameLayout extends HTMLElement {
   }
 
   #centerOnDominoLibrary(animate = false) {
-    const deck = DominoPoolManager.getStartingDominoPool();
-    const cols = 6;
-    const cellX = 2.55;
-    const cellZ = 1.55;
-    const rows = Math.ceil(deck.length / cols);
-    const xOffset = -((cols - 1) * cellX + 1) / 2;
-    const zOffset = -((rows - 1) * cellZ) / 2;
+    const { cols, cellX, cellZ, rows, xOffset, zOffset } = this.#dominoLibraryLayout();
     this.#frameToBoardSize({
       xMin: xOffset - 0.72,
       xMax: xOffset + (cols - 1) * cellX + 1.72,
       yMin: zOffset - 0.82,
       yMax: zOffset + (rows - 1) * cellZ + 0.82,
     }, 2.2, { x: 0, z: 0 }, animate);
+  }
+
+  #centerOnLibraryDomino(number, animate = false) {
+    const placement = this.#dominoLibraryPlacementByNumber(number);
+    if (!placement) {
+      this.#centerOnDominoLibrary(animate);
+      return;
+    }
+    const { baseX, baseZ } = placement;
+    this.#frameToBoardSize({
+      xMin: baseX - 0.90,
+      xMax: baseX + 1.90,
+      yMin: baseZ - 0.94,
+      yMax: baseZ + 0.94,
+    }, 0.64, { x: 0, z: 0 }, animate);
   }
 
   #ensureMiniMaps() {
