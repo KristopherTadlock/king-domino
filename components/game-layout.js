@@ -216,44 +216,57 @@ function createSceneBackgroundTexture(debug = false, size = 1024, layer = 'front
   canvas.height = size;
   const ctx = canvas.getContext('2d');
 
-  // Base woven-mat tone
+  // Base tabletop tone. Keep it organic, but avoid regular seams that can
+  // accidentally read as a second gameplay grid.
   const isBack = layer === 'back';
   const top = isBack
-    ? (debug ? '#8f734d' : '#7b623f')
-    : (debug ? '#b69563' : '#9c7a4d');
+    ? (debug ? '#876949' : '#735838')
+    : (debug ? '#bd9664' : '#9d7848');
   const bottom = isBack
-    ? (debug ? '#755c3d' : '#665031')
-    : (debug ? '#8f6f45' : '#7a5d38');
+    ? (debug ? '#6d5234' : '#5d4529')
+    : (debug ? '#977142' : '#785632');
   const grad = ctx.createLinearGradient(0, 0, 0, size);
   grad.addColorStop(0, top);
   grad.addColorStop(1, bottom);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
 
-  const rand = mulberry32(hash32(`bamboo|${debug ? '1' : '0'}|${layer}`));
+  const rand = mulberry32(hash32(`tabletop|${debug ? '1' : '0'}|${layer}`));
 
-  // Vertical bamboo slats
-  const slatW = Math.max(24, Math.floor(size / 30));
-  for (let x = -slatW; x < size + slatW; x += slatW) {
-    const jitter = (rand() - 0.5) * 4;
-    const lx = x + jitter;
-    const w = slatW - 1 + rand() * 2;
-    const slat = ctx.createLinearGradient(lx, 0, lx + w, 0);
-    slat.addColorStop(0, isBack ? 'rgba(45,28,12,0.22)' : 'rgba(60,38,16,0.18)');
-    slat.addColorStop(0.45, isBack ? 'rgba(230,205,160,0.07)' : 'rgba(255,232,188,0.10)');
-    slat.addColorStop(1, isBack ? 'rgba(40,24,10,0.25)' : 'rgba(48,30,12,0.20)');
-    ctx.fillStyle = slat;
-    ctx.fillRect(lx, 0, w, size);
+  // Broad unevenness gives the surface warmth without producing straight,
+  // tile-sized visual guides.
+  for (let i = 0; i < 18; i++) {
+    const cx = rand() * size;
+    const cy = rand() * size;
+    const r = size * (0.10 + rand() * 0.22);
+    const warm = rand() > 0.45;
+    const cloud = ctx.createRadialGradient(cx, cy, r * 0.05, cx, cy, r);
+    cloud.addColorStop(0, warm
+      ? `rgba(255,226,172,${0.035 + rand() * 0.05})`
+      : `rgba(50,30,12,${0.035 + rand() * 0.045})`);
+    cloud.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = cloud;
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  // Horizontal weave bands
-  const bandH = Math.max(18, Math.floor(size / 42));
-  for (let y = 0; y < size; y += bandH) {
-    const a = (isBack ? 0.03 : 0.05) + rand() * (isBack ? 0.05 : 0.07);
-    ctx.fillStyle = `rgba(255,236,200,${a})`;
-    ctx.fillRect(0, y, size, 1 + Math.floor(rand() * 2));
-    ctx.fillStyle = `rgba(50,31,13,${0.07 + rand() * 0.08})`;
-    ctx.fillRect(0, y + Math.floor(bandH * 0.55), size, 1);
+  // Short, broken fibers suggest a tabletop/mat surface while avoiding any
+  // repeated alignment with the kingdom grid.
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 520; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = size * (0.012 + rand() * 0.045);
+    const angle = -0.70 + rand() * 1.40;
+    const alpha = isBack ? 0.025 + rand() * 0.045 : 0.035 + rand() * 0.065;
+    const light = rand() > 0.58;
+    ctx.strokeStyle = light
+      ? `rgba(255,232,190,${alpha})`
+      : `rgba(45,28,12,${alpha})`;
+    ctx.lineWidth = 0.7 + rand() * 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+    ctx.stroke();
   }
 
   // Subtle fiber speckles
@@ -265,6 +278,12 @@ function createSceneBackgroundTexture(debug = false, size = 1024, layer = 'front
     ctx.fillStyle = `rgba(35,22,9,${alpha})`;
     ctx.fillRect(x, y, 1, 1);
   }
+
+  const vignette = ctx.createRadialGradient(size / 2, size / 2, size * 0.24, size / 2, size / 2, size * 0.76);
+  vignette.addColorStop(0, 'rgba(255,255,255,0.02)');
+  vignette.addColorStop(1, 'rgba(22,12,5,0.16)');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, size, size);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;
@@ -735,6 +754,8 @@ export class GameLayout extends HTMLElement {
   #regionOverlayGroup;
   /** @type {THREE.Group} */
   #ghostGroup;
+  /** @type {THREE.Group | null} */
+  #currentTileRenderGroup = null;
 
   /** @type {Map<string, THREE.Texture>} */
   #tileTextureCache = new Map();
@@ -759,6 +780,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {number | null} */
   #activeTouchPointerId = null;
+
+  /** @type {{startedAt:number,duration:number,startPosition:THREE.Vector3,endPosition:THREE.Vector3,startTarget:THREE.Vector3,endTarget:THREE.Vector3,startViewSize:number,endViewSize:number} | null} */
+  #cameraTransition = null;
 
   // Controls how wide the view is in world units (before aspect).
   static #VIEW_SIZE_CLOSE = 4.4;
@@ -793,17 +817,59 @@ export class GameLayout extends HTMLElement {
     return GameLayout.#VIEW_SIZE_FAR;
   }
 
-  #frameToBoardSize(boardSize, pad = 2) {
+  #boardOriginForPlayer(playerIndex = 0) {
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    const spacing = 18;
+    const idx = Math.max(0, Math.min(playerIndex ?? 0, count - 1));
+
+    if (count === 1) return { x: 0, z: 0 };
+    if (count === 2) return { x: idx === 0 ? -spacing / 2 : spacing / 2, z: 0 };
+    if (count === 3) {
+      return [
+        { x: -spacing / 2, z: -spacing / 2 },
+        { x: spacing / 2, z: -spacing / 2 },
+        { x: 0, z: spacing / 2 },
+      ][idx];
+    }
+    return [
+      { x: -spacing / 2, z: -spacing / 2 },
+      { x: spacing / 2, z: -spacing / 2 },
+      { x: -spacing / 2, z: spacing / 2 },
+      { x: spacing / 2, z: spacing / 2 },
+    ][idx % 4];
+  }
+
+  #focusedBoardOrigin() {
+    return this.#boardOriginForPlayer(this.#focusedPlayerIndex);
+  }
+
+  #placementBoardOrigin() {
+    const idx = this.#game?.state === GameState.PLACE
+      ? this.#game.currentPlacingPlayerIndex
+      : this.#focusedPlayerIndex;
+    return this.#boardOriginForPlayer(idx ?? this.#focusedPlayerIndex);
+  }
+
+  #addTileObjects(...objects) {
+    const group = this.#currentTileRenderGroup || this.#tilesGroup;
+    group.add(...objects);
+  }
+
+  #frameToBoardSize(boardSize, pad = 2, origin = { x: 0, z: 0 }, animate = false) {
     if (!this.#camera || !this.#controls) return;
     if (!boardSize) return;
+
+    const startPosition = this.#camera.position.clone();
+    const startTarget = this.#controls.target.clone();
+    const startViewSize = this.#viewSize;
 
     const minX = boardSize.xMin - pad;
     const maxX = boardSize.xMax + pad;
     const minZ = boardSize.yMin - pad;
     const maxZ = boardSize.yMax + pad;
 
-    const centerX = (minX + maxX) / 2;
-    const centerZ = (minZ + maxZ) / 2;
+    const centerX = origin.x + (minX + maxX) / 2;
+    const centerZ = origin.z + (minZ + maxZ) / 2;
 
     const rect = this.#canvasHost.getBoundingClientRect();
     const w = Math.max(1, rect.width);
@@ -825,6 +891,11 @@ export class GameLayout extends HTMLElement {
     const tilt = Math.max(6, 5 + span * 0.45);
     this.#camera.position.set(centerX + tilt, height, centerZ + tilt);
     this.#camera.lookAt(centerX, 0, centerZ);
+    this.#camera.left = -this.#viewSize * aspect;
+    this.#camera.right = this.#viewSize * aspect;
+    this.#camera.top = this.#viewSize;
+    this.#camera.bottom = -this.#viewSize;
+    this.#camera.updateProjectionMatrix();
     this.#camera.updateMatrixWorld();
 
     // Center against the usable canvas area after persistent overlays have
@@ -886,8 +957,74 @@ export class GameLayout extends HTMLElement {
       this.#controls.target.addScaledVector(up, dyPx * worldPerPxY);
     }
 
+    const endPosition = this.#camera.position.clone();
+    const endTarget = this.#controls.target.clone();
+    const endViewSize = this.#viewSize;
+
+    if (animate) {
+      this.#camera.position.copy(startPosition);
+      this.#controls.target.copy(startTarget);
+      this.#viewSize = startViewSize;
+      this.#camera.lookAt(this.#controls.target);
+      this.#camera.updateMatrixWorld();
+      this.#onResize();
+
+      const distance = startTarget.distanceTo(endTarget);
+      this.#cameraTransition = {
+        startedAt: performance.now(),
+        duration: Math.max(420, Math.min(920, 360 + distance * 42)),
+        startPosition,
+        endPosition,
+        startTarget,
+        endTarget,
+        startViewSize,
+        endViewSize,
+      };
+      return;
+    }
+
+    this.#cameraTransition = null;
     this.#controls.update();
     this.#onResize();
+  }
+
+  #updateCameraTransition() {
+    if (!this.#cameraTransition || !this.#camera || !this.#controls) return;
+
+    const now = performance.now();
+    const rawT = (now - this.#cameraTransition.startedAt) / this.#cameraTransition.duration;
+    const t = Math.max(0, Math.min(1, rawT));
+    const eased = t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    this.#camera.position.lerpVectors(
+      this.#cameraTransition.startPosition,
+      this.#cameraTransition.endPosition,
+      eased
+    );
+    this.#controls.target.lerpVectors(
+      this.#cameraTransition.startTarget,
+      this.#cameraTransition.endTarget,
+      eased
+    );
+    this.#viewSize = this.#cameraTransition.startViewSize
+      + (this.#cameraTransition.endViewSize - this.#cameraTransition.startViewSize) * eased;
+
+    this.#camera.lookAt(this.#controls.target);
+    this.#camera.updateMatrixWorld();
+    this.#onResize();
+
+    if (t >= 1) {
+      this.#camera.position.copy(this.#cameraTransition.endPosition);
+      this.#controls.target.copy(this.#cameraTransition.endTarget);
+      this.#viewSize = this.#cameraTransition.endViewSize;
+      this.#cameraTransition = null;
+      this.#camera.lookAt(this.#controls.target);
+      this.#camera.updateMatrixWorld();
+      this.#controls.update();
+      this.#onResize();
+    }
   }
 
   constructor() {
@@ -1954,7 +2091,7 @@ export class GameLayout extends HTMLElement {
         const focusChanged = this.#syncFocusedBoardToPhase();
         this.#refreshHud();
         this.#renderBoard();
-        if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard();
+        if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard(focusChanged);
         this.#renderGhost();
         this.#autoResolveForcedDraft();
       },
@@ -1989,7 +2126,7 @@ export class GameLayout extends HTMLElement {
     const focusChanged = this.#syncFocusedBoardToPhase();
     this.#refreshHud();
     this.#renderBoard();
-    if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard();
+    if (focusChanged || action.type === 'place' || action.type === 'skip') this.#centerOnFocusedBoard(focusChanged);
     this.#renderGhost();
     this.#renderMiniMaps();
     this.#autoResolveForcedDraft();
@@ -2665,6 +2802,7 @@ export class GameLayout extends HTMLElement {
     while (this.#regionOverlayGroup.children.length) {
       this.#regionOverlayGroup.remove(this.#regionOverlayGroup.children[0]);
     }
+    this.#syncBoardLayerPositions();
     if (!board) return;
 
     const regions = this.#collectLandscapeRegions(board);
@@ -2725,58 +2863,113 @@ export class GameLayout extends HTMLElement {
     }
   }
 
-  #validPlacementAnchorCells(options) {
-    const cells = new Map();
+  #placementHighlightCells(options) {
+    const occupiedCells = new Map();
     for (const option of options) {
       for (const cell of this.#placementOptionCells(option)) {
-        cells.set(keyOf(cell.x, cell.y), cell);
+        occupiedCells.set(keyOf(cell.x, cell.y), cell);
       }
     }
 
+    const anchorCells = new Map();
     for (const cell of this.#orderedPlacementCandidateAnchors()) {
       if (this.#placementOptionsForGrid(cell, options).length) {
-        cells.set(keyOf(cell.x, cell.y), cell);
+        anchorCells.set(keyOf(cell.x, cell.y), cell);
       }
     }
 
-    return cells.values();
+    const dense = occupiedCells.size > 18 || options.length > 56;
+    if (dense) {
+      const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+      const selectedOptions = options.filter((option) => option.dominoNumber === selectedDominoNumber);
+      const denseOptions = selectedOptions.length ? selectedOptions : options;
+      const selectedAnchorCells = new Map();
+      for (const cell of this.#orderedPlacementCandidateAnchors()) {
+        if (this.#placementOptionsForGrid(cell, denseOptions).length) {
+          selectedAnchorCells.set(keyOf(cell.x, cell.y), cell);
+        }
+      }
+      return { cells: selectedAnchorCells.values(), dense };
+    }
+
+    for (const cell of anchorCells.values()) {
+      occupiedCells.set(keyOf(cell.x, cell.y), cell);
+    }
+    return { cells: occupiedCells.values(), dense };
   }
 
   #renderValidAnchorHighlights(options) {
     if (this.#localPlacementFocus || !options.length) return;
 
-    const ringGeo = new THREE.RingGeometry(0.20, 0.31, 32);
-    const fillGeo = new THREE.CircleGeometry(0.20, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x8fc7ff,
+    const highlights = this.#placementHighlightCells(options);
+    const tileGeo = new THREE.PlaneGeometry(0.86, 0.86);
+    const tileMat = new THREE.MeshBasicMaterial({
+      color: 0xd7f1ff,
       transparent: true,
-      opacity: 0.66,
+      opacity: highlights.dense ? 0.24 : 0.28,
       depthWrite: false,
       depthTest: false,
       side: THREE.DoubleSide,
     });
-    const fillMat = new THREE.MeshBasicMaterial({
-      color: 0x8fc7ff,
+    const edgeGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.86, 0.86));
+    const shadowEdgeMat = new THREE.LineBasicMaterial({
+      color: 0x101923,
       transparent: true,
-      opacity: 0.08,
-      depthWrite: false,
-      depthTest: false,
-      side: THREE.DoubleSide,
+      opacity: highlights.dense ? 0.42 : 0.52,
+    });
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xf4fbff,
+      transparent: true,
+      opacity: highlights.dense ? 0.58 : 0.68,
+    });
+    const cornerGeo = this.#placementHighlightCornerGeometry();
+    const cornerMat = new THREE.LineBasicMaterial({
+      color: 0xf4fbff,
+      transparent: true,
+      opacity: highlights.dense ? 0.76 : 0.86,
     });
 
-    for (const cell of this.#validPlacementAnchorCells(options)) {
-      const fill = new THREE.Mesh(fillGeo, fillMat);
-      fill.rotation.x = -Math.PI / 2;
-      fill.position.set(cell.x, 0.215, cell.y);
-      fill.renderOrder = 20;
-      this.#ghostGroup.add(fill);
+    for (const cell of highlights.cells) {
+      const tile = new THREE.Mesh(tileGeo, tileMat);
+      tile.rotation.x = -Math.PI / 2;
+      tile.position.set(cell.x, 0.205, cell.y);
+      tile.renderOrder = 20;
+      this.#ghostGroup.add(tile);
 
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.set(cell.x, 0.22, cell.y);
-      ring.renderOrder = 21;
-      this.#ghostGroup.add(ring);
+      const shadowEdge = new THREE.LineSegments(edgeGeo, shadowEdgeMat);
+      shadowEdge.rotation.x = -Math.PI / 2;
+      shadowEdge.position.set(cell.x, 0.212, cell.y);
+      shadowEdge.renderOrder = 21;
+      this.#ghostGroup.add(shadowEdge);
+
+      const edge = new THREE.LineSegments(edgeGeo, edgeMat);
+      edge.rotation.x = -Math.PI / 2;
+      edge.position.set(cell.x, 0.218, cell.y);
+      edge.renderOrder = 22;
+      this.#ghostGroup.add(edge);
+
+      const corners = new THREE.LineSegments(cornerGeo, cornerMat);
+      corners.rotation.x = -Math.PI / 2;
+      corners.position.set(cell.x, 0.222, cell.y);
+      corners.renderOrder = 23;
+      this.#ghostGroup.add(corners);
     }
+  }
+
+  #placementHighlightCornerGeometry() {
+    const inset = 0.33;
+    const outer = 0.43;
+    const points = [
+      new THREE.Vector3(-outer, -outer, 0), new THREE.Vector3(-inset, -outer, 0),
+      new THREE.Vector3(-outer, -outer, 0), new THREE.Vector3(-outer, -inset, 0),
+      new THREE.Vector3(outer, -outer, 0), new THREE.Vector3(inset, -outer, 0),
+      new THREE.Vector3(outer, -outer, 0), new THREE.Vector3(outer, -inset, 0),
+      new THREE.Vector3(-outer, outer, 0), new THREE.Vector3(-inset, outer, 0),
+      new THREE.Vector3(-outer, outer, 0), new THREE.Vector3(-outer, inset, 0),
+      new THREE.Vector3(outer, outer, 0), new THREE.Vector3(inset, outer, 0),
+      new THREE.Vector3(outer, outer, 0), new THREE.Vector3(outer, inset, 0),
+    ];
+    return new THREE.BufferGeometry().setFromPoints(points);
   }
 
   #initThree() {
@@ -2831,10 +3024,10 @@ export class GameLayout extends HTMLElement {
     dir.position.set(5, 10, 6);
     this.#scene.add(dir);
 
-    // Rectangular bamboo mats sized just beyond the 15x15 grid.
+    // Shared tabletop sized to hold both kingdoms with room for the camera pan.
     const bambooFrontTex = createSceneBackgroundTexture(debug, 1024, 'front');
     this.#bambooMatFront = new THREE.Mesh(
-      new THREE.PlaneGeometry(16.5, 16.5),
+      new THREE.PlaneGeometry(42, 24),
       new THREE.MeshBasicMaterial({
         map: bambooFrontTex,
         side: THREE.DoubleSide,
@@ -2849,6 +3042,12 @@ export class GameLayout extends HTMLElement {
     // 15x15 cells -> 7 squares in each direction from the castle.
     // Size 15 means lines land on half-steps (-7.5..7.5), matching tile edges.
     const grid = new THREE.GridHelper(15, 15, debug ? 0x6b8bb3 : 0x3a4353, debug ? 0x3f5a74 : 0x222a35);
+    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
+    gridMaterials.forEach((material) => {
+      material.transparent = true;
+      material.opacity = 0.12;
+      material.depthWrite = false;
+    });
     grid.position.set(0, 0, 0);
     this.#scene.add(grid);
     this.#gridHelper = grid;
@@ -2876,7 +3075,7 @@ export class GameLayout extends HTMLElement {
       this.#scene.add(plane);
     }
 
-    const planeGeo = new THREE.PlaneGeometry(30, 30);
+    const planeGeo = new THREE.PlaneGeometry(54, 34);
     const planeMat = new THREE.MeshBasicMaterial({ visible: false });
     this.#boardPlane = new THREE.Mesh(planeGeo, planeMat);
     this.#boardPlane.rotateX(-Math.PI / 2);
@@ -3209,7 +3408,8 @@ export class GameLayout extends HTMLElement {
     const hits = this.#raycaster.intersectObject(this.#boardPlane);
     if (!hits.length) return null;
     const p = hits[0].point;
-    return { x: Math.round(p.x), y: Math.round(p.z) };
+    const origin = this.#placementBoardOrigin();
+    return { x: Math.round(p.x - origin.x), y: Math.round(p.z - origin.z) };
   }
 
   #trySelectPlacementAnchor(grid, { localize = false, showError = false, render = false, auto = false } = {}) {
@@ -3657,46 +3857,78 @@ export class GameLayout extends HTMLElement {
   #renderBoard() {
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
 
-    const focusedBoardManager = this.#game.players[this.#focusedPlayerIndex]?.board || this.#game.players[0].board;
-    const focusedPlayerIndex = Math.max(0, Math.min(this.#focusedPlayerIndex, this.#game.players.length - 1));
-    const board = focusedBoardManager.board;
-    for (const k of Object.keys(board)) {
-      const tile = board[k];
-      const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, `${tile.x},${tile.y}`, false);
+    const players = this.#game?.players ?? [];
+    const focusedPlayerIndex = Math.max(0, Math.min(this.#focusedPlayerIndex, players.length - 1));
+    const previousGroup = this.#currentTileRenderGroup;
+    for (let playerIndex = 0; playerIndex < players.length; playerIndex++) {
+      const player = players[playerIndex];
+      const boardManager = player.board;
+      const board = boardManager.board;
+      const boardGroup = new THREE.Group();
+      const origin = this.#boardOriginForPlayer(playerIndex);
+      boardGroup.position.set(origin.x, 0, origin.z);
+      boardGroup.userData.playerIndex = playerIndex;
+      this.#tilesGroup.add(boardGroup);
+      this.#currentTileRenderGroup = boardGroup;
+      this.#addPlayerPlayArea(playerIndex, playerIndex === focusedPlayerIndex);
 
-      const tileMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.98, 0.22, 0.98),
-        material
-      );
-      tileMesh.position.set(tile.x, 0.11, tile.y);
-      this.#tilesGroup.add(tileMesh);
+      for (const k of Object.keys(board)) {
+        const tile = board[k];
+        const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, `${playerIndex}|${tile.x},${tile.y}`, false);
 
-      if (tile.landscape === Landscapes.CASTLE) {
-        this.#addCastleDetail(tile.x, tile.y, board, focusedBoardManager, focusedPlayerIndex);
-      } else {
-        this.#addLandscapeDetail(tile);
-        if ((tile.crowns || 0) > 0) {
-          this.#addCrownDetail(tile, board);
+        const tileMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(0.98, 0.22, 0.98),
+          material
+        );
+        tileMesh.position.set(tile.x, 0.11, tile.y);
+        this.#addTileObjects(tileMesh);
+
+        if (tile.landscape === Landscapes.CASTLE) {
+          this.#addCastleDetail(tile.x, tile.y, board, boardManager, playerIndex);
+        } else {
+          this.#addLandscapeDetail(tile);
+          if ((tile.crowns || 0) > 0) {
+            this.#addCrownDetail(tile, board);
+          }
+        }
+
+        if (tile.crowns > 0 || tile.landscape === Landscapes.CASTLE) {
+          const isCastle = tile.landscape === Landscapes.CASTLE;
+          const text = isCastle ? '♜' : crownsText(tile.crowns);
+          const sprite = createTextSprite(text, {
+            font: text.length >= 2
+              ? '700 42px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
+              : '700 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+            fillStyle: isCastle ? '#f5fbff' : '#f5cc51',
+            background: isCastle ? this.#playerMiniMapColor(playerIndex, 0.82) : 'rgba(28,31,38,0.88)',
+            border: isCastle ? this.#playerMiniMapColor(playerIndex, 0.95) : 'rgba(255,255,255,0.32)',
+          });
+          sprite.position.set(tile.x, 0.38, tile.y);
+          this.#addTileObjects(sprite);
         }
       }
-
-      if (tile.crowns > 0 || tile.landscape === Landscapes.CASTLE) {
-        const isCastle = tile.landscape === Landscapes.CASTLE;
-        const text = isCastle ? '♜' : crownsText(tile.crowns);
-        const sprite = createTextSprite(text, {
-          font: text.length >= 2
-            ? '700 42px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
-            : '700 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-          fillStyle: isCastle ? '#f5fbff' : '#f5cc51',
-          background: isCastle ? this.#playerMiniMapColor(focusedPlayerIndex, 0.82) : 'rgba(28,31,38,0.88)',
-          border: isCastle ? this.#playerMiniMapColor(focusedPlayerIndex, 0.95) : 'rgba(255,255,255,0.32)',
-        });
-        sprite.position.set(tile.x, 0.38, tile.y);
-        this.#tilesGroup.add(sprite);
-      }
     }
+    this.#currentTileRenderGroup = previousGroup;
 
+    this.#syncBoardLayerPositions();
     this.#renderRegionScoring(null);
+  }
+
+  #addPlayerPlayArea(playerIndex, focused = false) {
+    const size = 8.8;
+    const pad = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshBasicMaterial({
+        color: this.#playerColorHex(playerIndex),
+        transparent: true,
+        opacity: focused ? 0.070 : 0.038,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.y = -0.055;
+    this.#addTileObjects(pad);
   }
 
   #castleGrowthState(board, boardManager) {
@@ -3770,18 +4002,18 @@ export class GameLayout extends HTMLElement {
           const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, t.h, 7), trunkMat);
           trunk.position.set(x + t.dx, 0.22 + t.h / 2, y + t.dz);
           trunk.rotation.y = rand() * Math.PI * 2;
-          this.#tilesGroup.add(trunk);
+          this.#addTileObjects(trunk);
 
           const canopy = new THREE.Mesh(new THREE.ConeGeometry(t.cr, t.ch, 8), leafMat);
           canopy.position.set(x + t.dx, 0.22 + t.h + 0.07, y + t.dz);
           canopy.rotation.y = rand() * Math.PI * 2;
-          this.#tilesGroup.add(canopy);
+          this.#addTileObjects(canopy);
 
           if (rand() > 0.55) {
             const tip = new THREE.Mesh(new THREE.ConeGeometry(t.cr * 0.68, t.ch * 0.72, 8), tipMat);
             tip.position.set(x + t.dx, 0.22 + t.h + t.ch * 0.58, y + t.dz);
             tip.rotation.y = rand() * Math.PI * 2;
-            this.#tilesGroup.add(tip);
+            this.#addTileObjects(tip);
           }
         }
         break;
@@ -3798,13 +4030,13 @@ export class GameLayout extends HTMLElement {
           stalk.position.set(x + dx, 0.31, y + dz);
           stalk.rotation.z = (-0.25 + rand() * 0.5);
           stalk.rotation.y = rand() * Math.PI * 2;
-          this.#tilesGroup.add(stalk);
+          this.#addTileObjects(stalk);
 
           const head = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.045, 6), seedMat);
           head.position.set(x + dx, 0.31 + h * 0.56, y + dz);
           head.rotation.z = stalk.rotation.z;
           head.rotation.y = stalk.rotation.y;
-          this.#tilesGroup.add(head);
+          this.#addTileObjects(head);
         }
         break;
       }
@@ -3842,7 +4074,7 @@ export class GameLayout extends HTMLElement {
           const wave = new THREE.Mesh(new THREE.TubeGeometry(curve, 26, radius, 8, false), waveMat);
           wave.position.set(x, 0.245 + rand() * 0.02, y);
           wave.rotation.y = (rand() - 0.5) * 0.04;
-          this.#tilesGroup.add(wave);
+          this.#addTileObjects(wave);
         }
         break;
       }
@@ -3858,13 +4090,13 @@ export class GameLayout extends HTMLElement {
           tuft.scale.set(1.0, 0.65, 1.0);
           tuft.position.set(x + dx, 0.24, y + dz);
           tuft.rotation.y = rand() * Math.PI * 2;
-          this.#tilesGroup.add(tuft);
+          this.#addTileObjects(tuft);
 
           if (rand() > 0.66) {
             const flower = new THREE.Mesh(new THREE.SphereGeometry(0.018 + rand() * 0.01, 8, 6), flowerMat);
             flower.scale.set(1, 0.45, 1);
             flower.position.set(x + dx + rand() * 0.06 - 0.03, 0.285, y + dz + rand() * 0.06 - 0.03);
-            this.#tilesGroup.add(flower);
+            this.#addTileObjects(flower);
           }
         }
         break;
@@ -3881,14 +4113,14 @@ export class GameLayout extends HTMLElement {
           puddle.scale.set(1.0 + rand() * 0.4, 0.22 + rand() * 0.12, 1.0 + rand() * 0.3);
           puddle.position.set(x + dx, 0.22, y + dz);
           puddle.rotation.y = rand() * Math.PI * 2;
-          this.#tilesGroup.add(puddle);
+          this.#addTileObjects(puddle);
 
           if (rand() > 0.38) {
             const moss = new THREE.Mesh(new THREE.SphereGeometry(0.024 + rand() * 0.018, 8, 6), mossMat);
             moss.scale.set(1.3 + rand() * 0.5, 0.22, 0.8 + rand() * 0.4);
             moss.position.set(x + dx + rand() * 0.12 - 0.06, 0.255, y + dz + rand() * 0.12 - 0.06);
             moss.rotation.y = rand() * Math.PI * 2;
-            this.#tilesGroup.add(moss);
+            this.#addTileObjects(moss);
           }
         }
         break;
@@ -3913,13 +4145,13 @@ export class GameLayout extends HTMLElement {
           const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r.s, 0), rand() > 0.45 ? rockMat : darkRockMat);
           rock.position.set(x + r.dx, 0.25 + r.s * 0.4, y + r.dz);
           rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-          this.#tilesGroup.add(rock);
+          this.#addTileObjects(rock);
 
           if (rand() > 0.62) {
             const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(r.s * 0.48, 0), crystalMat);
             crystal.position.set(x + r.dx + rand() * 0.06 - 0.03, 0.30 + r.s * 0.8, y + r.dz + rand() * 0.06 - 0.03);
             crystal.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-            this.#tilesGroup.add(crystal);
+            this.#addTileObjects(crystal);
           }
         }
         break;
@@ -3951,7 +4183,7 @@ export class GameLayout extends HTMLElement {
     const keepHeight = 0.18 + keepScale * 0.20;
     const keep = new THREE.Mesh(new THREE.BoxGeometry(0.42 * keepScale, keepHeight, 0.42 * keepScale), stone);
     keep.position.set(x, 0.22 + keepHeight / 2, y);
-    this.#tilesGroup.add(keep);
+    this.#addTileObjects(keep);
 
     const towerCount = tier === 0 ? 2 : 4;
     const towerGeom = new THREE.CylinderGeometry(0.07 + tier * 0.012, 0.08 + tier * 0.012, 0.18 + tier * 0.05, 12);
@@ -3965,7 +4197,7 @@ export class GameLayout extends HTMLElement {
       const [dx, dz] = towerOffsets[i];
       const tower = new THREE.Mesh(towerGeom, stone);
       tower.position.set(x + dx, 0.25 + (0.18 + tier * 0.05) / 2, y + dz);
-      this.#tilesGroup.add(tower);
+      this.#addTileObjects(tower);
     }
 
     if (tier >= 1) {
@@ -3978,7 +4210,7 @@ export class GameLayout extends HTMLElement {
       for (const [dx, dz] of teeth) {
         const tooth = new THREE.Mesh(toothGeom, trim);
         tooth.position.set(x + dx * keepScale, 0.44 + keepHeight * 0.35, y + dz * keepScale);
-        this.#tilesGroup.add(tooth);
+        this.#addTileObjects(tooth);
       }
     }
 
@@ -3987,7 +4219,7 @@ export class GameLayout extends HTMLElement {
       const roof = new THREE.Mesh(new THREE.ConeGeometry(0.20 * keepScale, 0.16, 4), roofMat);
       roof.rotation.y = Math.PI * 0.25;
       roof.position.set(x, 0.46 + keepHeight * 0.4, y);
-      this.#tilesGroup.add(roof);
+      this.#addTileObjects(roof);
     }
 
     if (tier >= 3) {
@@ -3995,11 +4227,11 @@ export class GameLayout extends HTMLElement {
       const mastMat = new THREE.MeshStandardMaterial({ color: 0x5d4c3a, roughness: 0.75, metalness: 0.03 });
       const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 8), mastMat);
       mast.position.set(x + 0.06, 0.62, y + 0.06);
-      this.#tilesGroup.add(mast);
+      this.#addTileObjects(mast);
       const banner = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.09), bannerMat);
       banner.position.set(x + 0.12, 0.66, y + 0.06);
       banner.rotation.y = Math.PI * 0.20;
-      this.#tilesGroup.add(banner);
+      this.#addTileObjects(banner);
     }
 
     if (growth.perfectKingdom) {
@@ -4013,13 +4245,13 @@ export class GameLayout extends HTMLElement {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.018, 10, 26), crownMat);
       ring.position.set(x, 0.84, y);
       ring.rotation.x = Math.PI / 2;
-      this.#tilesGroup.add(ring);
+      this.#addTileObjects(ring);
 
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2;
         const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.08, 8), crownMat);
         tip.position.set(x + Math.cos(a) * 0.18, 0.88, y + Math.sin(a) * 0.18);
-        this.#tilesGroup.add(tip);
+        this.#addTileObjects(tip);
       }
     }
   }
@@ -4092,7 +4324,7 @@ export class GameLayout extends HTMLElement {
     );
     plinth.position.set(bx, 0.29, by);
     plinth.rotation.y = rand() * Math.PI * 2;
-    this.#tilesGroup.add(plinth);
+    this.#addTileObjects(plinth);
 
     const gold = new THREE.MeshStandardMaterial({
       color: theme.accent,
@@ -4117,7 +4349,7 @@ export class GameLayout extends HTMLElement {
       ring.rotation.x = Math.PI / 2;
       ring.rotation.z = rand() * Math.PI;
       ring.position.set(bx, 0.37, by);
-      this.#tilesGroup.add(ring);
+      this.#addTileObjects(ring);
 
       const spikeGeom = new THREE.ConeGeometry((0.028 + rand() * 0.012) * prominence, (0.09 + tier * 0.02 + rand() * 0.02) * prominence, 8);
       const spikeCount = 4 + tier + Math.floor(rand() * 2);
@@ -4128,20 +4360,20 @@ export class GameLayout extends HTMLElement {
         const rr = ringR - 0.01 + rand() * 0.02;
         s.position.set(bx + Math.cos(a) * rr, 0.45 + tier * 0.012 + rand() * 0.01, by + Math.sin(a) * rr);
         s.rotation.y = a;
-        this.#tilesGroup.add(s);
+        this.#addTileObjects(s);
       }
     } else if (style === 1) {
       // Mini tower.
       const bodyH = (0.22 + tier * 0.04) * prominence;
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * prominence, 0.10 * prominence, bodyH, 10), stone);
       body.position.set(bx, 0.32 + bodyH / 2, by);
-      this.#tilesGroup.add(body);
+      this.#addTileObjects(body);
 
       const roofH = (0.14 + tier * 0.02) * prominence;
       const roof = new THREE.Mesh(new THREE.ConeGeometry(0.13 * prominence, roofH, 8), gold);
       roof.position.set(bx, 0.32 + bodyH + roofH * 0.45, by);
       roof.rotation.y = rand() * Math.PI * 2;
-      this.#tilesGroup.add(roof);
+      this.#addTileObjects(roof);
     } else if (style === 2) {
       // Shrine gate.
       const beamMat = new THREE.MeshStandardMaterial({ color: theme.base, roughness: 0.58, metalness: 0.10, emissive: theme.emissiveStone, emissiveIntensity: 0.06 });
@@ -4149,21 +4381,21 @@ export class GameLayout extends HTMLElement {
       const p2 = p1.clone();
       p1.position.set(bx - 0.09 * prominence, 0.38, by);
       p2.position.set(bx + 0.09 * prominence, 0.38, by);
-      this.#tilesGroup.add(p1, p2);
+      this.#addTileObjects(p1, p2);
       const top = new THREE.Mesh(new THREE.BoxGeometry(0.24 * prominence, 0.035 * prominence, 0.05 * prominence), gold);
       top.position.set(bx, 0.49, by);
-      this.#tilesGroup.add(top);
+      this.#addTileObjects(top);
     } else {
       // Obelisk.
       const obH = (0.26 + tier * 0.05) * prominence;
       const ob = new THREE.Mesh(new THREE.ConeGeometry(0.065 * prominence, obH, 4), stone);
       ob.position.set(bx, 0.30 + obH / 2, by);
       ob.rotation.y = rand() * Math.PI * 2;
-      this.#tilesGroup.add(ob);
+      this.#addTileObjects(ob);
 
       const cap = new THREE.Mesh(new THREE.OctahedronGeometry((0.032 + tier * 0.006) * prominence, 0), gold);
       cap.position.set(bx, 0.30 + obH + 0.05 * prominence, by);
-      this.#tilesGroup.add(cap);
+      this.#addTileObjects(cap);
     }
 
     // Landscape-themed ornament near the monument base.
@@ -4174,15 +4406,15 @@ export class GameLayout extends HTMLElement {
       );
       wave.rotation.x = Math.PI / 2;
       wave.position.set(bx, 0.33, by);
-      this.#tilesGroup.add(wave);
+      this.#addTileObjects(wave);
     } else if (tile.landscape === Landscapes.FOREST) {
       const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.04 * prominence, 0.08 * prominence, 7), new THREE.MeshStandardMaterial({ color: theme.accent, roughness: 0.62, metalness: 0.08 }));
       leaf.position.set(bx + 0.1 * prominence, 0.36, by - 0.02 * prominence);
-      this.#tilesGroup.add(leaf);
+      this.#addTileObjects(leaf);
     } else if (tile.landscape === Landscapes.MINE) {
       const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.025 * prominence, 0), new THREE.MeshStandardMaterial({ color: theme.accent, emissive: theme.emissiveAccent, emissiveIntensity: 0.22, roughness: 0.2, metalness: 0.28 }));
       crystal.position.set(bx - 0.09 * prominence, 0.37, by + 0.03 * prominence);
-      this.#tilesGroup.add(crystal);
+      this.#addTileObjects(crystal);
     }
 
     if (tier >= 2) {
@@ -4198,7 +4430,7 @@ export class GameLayout extends HTMLElement {
       );
       jewel.position.set(bx + (-0.015 + rand() * 0.03), 0.47 + tier * 0.01 + rand() * 0.01, by + (-0.015 + rand() * 0.03));
       jewel.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-      this.#tilesGroup.add(jewel);
+      this.#addTileObjects(jewel);
 
       if (tier >= 3) {
         const sideJewel = new THREE.Mesh(
@@ -4214,7 +4446,7 @@ export class GameLayout extends HTMLElement {
         const a = rand() * Math.PI * 2;
         const rr = 0.10 + rand() * 0.04;
         sideJewel.position.set(bx + Math.cos(a) * rr, 0.44 + rand() * 0.02, by + Math.sin(a) * rr);
-        this.#tilesGroup.add(sideJewel);
+        this.#addTileObjects(sideJewel);
       }
     }
   }
@@ -4261,7 +4493,37 @@ export class GameLayout extends HTMLElement {
     return material;
   }
 
-  #centerOnActiveBoard() {
+  #syncGridPresentation() {
+    if (!this.#gridHelper) return;
+    const placement = this.#game?.state === GameState.PLACE && !this.#game?.isGameOver;
+    const materials = Array.isArray(this.#gridHelper.material)
+      ? this.#gridHelper.material
+      : [this.#gridHelper.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = placement ? 0.08 : 0.12;
+      material.needsUpdate = true;
+    }
+  }
+
+  #syncBoardLayerPositions() {
+    const focused = this.#focusedBoardOrigin();
+    const placement = this.#placementBoardOrigin();
+    if (this.#gridHelper) {
+      this.#gridHelper.position.x = focused.x;
+      this.#gridHelper.position.z = focused.z;
+    }
+    if (this.#ghostGroup) {
+      this.#ghostGroup.position.x = placement.x;
+      this.#ghostGroup.position.z = placement.z;
+    }
+    if (this.#regionOverlayGroup) {
+      this.#regionOverlayGroup.position.x = placement.x;
+      this.#regionOverlayGroup.position.z = placement.z;
+    }
+  }
+
+  #centerOnActiveBoard(animate = false) {
     if (!this.#controls || !this.#camera) return;
 
     const activeIdx = this.#game.state === GameState.PLACE
@@ -4271,14 +4533,14 @@ export class GameLayout extends HTMLElement {
     const bm = this.#game.players[activeIdx].board;
     const bs = bm.boardSize;
 
-    this.#frameToBoardSize(bs, 2);
+    this.#frameToBoardSize(bs, 2, this.#boardOriginForPlayer(activeIdx), animate);
   }
 
-  #centerOnFocusedBoard() {
+  #centerOnFocusedBoard(animate = false) {
     if (!this.#game?.players?.length) return;
     const idx = Math.max(0, Math.min(this.#focusedPlayerIndex, this.#game.players.length - 1));
     const bs = this.#game.players[idx].board.boardSize;
-    this.#frameToBoardSize(bs, 2);
+    this.#frameToBoardSize(bs, 2, this.#boardOriginForPlayer(idx), animate);
   }
 
   #ensureMiniMaps() {
@@ -4308,7 +4570,7 @@ export class GameLayout extends HTMLElement {
       card.addEventListener('click', () => {
         this.#focusedPlayerIndex = idx;
         this.#renderBoard();
-        this.#centerOnFocusedBoard();
+        this.#centerOnFocusedBoard(true);
         this.#refreshHud();
       });
       this.#miniMapCanvases.push(canvas);
@@ -4772,7 +5034,8 @@ export class GameLayout extends HTMLElement {
     if (!grid || !this.#camera || !this.#canvasHost || !this.#root) return null;
     const rootRect = this.#root.getBoundingClientRect();
     const canvasRect = this.#canvasHost.getBoundingClientRect();
-    const point = new THREE.Vector3(grid.x, 0.72, grid.y).project(this.#camera);
+    const origin = this.#placementBoardOrigin();
+    const point = new THREE.Vector3(grid.x + origin.x, 0.72, grid.y + origin.z).project(this.#camera);
     return {
       x: canvasRect.left - rootRect.left + ((point.x + 1) / 2) * canvasRect.width,
       y: canvasRect.top - rootRect.top + ((-point.y + 1) / 2) * canvasRect.height,
@@ -4980,6 +5243,7 @@ export class GameLayout extends HTMLElement {
 
   #renderGhost() {
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
+    this.#syncBoardLayerPositions();
 
     const g = this.#game;
     const activeIdx = g.currentPlacingPlayerIndex;
@@ -5117,40 +5381,11 @@ export class GameLayout extends HTMLElement {
       this.#debugMarker.rotation.x += 0.005;
     }
 
-    if (this.#controls) {
-      const t = this.#controls.target;
-      // Keep mat + grid + gameplay layers attached together.
-      const worldParallax = 0.12;
-      const px = t.x * worldParallax;
-      const pz = t.z * worldParallax;
-
-      if (this.#bambooMatFront) {
-        this.#bambooMatFront.position.x = px;
-        this.#bambooMatFront.position.z = pz;
-      }
-      if (this.#gridHelper) {
-        this.#gridHelper.position.x = px;
-        this.#gridHelper.position.z = pz;
-      }
-      if (this.#tilesGroup) {
-        this.#tilesGroup.position.x = px;
-        this.#tilesGroup.position.z = pz;
-      }
-      if (this.#regionOverlayGroup) {
-        this.#regionOverlayGroup.position.x = px;
-        this.#regionOverlayGroup.position.z = pz;
-      }
-      if (this.#ghostGroup) {
-        this.#ghostGroup.position.x = px;
-        this.#ghostGroup.position.z = pz;
-      }
-      if (this.#boardPlane) {
-        this.#boardPlane.position.x = px;
-        this.#boardPlane.position.z = pz;
-      }
-    }
+    this.#updateCameraTransition();
+    this.#syncBoardLayerPositions();
 
     if (this.#controls) this.#controls.update();
+    this.#syncGridPresentation();
     this.#syncLocalPlacementDock();
     if (this.#renderer && this.#scene && this.#camera) this.#renderer.render(this.#scene, this.#camera);
     requestAnimationFrame(this.#tick);
