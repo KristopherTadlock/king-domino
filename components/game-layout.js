@@ -1606,7 +1606,7 @@ export class GameLayout extends HTMLElement {
       .controlsPrimary.skipOnly { grid-template-columns: 1fr; }
       .controlsSecondary {
         position: absolute;
-        top: 78px;
+        top: 12px;
         right: 12px;
         display: flex;
         gap: 6px;
@@ -1622,7 +1622,7 @@ export class GameLayout extends HTMLElement {
       }
       .controlsTertiary {
         position: absolute;
-        top: 72px;
+        top: 12px;
         right: 82px;
         display: flex;
         flex-direction: column;
@@ -1702,6 +1702,71 @@ export class GameLayout extends HTMLElement {
         background: rgba(41, 68, 116, 0.24);
         color: #cfe4ff;
         border-color: rgba(136, 186, 255, 0.45);
+      }
+      .phaseSummary {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .roundProgress {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.055);
+        color: rgba(233,238,245,0.82);
+        font-size: 11px;
+        font-weight: 850;
+      }
+      .roundPips {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+      }
+      .roundPip {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: rgba(233,238,245,0.18);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+      }
+      .roundPip.done {
+        background: rgba(126, 192, 255, 0.48);
+      }
+      .roundPip.current {
+        background: rgba(255, 215, 106, 0.96);
+        box-shadow: 0 0 0 2px rgba(255, 215, 106, 0.15), 0 0 8px rgba(255, 215, 106, 0.35);
+      }
+      .draftTurnBanner {
+        display: grid;
+        gap: 2px;
+        padding: 8px 9px;
+        border-radius: 9px;
+        border: 1px solid rgba(136, 186, 255, 0.38);
+        background: rgba(41, 68, 116, 0.24);
+        color: #d8ecff;
+      }
+      .draftTurnBanner.isMine {
+        border-color: rgba(118, 255, 181, 0.62);
+        background: rgba(38, 136, 87, 0.30);
+        color: #d9ffeb;
+        box-shadow: 0 0 0 2px rgba(118, 255, 181, 0.08), 0 8px 22px rgba(0,0,0,0.20);
+      }
+      .draftTurnBanner.isBackToBack {
+        box-shadow: 0 0 0 2px rgba(255, 215, 106, 0.10), 0 8px 22px rgba(0,0,0,0.20);
+      }
+      .draftTurnBanner strong {
+        font-size: 13px;
+        line-height: 1.2;
+      }
+      .draftTurnMeta {
+        font-size: 11px;
+        font-weight: 750;
+        color: rgba(233,238,245,0.72);
       }
       .draftList {
         margin-top: 6px;
@@ -1798,6 +1863,9 @@ export class GameLayout extends HTMLElement {
       .draftItem.isCurrentPick {
         border-color: rgba(115, 232, 150, 0.78);
         box-shadow: 0 0 0 2px rgba(115, 232, 150, 0.14);
+      }
+      .draftItem.isCurrentPick.isMine {
+        background: rgba(115, 232, 150, 0.08);
       }
       .dominoPreview {
         width: 150px;
@@ -2210,6 +2278,7 @@ export class GameLayout extends HTMLElement {
         }
         .root.isDraftPhase .hud {
           bottom: 8px;
+          max-height: min(50dvh, 420px);
         }
         .controlsPrimary {
           left: 8px;
@@ -2221,13 +2290,13 @@ export class GameLayout extends HTMLElement {
           padding: 7px;
         }
         .controlsSecondary {
-          top: 74px;
+          top: 8px;
           right: 8px;
           min-width: 96px;
           padding: 6px;
         }
         .controlsTertiary {
-          top: 64px;
+          top: 8px;
           right: 58px;
         }
         .mobileActions {
@@ -2241,12 +2310,12 @@ export class GameLayout extends HTMLElement {
         .draftList {
           display: grid;
           grid-template-columns: 1fr;
-          gap: 3px;
+          gap: 2px;
         }
         .draftItem {
           min-width: 0;
           grid-template-columns: 28px max-content 28px;
-          min-height: 50px;
+          min-height: 48px;
           gap: 4px;
           padding: 1px 3px;
         }
@@ -2261,10 +2330,11 @@ export class GameLayout extends HTMLElement {
         }
         .placementChoice .dominoPreview.compact { width: min(184px, 100%); }
         .miniMapDock {
-          top: 78px;
+          box-sizing: border-box;
+          top: 8px;
           left: 8px;
           bottom: auto;
-          max-width: calc(100vw - 78px);
+          max-width: calc(100vw - 132px);
           padding: 6px;
         }
         .miniRow { gap: 6px; }
@@ -2281,11 +2351,12 @@ export class GameLayout extends HTMLElement {
           top: auto;
           bottom: 8px;
           left: 8px;
-          width: min(310px, calc(52vw - 8px));
-          max-height: min(44dvh, 380px);
-          padding: 8px;
+          width: min(326px, calc(52vw - 8px));
+          max-height: min(58dvh, 500px);
+          padding: 7px;
           border-radius: 12px;
           right: auto;
+          overflow: visible;
         }
         .miniMapDock {
           top: auto;
@@ -2293,23 +2364,23 @@ export class GameLayout extends HTMLElement {
           bottom: 8px;
           left: auto;
           box-sizing: border-box;
-          width: min(230px, calc(48vw - 10px));
-          max-width: 230px;
-          max-height: min(44dvh, 380px);
-          padding: 6px;
-          overflow: auto;
+          width: min(224px, calc(48vw - 10px));
+          max-width: 224px;
+          max-height: min(58dvh, 500px);
+          padding: 5px;
+          overflow: visible;
         }
         .miniRow {
           display: grid;
           grid-template-columns: 1fr;
-          gap: 6px;
+          gap: 5px;
           overflow: visible;
         }
         .miniCard {
           min-width: 0;
           justify-items: center;
-          padding: 8px;
-          gap: 4px;
+          padding: 6px;
+          gap: 3px;
         }
         .miniTitle {
           max-width: 100%;
@@ -2319,13 +2390,20 @@ export class GameLayout extends HTMLElement {
           font-size: 11px;
         }
         canvas.mini {
-          width: min(140px, calc(48vw - 46px));
-          height: min(140px, calc(48vw - 46px));
+          width: min(142px, calc(48vw - 42px));
+          height: min(142px, calc(48vw - 42px));
+        }
+      }
+      @media (min-width: 521px) and (max-height: 620px) {
+        .hud,
+        .miniMapDock {
+          max-height: calc(100dvh - 16px);
+          overflow: auto;
         }
       }
       @media (max-width: 520px) {
         .miniMapDock {
-          top: 78px;
+          top: 8px;
           padding: 7px;
         }
         .miniRow { gap: 7px; }
@@ -2352,6 +2430,18 @@ export class GameLayout extends HTMLElement {
         .draftPlayerToken::after {
           width: 20px;
           height: 21px;
+        }
+      }
+      @media (max-width: 380px) {
+        .miniMapDock {
+          padding: 6px;
+        }
+        .miniRow { gap: 5px; }
+        .miniCard { padding: 5px; }
+        .miniTitle { font-size: 10px; }
+        canvas.mini {
+          width: min(86px, calc((100vw - 150px) / 2));
+          height: min(86px, calc((100vw - 150px) / 2));
         }
       }
     `;
@@ -3266,6 +3356,55 @@ export class GameLayout extends HTMLElement {
     if (this.#game.isGameOver) return null;
     if (this.#game.state === GameState.PLACE) return this.#placementPlayerIndex();
     return this.#game.currentPickingPlayerIndex;
+  }
+
+  #roundProgress(g = this.#game) {
+    if (!g) return { round: 1, total: 1 };
+    const round = Math.max(1, g.round || 1);
+    const drawSize = Math.max(1, g.currentDraft?.length || 4);
+    const remainingRounds = g.isGameOver ? 0 : Math.ceil((g.remainingDominoNumbers?.length ?? 0) / drawSize);
+    return {
+      round,
+      total: Math.max(round, round + remainingRounds),
+    };
+  }
+
+  #roundProgressLabel(g = this.#game) {
+    const { round, total } = this.#roundProgress(g);
+    return `Round ${round}/${total}`;
+  }
+
+  #createRoundProgress(g = this.#game) {
+    const { round, total } = this.#roundProgress(g);
+    const progress = document.createElement('div');
+    progress.className = 'roundProgress';
+
+    const label = document.createElement('span');
+    label.textContent = `Round ${round} of ${total}`;
+
+    const pips = document.createElement('div');
+    pips.className = 'roundPips';
+    pips.setAttribute('aria-label', `Round ${round} of ${total}`);
+    const visiblePips = Math.min(total, 16);
+    for (let i = 1; i <= visiblePips; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'roundPip';
+      pip.classList.toggle('done', i < round);
+      pip.classList.toggle('current', i === round);
+      pips.append(pip);
+    }
+
+    progress.append(label, pips);
+    return progress;
+  }
+
+  #draftTurnMeta(pickOrder, pickedCount, playerIndex) {
+    const remaining = pickOrder.slice(pickedCount);
+    const picksLeft = remaining.filter((idx) => idx === playerIndex).length;
+    const pickNumber = pickOrder.slice(0, pickedCount + 1).filter((idx) => idx === playerIndex).length;
+    const totalPicks = pickOrder.filter((idx) => idx === playerIndex).length;
+    const backToBack = remaining[1] === playerIndex;
+    return { picksLeft, pickNumber, totalPicks, backToBack };
   }
 
   #syncFocusedBoardToPhase() {
@@ -4826,6 +4965,7 @@ export class GameLayout extends HTMLElement {
     if (this.#libraryOpen) {
       this.#hudTitle.textContent = 'Domino Library';
       this.#hudBody.innerHTML = '';
+      if (this.#topBar) this.#topBar.hidden = false;
       if (this.#endOverlay) this.#endOverlay.hidden = true;
       if (this.#miniMapDock) this.#miniMapDock.hidden = true;
       if (this.#canvasTurn) this.#canvasTurn.classList.remove('show');
@@ -4924,18 +5064,10 @@ export class GameLayout extends HTMLElement {
       }))
       .sort((a, b) => b.score - a.score || a.index - b.index);
 
-    const playerScores = g.players
-      .map((p, i) => `${this.#playerNames[i] ?? p.name}: ${p.board.score}`)
-      .join(' · ');
-    const titleActiveIdx = this.#activePlayerIndex();
-    const titleActiveName = titleActiveIdx == null
-      ? ''
-      : this.#playerNames[titleActiveIdx] ?? g.players[titleActiveIdx]?.name ?? `P${titleActiveIdx + 1}`;
-    const titlePhase = g.state === GameState.DRAFT ? 'picking' : 'placing';
-
     this.#hudTitle.textContent = g.isGameOver
       ? 'End of Game'
-      : `Round ${g.round} — ${titleActiveName} ${titlePhase} · ${playerScores}`;
+      : this.#roundProgressLabel(g);
+    if (this.#topBar) this.#topBar.hidden = true;
     this.#root?.classList.toggle('isDraftPhase', g.state === GameState.DRAFT && !g.isGameOver);
     this.#root?.classList.toggle('isPlacementPhase', g.state === GameState.PLACE && !g.isGameOver);
     if (this.#hud) this.#hud.hidden = g.isGameOver;
@@ -5149,16 +5281,11 @@ export class GameLayout extends HTMLElement {
       this.#hudBody.append(conn);
     }
 
-    const status = document.createElement('div');
-    status.className = 'muted';
     if (g.state === GameState.DRAFT) {
       this.#placementHint = '';
       this.#hoverAnchor = null;
       this.#hoverAnchorAuto = false;
       this.#setCanvasNotice('');
-      status.textContent = `Draft — ${this.#playerNames[g.currentPickingPlayerIndex] ?? g.players[g.currentPickingPlayerIndex].name} picking`;
-      this.#hudBody.append(status);
-
       const nextOrderByNumber = [...g.currentDraft]
         .sort((a, b) => a.domino.number - b.domino.number);
       const nextSlotByDominoNumber = new Map(
@@ -5166,6 +5293,34 @@ export class GameLayout extends HTMLElement {
       );
       const pickOrder = g.pickOrder ?? [];
       const pickedCount = g.pickCursor ?? g.currentDraft.filter((slot) => slot.player != null).length;
+      const draftActiveIdx = g.currentPickingPlayerIndex;
+      const draftActiveName = this.#playerNames[draftActiveIdx] ?? g.players[draftActiveIdx]?.name ?? `Player ${draftActiveIdx + 1}`;
+      const draftIsMine = !this.#hotseat && isMine;
+      const turnMeta = this.#draftTurnMeta(pickOrder, pickedCount, draftActiveIdx);
+
+      const summary = document.createElement('div');
+      summary.className = 'phaseSummary';
+      summary.append(this.#createRoundProgress(g));
+
+      const turn = document.createElement('div');
+      turn.className = 'draftTurnBanner';
+      turn.classList.toggle('isMine', draftIsMine);
+      turn.classList.toggle('isBackToBack', turnMeta.backToBack);
+
+      const turnTitle = document.createElement('strong');
+      turnTitle.textContent = draftIsMine ? 'Your pick' : `${draftActiveName} picking`;
+      const turnDetail = document.createElement('span');
+      turnDetail.className = 'draftTurnMeta';
+      const pickCountText = turnMeta.totalPicks > 1
+        ? `Pick ${Math.max(1, turnMeta.pickNumber)} of ${turnMeta.totalPicks}.`
+        : 'Pick one tile.';
+      const backToBackText = turnMeta.backToBack
+        ? (draftIsMine ? 'You pick again next.' : `${draftActiveName} picks again next.`)
+        : null;
+      turnDetail.textContent = [pickCountText, backToBackText].filter(Boolean).join(' ');
+      turn.append(turnTitle, turnDetail);
+      summary.append(turn);
+      this.#hudBody.append(summary);
 
       const list = document.createElement('div');
       list.className = 'draftList';
@@ -5174,6 +5329,8 @@ export class GameLayout extends HTMLElement {
         item.type = 'button';
         item.className = 'draftItem';
         item.classList.toggle('isPicked', slot.player != null);
+        item.classList.toggle('isCurrentPick', idx === pickedCount && slot.player == null);
+        item.classList.toggle('isMine', idx === pickedCount && slot.player == null && draftIsMine);
 
         const nextSlot = nextSlotByDominoNumber.get(slot.domino.number) ?? '?';
         const ownerName = slot.player == null
@@ -5291,7 +5448,6 @@ export class GameLayout extends HTMLElement {
     }
 
     const players = this.#game?.players ?? [];
-    const focusedPlayerIndex = Math.max(0, Math.min(this.#focusedPlayerIndex, players.length - 1));
     const previousGroup = this.#currentTileRenderGroup;
     for (let playerIndex = 0; playerIndex < players.length; playerIndex++) {
       const player = players[playerIndex];
@@ -5303,7 +5459,7 @@ export class GameLayout extends HTMLElement {
       boardGroup.userData.playerIndex = playerIndex;
       this.#tilesGroup.add(boardGroup);
       this.#currentTileRenderGroup = boardGroup;
-      this.#addPlayerPlayArea(playerIndex, playerIndex === focusedPlayerIndex);
+      this.#addPlayerPlayArea();
 
       for (const k of Object.keys(board)) {
         const tile = board[k];
@@ -5495,14 +5651,14 @@ export class GameLayout extends HTMLElement {
     this.#renderRegionScoring(null);
   }
 
-  #addPlayerPlayArea(playerIndex, focused = false) {
+  #addPlayerPlayArea() {
     const size = 8.8;
     const pad = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: focused ? 0.026 : 0.018,
+        opacity: 0.018,
         depthWrite: false,
         side: THREE.DoubleSide,
       })
