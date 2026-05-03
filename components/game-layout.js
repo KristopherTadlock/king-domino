@@ -1032,6 +1032,12 @@ export class GameLayout extends HTMLElement {
   /** @type {THREE.Group | null} */
   #currentTileRenderGroup = null;
 
+  /** @type {{object:THREE.Object3D,type:string,basePosition:THREE.Vector3,baseRotation:THREE.Euler,phase:number,speed:number,amplitude:number,travel:number,wander:number,tail?:THREE.Object3D,tailBaseRotation?:THREE.Euler,fin?:THREE.Object3D,finBaseRotation?:THREE.Euler,flippers?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],head?:THREE.Object3D,headBasePosition?:THREE.Vector3,headBaseRotation?:THREE.Euler,legs?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],material?:THREE.Material}[]} */
+  #animatedObjects = [];
+
+  /** @type {MediaQueryList | null} */
+  #reducedMotionQuery = null;
+
   /** @type {Map<string, THREE.Texture>} */
   #tileTextureCache = new Map();
 
@@ -1140,6 +1146,145 @@ export class GameLayout extends HTMLElement {
   #addTileObjects(...objects) {
     const group = this.#currentTileRenderGroup || this.#tilesGroup;
     group.add(...objects);
+  }
+
+  #registerAnimatedObject(object, type, options = {}) {
+    if (!object || this.#prefersReducedMotion()) return;
+    this.#animatedObjects.push({
+      object,
+      type,
+      basePosition: object.position.clone(),
+      baseRotation: object.rotation.clone(),
+      phase: options.phase ?? 0,
+      speed: options.speed ?? 1,
+      amplitude: options.amplitude ?? 1,
+      travel: options.travel ?? 0.035,
+      wander: options.wander ?? 0.014,
+      tail: options.tail,
+      tailBaseRotation: options.tail?.rotation.clone(),
+      fin: options.fin,
+      finBaseRotation: options.fin?.rotation.clone(),
+      flippers: (options.flippers ?? []).map((object) => ({
+        object,
+        baseRotation: object.rotation.clone(),
+      })),
+      head: options.head,
+      headBasePosition: options.head?.position.clone(),
+      headBaseRotation: options.head?.rotation.clone(),
+      legs: (options.legs ?? []).map((object) => ({
+        object,
+        baseRotation: object.rotation.clone(),
+      })),
+      material: options.material,
+    });
+  }
+
+  #updateAnimatedObjects(now = performance.now()) {
+    if (!this.#animatedObjects.length) return;
+    if (this.#prefersReducedMotion()) return;
+
+    const seconds = now / 1000;
+    for (const item of this.#animatedObjects) {
+      const object = item.object;
+      if (!object.parent) continue;
+      const t = seconds * item.speed + item.phase;
+
+      if (item.type === 'fish') {
+        const swim = Math.sin(t);
+        const drift = Math.cos(t * 0.72 + item.phase * 0.37);
+        const facing = item.baseRotation.y;
+        const forwardX = Math.sin(facing);
+        const forwardZ = Math.cos(facing);
+        const sideX = Math.cos(facing);
+        const sideZ = -Math.sin(facing);
+        const travel = item.travel * item.amplitude;
+        const wander = item.wander * item.amplitude;
+        object.position.set(
+          item.basePosition.x + forwardX * swim * travel + sideX * drift * wander,
+          item.basePosition.y + Math.sin(t * 1.7) * 0.006,
+          item.basePosition.z + forwardZ * swim * travel + sideZ * drift * wander
+        );
+        object.rotation.y = item.baseRotation.y + Math.sin(t * 1.3) * 0.18;
+        if (item.tail) {
+          item.tail.rotation.y = (item.tailBaseRotation?.y ?? Math.PI * 0.50) + Math.sin(t * 6.2) * 0.44;
+        }
+        if (item.fin) {
+          item.fin.rotation.z = (item.finBaseRotation?.z ?? 0) + Math.cos(t * 4.8) * 0.26;
+        }
+      } else if (item.type === 'deepFish') {
+        const swim = Math.sin(t * 0.76);
+        const drift = Math.cos(t * 0.52 + item.phase);
+        object.position.x = item.basePosition.x + swim * item.travel * item.amplitude;
+        object.position.z = item.basePosition.z + drift * item.wander * item.amplitude;
+        object.rotation.y = item.baseRotation.y + Math.sin(t * 0.68) * 0.10;
+      } else if (item.type === 'turtle') {
+        const glide = Math.sin(t * 0.58);
+        const drift = Math.cos(t * 0.42 + item.phase);
+        const dive = (Math.sin(t * 0.62 - Math.PI * 0.32) + 1) * 0.5;
+        const facing = item.baseRotation.y;
+        object.position.x = item.basePosition.x + Math.sin(facing) * glide * item.travel + Math.cos(facing) * drift * item.wander;
+        object.position.y = item.basePosition.y + Math.sin(t * 1.15) * 0.005 - dive * 0.026 * item.amplitude;
+        object.position.z = item.basePosition.z + Math.cos(facing) * glide * item.travel - Math.sin(facing) * drift * item.wander;
+        object.rotation.x = item.baseRotation.x + Math.sin(t * 0.62) * 0.035 + dive * 0.10 * item.amplitude;
+        object.rotation.y = item.baseRotation.y + Math.sin(t * 0.72) * 0.12;
+        for (let i = 0; i < (item.flippers?.length ?? 0); i++) {
+          const flipper = item.flippers[i];
+          flipper.object.rotation.y = flipper.baseRotation.y + Math.sin(t * 2.8 + i * 0.9) * 0.18;
+        }
+      } else if (item.type === 'buoy') {
+        object.position.y = item.basePosition.y + Math.sin(t) * 0.014 * item.amplitude;
+        object.rotation.x = item.baseRotation.x + Math.sin(t * 0.78) * 0.045 * item.amplitude;
+        object.rotation.z = item.baseRotation.z + Math.cos(t * 0.88) * 0.045 * item.amplitude;
+      } else if (item.type === 'boat') {
+        object.position.y = item.basePosition.y + Math.sin(t) * 0.010 * item.amplitude;
+        object.rotation.x = item.baseRotation.x + Math.sin(t * 0.86) * 0.030 * item.amplitude;
+        object.rotation.z = item.baseRotation.z + Math.cos(t * 0.72) * 0.050 * item.amplitude;
+      } else if (item.type === 'lighthouseBeam') {
+        object.rotation.y = item.baseRotation.y + Math.sin(t) * 0.42 * item.amplitude;
+        if (item.material) {
+          item.material.opacity = 0.07 + (Math.sin(t * 1.7) + 1) * 0.025;
+        }
+      } else if (item.type === 'sheep') {
+        const clamp01 = (value) => Math.max(0, Math.min(1, value));
+        const snap = (value) => {
+          const v = clamp01(value);
+          return v < 0.5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2;
+        };
+        const cycle = ((t % 1) + 1) % 1;
+        const headDrop = snap((cycle - 0.22) / 0.07);
+        const headLift = snap((cycle - 0.56) / 0.07);
+        const chewFrame = cycle > 0.32 && cycle < 0.52
+          ? Math.floor((cycle - 0.32) / 0.070) % 2
+          : 0;
+        const graze = Math.max(0, Math.min(1, headDrop - headLift)) * (chewFrame ? 0.82 : 1);
+        const walkProgress = clamp01((cycle - 0.78) / 0.14);
+        const walkActive = cycle >= 0.78 && cycle < 0.92 ? 1 : 0;
+        const stepFrame = walkActive ? Math.floor(walkProgress * 4) : 0;
+        const step = walkActive ? [-0.45, 0.20, 0.46, -0.16][stepFrame] ?? 0 : 0;
+        const facing = item.baseRotation.y;
+        object.position.x = item.basePosition.x + Math.sin(facing) * step * item.travel * item.amplitude;
+        object.position.y = item.basePosition.y + walkActive * (stepFrame % 2 ? 0.003 : 0.001) * item.amplitude;
+        object.position.z = item.basePosition.z + Math.cos(facing) * step * item.travel * item.amplitude;
+        object.rotation.y = item.baseRotation.y + walkActive * (stepFrame % 2 ? 0.026 : -0.018) * item.amplitude;
+        if (item.head) {
+          item.head.position.y = (item.headBasePosition?.y ?? 0) - graze * 0.062 * item.amplitude;
+          item.head.position.x = (item.headBasePosition?.x ?? 0) + graze * 0.030 * item.amplitude;
+          item.head.rotation.z = (item.headBaseRotation?.z ?? 0) - graze * 0.56 * item.amplitude;
+        }
+        for (let i = 0; i < (item.legs?.length ?? 0); i++) {
+          const leg = item.legs[i];
+          const side = i % 2 === stepFrame % 2 ? 1 : -1;
+          leg.object.rotation.x = leg.baseRotation.x + walkActive * side * 0.12 * item.amplitude;
+        }
+      } else if (item.type === 'gate') {
+        object.rotation.y = item.baseRotation.y + Math.sin(t) * 0.16 * item.amplitude;
+      } else if (item.type === 'wheat') {
+        const gust = Math.sin(t + item.basePosition.x * 0.35 + item.basePosition.z * 0.62);
+        const shimmer = Math.sin(t * 1.7 + item.phase) * 0.35;
+        object.rotation.x = item.baseRotation.x + (gust * 0.055 + shimmer * 0.018) * item.amplitude;
+        object.rotation.z = item.baseRotation.z + (gust * 0.095 + shimmer * 0.030) * item.amplitude;
+      }
+    }
   }
 
   #frameToBoardSize(boardSize, pad = 2, origin = { x: 0, z: 0 }, animate = false, minViewSize = null) {
@@ -2858,7 +3003,10 @@ export class GameLayout extends HTMLElement {
   }
 
   #prefersReducedMotion() {
-    return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    if (!this.#reducedMotionQuery && globalThis.matchMedia) {
+      this.#reducedMotionQuery = globalThis.matchMedia('(prefers-reduced-motion: reduce)');
+    }
+    return Boolean(this.#reducedMotionQuery?.matches);
   }
 
   #startAttractSeedKey() {
@@ -5822,6 +5970,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #renderBoard() {
+    this.#animatedObjects = [];
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
     if (this.#isStartAttractMode() && !this.#libraryOpen) {
       this.#renderDominoLibraryScene({
@@ -6124,6 +6273,17 @@ export class GameLayout extends HTMLElement {
     return spots;
   }
 
+  #clearDetailSpots(rand, count, limit = 0.32, minDistance = 0.17, avoid = []) {
+    const spots = [];
+    for (let attempt = 0; attempt < count * 36 && spots.length < count; attempt++) {
+      const spot = this.#detailSpot(rand, limit);
+      const clear = spots.every((other) => Math.hypot(spot.dx - other.dx, spot.dz - other.dz) >= minDistance)
+        && avoid.every((other) => Math.hypot(spot.dx - other.dx, spot.dz - other.dz) >= (other.r ?? minDistance));
+      if (clear) spots.push(spot);
+    }
+    return spots;
+  }
+
   #tileArtSeedKey(tile, fallback = '') {
     return tile?.artSeed || fallback || `${tile?.x ?? 0},${tile?.y ?? 0}`;
   }
@@ -6207,7 +6367,7 @@ export class GameLayout extends HTMLElement {
     });
   }
 
-  #addWaterFish(x, y, dx, dz, angle, scale, bodyMat, tailMat) {
+  #addWaterFish(x, y, dx, dz, angle, scale, bodyMat, tailMat, motion = {}) {
     const fish = new THREE.Group();
     fish.position.set(x + dx, 0.270, y + dz);
     fish.rotation.y = angle;
@@ -6229,6 +6389,15 @@ export class GameLayout extends HTMLElement {
     fish.add(fin);
 
     this.#addTileObjects(fish);
+    this.#registerAnimatedObject(fish, 'fish', {
+      phase: hash32(`fish|${x}|${y}|${dx.toFixed(3)}|${dz.toFixed(3)}|${angle.toFixed(3)}`) / 997,
+      speed: 0.72 + scale * 0.28,
+      amplitude: scale,
+      travel: motion.travel,
+      wander: motion.wander,
+      tail,
+      fin,
+    });
   }
 
   #addWaterTurtle(x, y, dx, dz, angle, shellMat, bodyMat) {
@@ -6245,6 +6414,7 @@ export class GameLayout extends HTMLElement {
     head.position.set(0.076, 0.016, 0);
     turtle.add(head);
 
+    const flippers = [];
     for (const [fx, fz, rz] of [
       [-0.022, -0.044, -0.42],
       [0.034, -0.044, 0.36],
@@ -6255,9 +6425,18 @@ export class GameLayout extends HTMLElement {
       flipper.position.set(fx, 0.006, fz);
       flipper.rotation.y = rz;
       turtle.add(flipper);
+      flippers.push(flipper);
     }
 
     this.#addTileObjects(turtle);
+    this.#registerAnimatedObject(turtle, 'turtle', {
+      phase: hash32(`turtle|${x}|${y}|${dx.toFixed(3)}|${dz.toFixed(3)}|${angle.toFixed(3)}`) / 997,
+      speed: 0.58,
+      amplitude: 1,
+      travel: 0.012,
+      wander: 0.006,
+      flippers,
+    });
   }
 
   #addPastureSheep(x, y, dx, dz, angle, scale, sheepMat, woolMat, headMat) {
@@ -6282,19 +6461,22 @@ export class GameLayout extends HTMLElement {
       sheep.add(puff);
     }
 
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0.088 * scale, 0.300, 0);
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.030 * scale, 9, 7), headMat);
     head.scale.set(0.94, 0.82, 1.08);
-    head.position.set(0.088 * scale, 0.300, 0);
-    sheep.add(head);
+    headGroup.add(head);
 
     for (const side of [-1, 1]) {
       const ear = new THREE.Mesh(new THREE.ConeGeometry(0.010 * scale, 0.024 * scale, 5), headMat);
-      ear.position.set(0.091 * scale, 0.324, side * 0.020 * scale);
+      ear.position.set(0.003 * scale, 0.024, side * 0.020 * scale);
       ear.rotation.x = side * 0.55;
       ear.rotation.z = Math.PI / 2;
-      sheep.add(ear);
+      headGroup.add(ear);
     }
+    sheep.add(headGroup);
 
+    const legs = [];
     for (const [lx, lz] of [
       [-0.042, -0.030],
       [-0.042, 0.030],
@@ -6304,9 +6486,19 @@ export class GameLayout extends HTMLElement {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.010 * scale, 0.043 * scale, 0.010 * scale), headMat);
       leg.position.set(lx * scale, 0.246, lz * scale);
       sheep.add(leg);
+      legs.push(leg);
     }
 
     this.#addTileObjects(sheep);
+    this.#registerAnimatedObject(sheep, 'sheep', {
+      phase: hash32(`sheep|${x}|${y}|${dx.toFixed(3)}|${dz.toFixed(3)}|${angle.toFixed(3)}`) / 997,
+      speed: 0.22 + scale * 0.05,
+      amplitude: scale,
+      travel: 0.006,
+      wander: 0,
+      head: headGroup,
+      legs,
+    });
   }
 
   #addMineCart(x, y, dx, dz, angle, railMat, cartMat, darkRockMat, oreMat, rand) {
@@ -6569,14 +6761,31 @@ export class GameLayout extends HTMLElement {
           net.position.set(-0.104 * scale, 0.015, 0.050 * scale);
           boat.add(net);
           group.add(boat);
+          this.#registerAnimatedObject(boat, 'boat', {
+            phase: rand() * Math.PI * 2,
+            speed: 0.82 + rand() * 0.28,
+            amplitude: 0.75 + scale * 0.22,
+          });
         };
 
         const addMarkerBuoy = (cx, cz, colorMat = redMat) => {
-          addCyl(0.024, 0.032, 0.070, 8, colorMat, cx, 0.290, cz);
-          addCyl(0.010, 0.012, 0.080, 6, ropeMat, cx, 0.352, cz);
+          const buoy = new THREE.Group();
+          buoy.position.set(cx, 0, cz);
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.032, 0.070, 8), colorMat);
+          body.position.set(0, 0.290, 0);
+          buoy.add(body);
+          const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.012, 0.080, 6), ropeMat);
+          stem.position.set(0, 0.352, 0);
+          buoy.add(stem);
           const cap = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 6), lightMat);
-          cap.position.set(cx, 0.405, cz);
-          group.add(cap);
+          cap.position.set(0, 0.405, 0);
+          buoy.add(cap);
+          group.add(buoy);
+          this.#registerAnimatedObject(buoy, 'buoy', {
+            phase: rand() * Math.PI * 2,
+            speed: 0.74 + rand() * 0.18,
+            amplitude: 0.70 + rand() * 0.24,
+          });
         };
 
         if (variant === 0) {
@@ -6590,6 +6799,28 @@ export class GameLayout extends HTMLElement {
           const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 8), lightMat);
           beacon.position.set(0.02, 0.53, -0.04);
           group.add(beacon);
+          const beamMat = new THREE.MeshBasicMaterial({
+            color: 0xfff0a6,
+            transparent: true,
+            opacity: 0.09,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+          });
+          const beamPivot = new THREE.Group();
+          beamPivot.position.set(0.02, 0.535, -0.04);
+          beamPivot.rotation.y = -0.46 + rand() * 0.92;
+          const beam = new THREE.Mesh(createWaterShardGeometry(0.70, 0.13, rand), beamMat);
+          beam.position.set(0.36, 0, 0);
+          beam.rotation.x = -Math.PI / 2;
+          beamPivot.add(beam);
+          group.add(beamPivot);
+          this.#registerAnimatedObject(beamPivot, 'lighthouseBeam', {
+            phase: rand() * Math.PI * 2,
+            speed: 0.36 + rand() * 0.12,
+            amplitude: 0.72,
+            material: beamMat,
+          });
         } else if (variant === 1) {
           addIsland(-0.17, 0.11, 0.78, 0.56);
           addPier(-0.05, 0.11, -0.08);
@@ -6623,10 +6854,20 @@ export class GameLayout extends HTMLElement {
           body.scale.set(1.48, 0.72, 0.92);
           body.position.set(0, 0.285, 0);
           sheep.add(body);
+          const headGroup = new THREE.Group();
+          headGroup.position.set(0.056 * s, 0.286, 0.000);
           const head = new THREE.Mesh(new THREE.SphereGeometry(0.018 * s, 8, 6), sheepHeadMat);
-          head.position.set(0.056 * s, 0.286, 0.000);
-          sheep.add(head);
+          headGroup.add(head);
+          sheep.add(headGroup);
           group.add(sheep);
+          this.#registerAnimatedObject(sheep, 'sheep', {
+            phase: rand() * Math.PI * 2,
+            speed: 0.18 + rand() * 0.08,
+            amplitude: 0.44 * s,
+            travel: 0.004,
+            wander: 0,
+            head: headGroup,
+          });
         };
 
         for (const z of [-0.18, 0.18]) {
@@ -6637,6 +6878,23 @@ export class GameLayout extends HTMLElement {
         for (const xRail of [-0.23, 0.23]) {
           addBox(0.018, 0.018, 0.30, woodMat, xRail, 0.325, 0.00);
         }
+        const gate = new THREE.Group();
+        gate.position.set(-0.23, 0.304, 0.00);
+        for (const z of [-0.055, 0.055]) {
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.017, 0.014), woodMat);
+          slat.position.set(0.085, z === -0.055 ? 0.012 : 0.068, z);
+          gate.add(slat);
+        }
+        const brace = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.092, 0.145), darkWoodMat);
+        brace.position.set(0.035, 0.040, 0);
+        brace.rotation.y = -0.08;
+        gate.add(brace);
+        group.add(gate);
+        this.#registerAnimatedObject(gate, 'gate', {
+          phase: rand() * Math.PI * 2,
+          speed: 0.24 + rand() * 0.08,
+          amplitude: 0.58,
+        });
 
         if (crowns >= 2) {
           addBox(0.25, 0.15, 0.20, trimMat, -0.04, 0.22 + 0.075, -0.01);
@@ -6910,29 +7168,37 @@ export class GameLayout extends HTMLElement {
 
             const h = 0.12 + rand() * (fieldStyle === 2 ? 0.13 : 0.10);
             const lean = -0.26 + rand() * 0.52;
+            const stalkGroup = new THREE.Group();
+            stalkGroup.position.set(x + dx, 0.23, y + dz);
             const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.010, h, 6), rand() > 0.55 ? paleStalkMat : stalkMat);
-            stalk.position.set(x + dx, 0.23 + h / 2, y + dz);
+            stalk.position.set(0, h / 2, 0);
             stalk.rotation.z = lean;
             stalk.rotation.x = -0.08 + rand() * 0.16;
             stalk.rotation.y = rowAngle + (-0.20 + rand() * 0.40);
-            this.#addTileObjects(stalk);
+            stalkGroup.add(stalk);
 
             const head = new THREE.Mesh(new THREE.SphereGeometry(0.030, 8, 6), rand() > 0.25 ? seedMat : darkSeedMat);
             head.scale.set(0.54, 1.55 + rand() * 0.35, 0.54);
-            head.position.set(x + dx + Math.sin(lean) * 0.025, 0.23 + h + 0.012, y + dz);
+            head.position.set(Math.sin(lean) * 0.025, h + 0.012, 0);
             head.rotation.z = lean;
             head.rotation.y = stalk.rotation.y;
-            this.#addTileObjects(head);
+            stalkGroup.add(head);
 
             if (rand() > 0.48) {
               for (const side of [-1, 1]) {
                 const awn = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.003, 0.055, 5), paleStalkMat);
-                awn.position.set(x + dx + side * 0.014, 0.23 + h + 0.040, y + dz);
+                awn.position.set(side * 0.014, h + 0.040, 0);
                 awn.rotation.z = lean + side * 0.72;
                 awn.rotation.y = stalk.rotation.y;
-                this.#addTileObjects(awn);
+                stalkGroup.add(awn);
               }
             }
+            this.#addTileObjects(stalkGroup);
+            this.#registerAnimatedObject(stalkGroup, 'wheat', {
+              phase: rowZ * 1.8 + i * 0.18 + rand() * 0.20,
+              speed: 1.05 + rand() * 0.16,
+              amplitude: 0.72 + rand() * 0.28,
+            });
           }
         }
 
@@ -7021,10 +7287,19 @@ export class GameLayout extends HTMLElement {
         const turtleShellMat = new THREE.MeshStandardMaterial({ color: 0x3f7f60, roughness: 0.68, metalness: 0.04, emissive: 0x0b2c1c, emissiveIntensity: 0.05 });
         const turtleBodyMat = new THREE.MeshStandardMaterial({ color: 0x79b684, roughness: 0.72, metalness: 0.03 });
 
+        const crowned = (tile.crowns || 0) > 0;
+        const avoidZones = crowned
+          ? [
+              { dx: -0.14, dz: 0.13, r: 0.31 },
+              { dx: -0.26, dz: 0.28, r: 0.22 },
+              { dx: -0.02, dz: 0.04, r: 0.19 },
+              { dx: -0.02, dz: 0.24, r: 0.16 },
+            ]
+          : [];
+
         const waterStyle = Math.floor(rand() * 4);
         const glintCount = waterStyle === 0 ? 0 : waterStyle === 1 ? 1 : 2;
-        for (let i = 0; i < glintCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.32);
+        for (const { dx, dz } of this.#clearDetailSpots(rand, glintCount, 0.32, 0.12, avoidZones)) {
           const glint = new THREE.Mesh(
             createWaterShardGeometry(0.10 + rand() * 0.13, 0.024 + rand() * 0.026, rand),
             glintMat
@@ -7036,8 +7311,7 @@ export class GameLayout extends HTMLElement {
         }
 
         const shadowCount = waterStyle === 3 ? 0 : 1 + Math.floor(rand() * 2);
-        for (let i = 0; i < shadowCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.26);
+        for (const { dx, dz } of this.#clearDetailSpots(rand, shadowCount, 0.26, 0.13, avoidZones)) {
           const shadow = new THREE.Mesh(
             createWaterShardGeometry(0.15 + rand() * 0.16, 0.060 + rand() * 0.050, rand),
             shadowMat
@@ -7046,22 +7320,40 @@ export class GameLayout extends HTMLElement {
           shadow.rotation.x = -Math.PI / 2;
           shadow.rotation.y = -0.55 + rand() * 1.10;
           this.#addTileObjects(shadow);
+          this.#registerAnimatedObject(shadow, 'deepFish', {
+            phase: rand() * Math.PI * 2,
+            speed: 0.34 + rand() * 0.16,
+            amplitude: 0.78 + rand() * 0.26,
+            travel: 0.010,
+            wander: 0.006,
+          });
         }
 
         if (rand() > 0.82) {
-          const { dx, dz } = this.#detailSpot(rand, 0.23);
-          this.#addWaterTurtle(x, y, dx, dz, rand() * Math.PI * 2, turtleShellMat, turtleBodyMat);
+          const [spot] = this.#clearDetailSpots(rand, 1, 0.23, 0.12, avoidZones);
+          if (spot) this.#addWaterTurtle(x, y, spot.dx, spot.dz, rand() * Math.PI * 2, turtleShellMat, turtleBodyMat);
         } else {
           const fishCount = waterStyle === 2 ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 3);
-          for (let i = 0; i < fishCount; i++) {
-            const { dx, dz } = this.#detailSpot(rand, 0.30);
+          const fishSpots = this.#clearDetailSpots(rand, fishCount, 0.30, crowned ? 0.12 : 0.10, avoidZones);
+          for (let i = 0; i < fishSpots.length; i++) {
+            const { dx, dz } = fishSpots[i];
             const bodyMat = i === 0 && rand() > 0.40
               ? fishOrangeMat
               : rand() > 0.55
                 ? fishPaleMat
                 : fishBlueMat;
             const tailMat = bodyMat === fishBlueMat ? fishPaleMat : bodyMat;
-            this.#addWaterFish(x, y, dx, dz, rand() * Math.PI * 2, 0.82 + rand() * 0.46, bodyMat, tailMat);
+            this.#addWaterFish(
+              x,
+              y,
+              dx,
+              dz,
+              rand() * Math.PI * 2,
+              0.82 + rand() * 0.46,
+              bodyMat,
+              tailMat,
+              crowned ? { travel: 0.014, wander: 0.006 } : {}
+            );
           }
         }
         break;
@@ -8592,6 +8884,7 @@ export class GameLayout extends HTMLElement {
     if (this.#controls) this.#controls.update();
     this.#syncGridPresentation();
     this.#syncLocalPlacementDock();
+    this.#updateAnimatedObjects();
     if (this.#renderer && this.#scene && this.#camera) this.#renderer.render(this.#scene, this.#camera);
     requestAnimationFrame(this.#tick);
   };
