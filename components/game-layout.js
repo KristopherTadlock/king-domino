@@ -227,15 +227,15 @@ function createSceneBackgroundTexture(debug = false, size = 1024, layer = 'front
   canvas.height = size;
   const ctx = canvas.getContext('2d');
 
-  // Base tabletop tone. Keep it organic, but avoid regular seams that can
+  // Stained tabletop tone. Keep it organic, but avoid regular seams that can
   // accidentally read as a second gameplay grid.
   const isBack = layer === 'back';
   const top = isBack
-    ? (debug ? '#876949' : '#735838')
-    : (debug ? '#bd9664' : '#9d7848');
+    ? (debug ? '#4d3827' : '#2f2118')
+    : (debug ? '#6a4b31' : '#4a321f');
   const bottom = isBack
-    ? (debug ? '#6d5234' : '#5d4529')
-    : (debug ? '#977142' : '#785632');
+    ? (debug ? '#382719' : '#22160f')
+    : (debug ? '#533722' : '#342113');
   const grad = ctx.createLinearGradient(0, 0, 0, size);
   grad.addColorStop(0, top);
   grad.addColorStop(1, bottom);
@@ -253,46 +253,74 @@ function createSceneBackgroundTexture(debug = false, size = 1024, layer = 'front
     const warm = rand() > 0.45;
     const cloud = ctx.createRadialGradient(cx, cy, r * 0.05, cx, cy, r);
     cloud.addColorStop(0, warm
-      ? `rgba(255,226,172,${0.035 + rand() * 0.05})`
-      : `rgba(50,30,12,${0.035 + rand() * 0.045})`);
+      ? `rgba(196,121,54,${0.030 + rand() * 0.055})`
+      : `rgba(10,8,6,${0.050 + rand() * 0.055})`);
     cloud.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = cloud;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  // Short, broken fibers suggest a tabletop/mat surface while avoiding any
+  // Irregular walnut grain suggests a crafted table while avoiding any
   // repeated alignment with the kingdom grid.
   ctx.lineCap = 'round';
-  for (let i = 0; i < 520; i++) {
-    const x = rand() * size;
+  for (let i = 0; i < 150; i++) {
+    const x = -size * 0.10 + rand() * size * 1.20;
     const y = rand() * size;
-    const len = size * (0.012 + rand() * 0.045);
-    const angle = -0.70 + rand() * 1.40;
-    const alpha = isBack ? 0.025 + rand() * 0.045 : 0.035 + rand() * 0.065;
+    const len = size * (0.12 + rand() * 0.34);
+    const bend = size * (-0.07 + rand() * 0.14);
+    const drift = size * (-0.05 + rand() * 0.12);
+    const alpha = isBack ? 0.028 + rand() * 0.040 : 0.040 + rand() * 0.065;
     const light = rand() > 0.58;
     ctx.strokeStyle = light
-      ? `rgba(255,232,190,${alpha})`
-      : `rgba(45,28,12,${alpha})`;
-    ctx.lineWidth = 0.7 + rand() * 1.2;
+      ? `rgba(214,145,75,${alpha})`
+      : `rgba(12,8,5,${alpha})`;
+    ctx.lineWidth = 0.9 + rand() * 1.8;
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+    ctx.bezierCurveTo(
+      x + len * 0.32,
+      y + bend,
+      x + len * 0.70,
+      y - bend * 0.55,
+      x + len,
+      y + drift
+    );
     ctx.stroke();
   }
 
-  // Subtle fiber speckles
-  const specks = isBack ? 3000 : 2500;
+  // Subtle pores and knots keep the surface from feeling like a flat plane.
+  const knots = isBack ? 10 : 14;
+  for (let i = 0; i < knots; i++) {
+    const cx = rand() * size;
+    const cy = rand() * size;
+    const rx = size * (0.025 + rand() * 0.040);
+    const ry = size * (0.010 + rand() * 0.022);
+    const angle = rand() * Math.PI;
+    ctx.strokeStyle = `rgba(16,10,6,${0.12 + rand() * 0.12})`;
+    ctx.lineWidth = 1.1 + rand() * 1.8;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, angle, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(214,132,58,${0.018 + rand() * 0.030})`;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx * 0.58, ry * 0.58, angle, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const specks = isBack ? 2100 : 1800;
   for (let i = 0; i < specks; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    const alpha = 0.015 + rand() * 0.05;
-    ctx.fillStyle = `rgba(35,22,9,${alpha})`;
+    const alpha = 0.018 + rand() * 0.055;
+    ctx.fillStyle = rand() > 0.38
+      ? `rgba(10,7,5,${alpha})`
+      : `rgba(197,122,56,${alpha * 0.7})`;
     ctx.fillRect(x, y, 1, 1);
   }
 
   const vignette = ctx.createRadialGradient(size / 2, size / 2, size * 0.24, size / 2, size / 2, size * 0.76);
-  vignette.addColorStop(0, 'rgba(255,255,255,0.02)');
-  vignette.addColorStop(1, 'rgba(22,12,5,0.16)');
+  vignette.addColorStop(0, 'rgba(255,205,142,0.030)');
+  vignette.addColorStop(1, 'rgba(4,3,2,0.24)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, size, size);
 
@@ -952,6 +980,18 @@ export class GameLayout extends HTMLElement {
   /** @type {number | null} */
   #libraryFocusedDominoNumber = null;
 
+  /** @type {number | null} */
+  #startAttractFocusedDominoNumber = null;
+
+  /** @type {string} */
+  #startAttractKey = '';
+
+  /** @type {number} */
+  #startAttractStep = 0;
+
+  /** @type {number} */
+  #startAttractNextAt = 0;
+
   /** @type {THREE.WebGLRenderer} */
   #renderer;
   /** @type {THREE.Scene} */
@@ -1176,6 +1216,10 @@ export class GameLayout extends HTMLElement {
       const r = overlayRect(el);
       if (r) visibleLeft = Math.max(visibleLeft, r.right + gap);
     };
+    const insetRight = (el) => {
+      const r = overlayRect(el);
+      if (r) visibleRight = Math.min(visibleRight, r.left - gap);
+    };
     const mobile = this.#isMobileViewport();
     insetTop(this.#topBar);
     if (this.#isSplitViewport()) {
@@ -1189,6 +1233,11 @@ export class GameLayout extends HTMLElement {
     }
     insetBottom(this.#primaryControlsRow);
     insetBottom(this.#localPlacementDock);
+    if (this.#isStartAttractMode()) {
+      const startCard = this.#startOverlay?.querySelector('.startCard');
+      if (this.#isMobileViewport()) insetBottom(startCard);
+      else insetRight(startCard);
+    }
 
     const usableW = Math.max(120, visibleRight - visibleLeft);
     const usableH = Math.max(120, visibleBottom - visibleTop);
@@ -1296,6 +1345,8 @@ export class GameLayout extends HTMLElement {
       this.#renderBoard();
       if (this.#libraryOpen && this.#libraryFocusedDominoNumber != null) {
         this.#centerOnLibraryDomino(this.#libraryFocusedDominoNumber);
+      } else if (this.#isStartAttractMode()) {
+        this.#syncStartAttractCamera(true);
       } else {
         this.#centerOnFocusedBoard();
       }
@@ -2105,10 +2156,12 @@ export class GameLayout extends HTMLElement {
         position: absolute;
         inset: 0;
         display: grid;
-        place-items: center;
-        padding: 22px;
+        place-items: center end;
+        padding: clamp(18px, 3vw, 34px);
         z-index: 20;
-        background: radial-gradient(circle at 50% 34%, rgba(40, 48, 62, 0.24), rgba(10, 12, 16, 0.42));
+        background:
+          radial-gradient(circle at 24% 26%, rgba(126, 192, 255, 0.16), rgba(126, 192, 255, 0) 34%),
+          linear-gradient(90deg, rgba(10, 12, 16, 0.06) 0%, rgba(10, 12, 16, 0.26) 50%, rgba(10, 12, 16, 0.62) 100%);
         color: #e9eef5;
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
         pointer-events: auto;
@@ -2120,16 +2173,18 @@ export class GameLayout extends HTMLElement {
       }
       .startOverlay[hidden] { display: none !important; }
       .startCard {
-        width: min(460px, calc(100vw - 32px));
+        width: min(430px, calc(100vw - 32px));
         min-width: 0;
         display: grid;
         gap: 14px;
         padding: 18px;
         border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.16);
-        background: rgba(20,22,28,0.90);
-        backdrop-filter: blur(10px);
-        box-shadow: 0 18px 60px rgba(0,0,0,0.38);
+        border: 1px solid rgba(255,255,255,0.18);
+        background:
+          linear-gradient(145deg, rgba(29, 33, 42, 0.92), rgba(16, 18, 24, 0.90)),
+          rgba(20,22,28,0.90);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 22px 72px rgba(0,0,0,0.48), inset 0 1px 0 rgba(255,255,255,0.08);
       }
       .startKicker {
         color: rgba(233,238,245,0.66);
@@ -2223,6 +2278,18 @@ export class GameLayout extends HTMLElement {
       }
       .startSecondary {
         background: rgba(255,255,255,0.08);
+      }
+      @media (max-width: 760px) {
+        .startOverlay {
+          place-items: end center;
+          padding: 16px;
+          background:
+            radial-gradient(circle at 50% 18%, rgba(126, 192, 255, 0.13), rgba(126, 192, 255, 0) 38%),
+            linear-gradient(180deg, rgba(10, 12, 16, 0.04) 0%, rgba(10, 12, 16, 0.22) 48%, rgba(10, 12, 16, 0.70) 100%);
+        }
+        .startCard {
+          width: min(440px, calc(100vw - 24px));
+        }
       }
       .lobbyPlayers {
         display: grid;
@@ -2728,7 +2795,14 @@ export class GameLayout extends HTMLElement {
   }
 
   #randomRoomCode() {
-    return Math.random().toString(36).slice(2, 8);
+    const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+    const bytes = new Uint8Array(4);
+    if (globalThis.crypto?.getRandomValues) {
+      globalThis.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
   }
 
   #roomCodeFromInput(value) {
@@ -2737,11 +2811,11 @@ export class GameLayout extends HTMLElement {
     try {
       const parsed = new URL(raw, location.href);
       const room = parsed.searchParams.get('room');
-      if (room) return room.trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+      if (room) return room.trim().replace(/[^a-z0-9-]/gi, '').toUpperCase().slice(0, 24);
     } catch {
       // fall through to plain room code cleanup
     }
-    return raw.replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+    return raw.replace(/[^a-z0-9-]/gi, '').toUpperCase().slice(0, 24);
   }
 
   #seedFromInput(value) {
@@ -2777,6 +2851,75 @@ export class GameLayout extends HTMLElement {
       && !!this.#roomId
       && this.#myPlayerIndex != null
       && !this.#roomIsReady();
+  }
+
+  #isStartAttractMode() {
+    return this.#homeMode || this.#isLobbyWaiting();
+  }
+
+  #prefersReducedMotion() {
+    return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  #startAttractSeedKey() {
+    return [
+      this.#roomId || this.#pendingInviteRoom || 'home',
+      this.#pendingInviteSeed ?? this.#game?.seed ?? 'seed',
+      this.#playerCount,
+    ].join('|');
+  }
+
+  #startAttractDominoNumber(step = 0) {
+    const deck = DominoPoolManager.getStartingDominoPool();
+    if (!deck.length) return null;
+
+    const rand = mulberry32(hash32(`${this.#startAttractSeedKey()}|attract|${step}`));
+    return deck[Math.floor(rand() * deck.length)]?.number ?? deck[0].number;
+  }
+
+  #resetStartAttract() {
+    this.#startAttractFocusedDominoNumber = null;
+    this.#startAttractKey = '';
+    this.#startAttractStep = 0;
+    this.#startAttractNextAt = 0;
+  }
+
+  #syncStartAttractCamera(force = false) {
+    if (!this.#threeOk || !this.#isStartAttractMode() || this.#libraryOpen) {
+      if (!this.#isStartAttractMode()) this.#resetStartAttract();
+      return;
+    }
+
+    const key = this.#startAttractSeedKey();
+    const now = performance.now();
+    const reducedMotion = this.#prefersReducedMotion();
+    if (force || key !== this.#startAttractKey || this.#startAttractFocusedDominoNumber == null) {
+      this.#startAttractKey = key;
+      this.#startAttractStep = Math.floor(hash32(key) % 48);
+      this.#startAttractFocusedDominoNumber = this.#startAttractDominoNumber(this.#startAttractStep);
+      this.#startAttractNextAt = reducedMotion ? Number.POSITIVE_INFINITY : now + 2600;
+      this.#renderBoard();
+      if (this.#startAttractFocusedDominoNumber != null) {
+        this.#centerOnLibraryDomino(this.#startAttractFocusedDominoNumber, false);
+      } else {
+        this.#centerOnDominoLibrary(false);
+      }
+      return;
+    }
+
+    if (reducedMotion || this.#cameraTransition || now < this.#startAttractNextAt) return;
+
+    const previous = this.#startAttractFocusedDominoNumber;
+    let next = previous;
+    for (let guard = 0; guard < 4 && next === previous; guard++) {
+      this.#startAttractStep += 1;
+      next = this.#startAttractDominoNumber(this.#startAttractStep);
+    }
+
+    this.#startAttractFocusedDominoNumber = next;
+    this.#startAttractNextAt = now + 5200;
+    this.#renderBoard();
+    if (next != null) this.#centerOnLibraryDomino(next, true);
   }
 
   #canUseOnlineGame() {
@@ -4945,6 +5088,7 @@ export class GameLayout extends HTMLElement {
     if (!show) {
       this.#startOverlay.hidden = true;
       this.#startOverlay.innerHTML = '';
+      this.#resetStartAttract();
       return false;
     }
 
@@ -4997,8 +5141,10 @@ export class GameLayout extends HTMLElement {
       roomLabel.textContent = 'Room code or invite link';
       const roomInput = document.createElement('input');
       roomInput.type = 'text';
-      roomInput.placeholder = 'dev-abc123';
+      roomInput.placeholder = 'ABCD';
       roomInput.autocomplete = 'off';
+      roomInput.autocapitalize = 'characters';
+      roomInput.spellcheck = false;
       roomInput.value = this.#pendingInviteRoom;
       roomLabel.htmlFor = 'kd-start-room';
       roomInput.id = 'kd-start-room';
@@ -5677,6 +5823,13 @@ export class GameLayout extends HTMLElement {
 
   #renderBoard() {
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
+    if (this.#isStartAttractMode() && !this.#libraryOpen) {
+      this.#renderDominoLibraryScene({
+        attract: true,
+        focusNumber: this.#startAttractFocusedDominoNumber,
+      });
+      return;
+    }
     if (this.#libraryOpen) {
       this.#renderDominoLibraryScene();
       return;
@@ -5736,7 +5889,7 @@ export class GameLayout extends HTMLElement {
     this.#renderRegionScoring(null);
   }
 
-  #renderDominoLibraryScene() {
+  #renderDominoLibraryScene({ attract = false, focusNumber = this.#libraryFocusedDominoNumber } = {}) {
     if (this.#ghostGroup) {
       while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
     }
@@ -5746,18 +5899,26 @@ export class GameLayout extends HTMLElement {
 
     const layout = this.#dominoLibraryLayout();
     const deck = layout.deck;
-    const statusByNumber = this.#dominoLibraryStatusByNumber();
+    const statusByNumber = attract ? new Map() : this.#dominoLibraryStatusByNumber();
     const group = new THREE.Group();
     group.userData.library = true;
+    group.userData.attract = attract;
     this.#tilesGroup.add(group);
 
     const previousGroup = this.#currentTileRenderGroup;
     this.#currentTileRenderGroup = group;
 
     deck.forEach((domino, i) => {
-      const status = statusByNumber.get(domino.number) ?? { kind: 'played', label: 'Played', color: 0x5b6170 };
-      const filtered = !this.#dominoMatchesLibraryFilter(domino, status);
-      const focused = this.#libraryFocusedDominoNumber === domino.number;
+      const accentLandscape = (domino.leftEnd.crowns || 0) >= (domino.rightEnd.crowns || 0)
+        ? domino.leftEnd.landscape
+        : domino.rightEnd.landscape;
+      const status = statusByNumber.get(domino.number) ?? {
+        kind: attract ? 'showcase' : 'played',
+        label: attract ? '' : 'Played',
+        color: attract ? (LANDSCAPE_COLORS[accentLandscape] ?? 0x7b8491) : 0x5b6170,
+      };
+      const filtered = attract ? false : !this.#dominoMatchesLibraryFilter(domino, status);
+      const focused = focusNumber === domino.number;
       const { baseX, baseZ } = this.#dominoLibraryPlacement(i, layout);
       const left = {
         x: baseX,
@@ -5773,13 +5934,15 @@ export class GameLayout extends HTMLElement {
       };
 
       const statusColor = status.color ?? 0x5b6170;
-      const baseOpacity = filtered
-        ? 0.14
-        : status.kind === 'deck'
-          ? 0.34
-          : status.kind === 'played'
-            ? 0.30
-            : 0.46;
+      const baseOpacity = attract
+        ? focused ? 0.38 : 0.20
+        : filtered
+          ? 0.14
+          : status.kind === 'deck'
+            ? 0.34
+            : status.kind === 'played'
+              ? 0.30
+              : 0.46;
       const base = new THREE.Mesh(
         new THREE.PlaneGeometry(2.26, 1.20),
         new THREE.MeshBasicMaterial({
@@ -5794,19 +5957,6 @@ export class GameLayout extends HTMLElement {
       base.rotation.x = -Math.PI / 2;
       base.renderOrder = -1;
       this.#addTileObjects(base);
-
-      const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(focused ? 2.20 : 2.12, focused ? 0.034 : 0.026, focused ? 0.090 : 0.070),
-        new THREE.MeshStandardMaterial({
-          color: filtered ? 0x252a32 : statusColor,
-          roughness: 0.42,
-          metalness: 0.18,
-          emissive: filtered ? 0x000000 : statusColor,
-          emissiveIntensity: filtered ? 0 : focused ? 0.34 : ['available', 'placing', 'claimed'].includes(status.kind) ? 0.16 : 0.05,
-        })
-      );
-      rail.position.set(baseX + 0.5, focused ? 0.252 : 0.244, baseZ + 0.64);
-      this.#addTileObjects(rail);
 
       if (focused) {
         const focusGlow = new THREE.Mesh(
@@ -5847,38 +5997,40 @@ export class GameLayout extends HTMLElement {
         }
       }
 
-      const number = createTextSprite(String(domino.number), {
-        font: '800 36px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-        fillStyle: filtered ? 'rgba(233,238,245,0.46)' : '#e9eef5',
-        background: filtered ? 'rgba(20,22,28,0.38)' : 'rgba(20,22,28,0.74)',
-        border: filtered ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.20)',
-        size: 96,
-      });
-      number.position.set(baseX - 0.52, 0.32, baseZ - 0.58);
-      number.scale.set(0.24, 0.24, 0.24);
-      this.#addTileObjects(number);
+      if (!attract) {
+        const number = createTextSprite(String(domino.number), {
+          font: '800 36px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+          fillStyle: filtered ? 'rgba(233,238,245,0.46)' : '#e9eef5',
+          background: filtered ? 'rgba(20,22,28,0.38)' : 'rgba(20,22,28,0.74)',
+          border: filtered ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.20)',
+          size: 96,
+        });
+        number.position.set(baseX - 0.52, 0.32, baseZ - 0.58);
+        number.scale.set(0.24, 0.24, 0.24);
+        this.#addTileObjects(number);
 
-      const statusLabel = status.kind === 'deck'
-        ? 'Deck'
-        : status.kind === 'available'
-          ? 'Pick'
-          : status.kind === 'placing'
-            ? `${status.label}`
-            : status.kind === 'claimed'
+        const statusLabel = status.kind === 'deck'
+          ? 'Deck'
+          : status.kind === 'available'
+            ? 'Pick'
+            : status.kind === 'placing'
               ? `${status.label}`
-              : 'Played';
-      const badge = createTextSprite(statusLabel, {
-        font: '800 28px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-        fillStyle: filtered ? 'rgba(245,251,255,0.50)' : '#f5fbff',
-        background: filtered
-          ? 'rgba(30,34,42,0.42)'
-          : `rgba(${(statusColor >> 16) & 255}, ${(statusColor >> 8) & 255}, ${statusColor & 255}, 0.76)`,
-        border: filtered ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.28)',
-        size: 128,
-      });
-      badge.position.set(baseX + 1.06, 0.34, baseZ + 0.58);
-      badge.scale.set(0.34, 0.20, 0.20);
-      this.#addTileObjects(badge);
+              : status.kind === 'claimed'
+                ? `${status.label}`
+                : 'Played';
+        const badge = createTextSprite(statusLabel, {
+          font: '800 28px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+          fillStyle: filtered ? 'rgba(245,251,255,0.50)' : '#f5fbff',
+          background: filtered
+            ? 'rgba(30,34,42,0.42)'
+            : `rgba(${(statusColor >> 16) & 255}, ${(statusColor >> 8) & 255}, ${statusColor & 255}, 0.76)`,
+          border: filtered ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.28)',
+          size: 128,
+        });
+        badge.position.set(baseX + 1.06, 0.34, baseZ + 0.58);
+        badge.scale.set(0.34, 0.20, 0.20);
+        this.#addTileObjects(badge);
+      }
     });
 
     this.#currentTileRenderGroup = previousGroup;
@@ -7384,7 +7536,7 @@ export class GameLayout extends HTMLElement {
   #syncGridPresentation() {
     if (!this.#gridHelper) return;
     const placement = this.#game?.state === GameState.PLACE && !this.#game?.isGameOver;
-    const library = this.#libraryOpen;
+    const library = this.#libraryOpen || this.#isStartAttractMode();
     const materials = Array.isArray(this.#gridHelper.material)
       ? this.#gridHelper.material
       : [this.#gridHelper.material];
@@ -7396,7 +7548,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #syncBoardLayerPositions() {
-    if (this.#libraryOpen) {
+    if (this.#libraryOpen || this.#isStartAttractMode()) {
       if (this.#gridHelper) {
         this.#gridHelper.position.x = 0;
         this.#gridHelper.position.z = 0;
@@ -7433,6 +7585,10 @@ export class GameLayout extends HTMLElement {
       this.#centerOnDominoLibrary(animate);
       return;
     }
+    if (this.#isStartAttractMode()) {
+      this.#syncStartAttractCamera();
+      return;
+    }
     if (!this.#controls || !this.#camera) return;
 
     const activeIdx = this.#activePlayerIndex();
@@ -7447,6 +7603,10 @@ export class GameLayout extends HTMLElement {
   #centerOnFocusedBoard(animate = false) {
     if (this.#libraryOpen) {
       this.#centerOnDominoLibrary(animate);
+      return;
+    }
+    if (this.#isStartAttractMode()) {
+      this.#syncStartAttractCamera();
       return;
     }
     if (!this.#game?.players?.length) return;
@@ -8425,6 +8585,7 @@ export class GameLayout extends HTMLElement {
       this.#debugMarker.rotation.x += 0.005;
     }
 
+    this.#syncStartAttractCamera();
     this.#updateCameraTransition();
     this.#syncBoardLayerPositions();
 

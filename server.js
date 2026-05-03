@@ -28,6 +28,10 @@ function normalizePlayerCount(value) {
   return Math.max(2, Math.min(4, count));
 }
 
+function normalizeRoomId(value) {
+  return String(value || '').trim().replace(/[^a-z0-9-]/gi, '').toUpperCase().slice(0, 24);
+}
+
 function assignedPlayerIsActive(room, assignedIndex, assignedToken) {
   if (assignedIndex == null) return false;
   return room.players[assignedIndex]?.token === assignedToken;
@@ -160,7 +164,7 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'join') {
-      const roomId = String(msg.roomId || '').trim();
+      const roomId = normalizeRoomId(msg.roomId);
       const name = String(msg.name || 'Player').trim().slice(0, 24);
       const playerToken = String(msg.playerToken || '').trim();
       if (!roomId) {
@@ -229,7 +233,7 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'leave') {
-      const roomId = String(msg.roomId || '').trim();
+      const roomId = normalizeRoomId(msg.roomId);
       const room = rooms.get(roomId);
       if (!room || joinedRoomId !== roomId) return;
 
@@ -252,7 +256,7 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'action') {
-      const roomId = String(msg.roomId || '').trim();
+      const roomId = normalizeRoomId(msg.roomId);
       const action = msg.action;
       if (!roomId || !action || typeof action.type !== 'string') return;
       const room = rooms.get(roomId);
@@ -292,7 +296,7 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'placementPreview') {
-      const roomId = String(msg.roomId || '').trim();
+      const roomId = normalizeRoomId(msg.roomId);
       const room = rooms.get(roomId);
       if (!room || !assignedPlayerIsActive(room, assignedIndex, assignedToken)) return;
       if (joinedRoomId !== roomId) return;
