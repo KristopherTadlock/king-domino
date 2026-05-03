@@ -1725,7 +1725,7 @@ export class GameLayout extends HTMLElement {
         min-width: 160px;
       }
       .root.isLibraryMode .controlsSecondary {
-        top: 130px;
+        top: 84px;
         right: 12px;
         min-width: 160px;
       }
