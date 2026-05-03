@@ -7,7 +7,7 @@ import { WebSocketServer } from 'ws';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const ROOT = process.cwd();
 
-/** @type {Map<string, {seed:number, players:({token:string,name:string} | null)[], sockets:Set<any>, actions:any[], previews:Map<number, any>}>} */
+/** @type {Map<string, {seed:number, playerCount:number, players:({token:string,name:string} | null)[], sockets:Set<any>, actions:any[], previews:Map<number, any>}>} */
 const rooms = new Map();
 
 function randomToken() {
@@ -15,11 +15,17 @@ function randomToken() {
 }
 
 function playerNames(room) {
-  return room.players.map((p) => p?.name || '');
+  return Array.from({ length: room.playerCount }, (_, index) => room.players[index]?.name || '');
 }
 
 function activePlayerCount(room) {
   return room.players.filter(Boolean).length;
+}
+
+function normalizePlayerCount(value) {
+  const count = Number.parseInt(value, 10);
+  if (!Number.isFinite(count)) return 2;
+  return Math.max(2, Math.min(4, count));
 }
 
 function assignedPlayerIsActive(room, assignedIndex, assignedToken) {
@@ -121,6 +127,14 @@ function broadcast(room, obj) {
   });
 }
 
+function broadcastPlayers(room) {
+  broadcast(room, {
+    type: 'players',
+    playerCount: room.playerCount,
+    players: playerNames(room),
+  });
+}
+
 wss.on('connection', (ws) => {
   let joinedRoomId = null;
   let assignedIndex = null;
@@ -135,7 +149,13 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'ping') {
-      send(ws, { type: 'pong', t: Date.now() });
+      const room = joinedRoomId ? rooms.get(joinedRoomId) : null;
+      send(ws, {
+        type: 'pong',
+        t: Date.now(),
+        playerCount: room?.playerCount,
+        players: room ? playerNames(room) : undefined,
+      });
       return;
     }
 
@@ -148,17 +168,28 @@ wss.on('connection', (ws) => {
         return;
       }
 
+      const requestedPlayerCount = normalizePlayerCount(msg.playerCount);
       let room = rooms.get(roomId);
       if (!room) {
         const seed = Number.isFinite(msg.proposedSeed) ? (msg.proposedSeed >>> 0) : ((Math.random() * 2 ** 32) >>> 0);
-        room = { seed, players: [], sockets: new Set(), actions: [], previews: new Map() };
+        room = {
+          seed,
+          playerCount: requestedPlayerCount,
+          players: Array(requestedPlayerCount).fill(null),
+          sockets: new Set(),
+          actions: [],
+          previews: new Map(),
+        };
         rooms.set(roomId, room);
+      } else if (room.actions.length === 0 && requestedPlayerCount > room.playerCount) {
+        room.playerCount = requestedPlayerCount;
+        while (room.players.length < room.playerCount) room.players.push(null);
       }
 
       joinedRoomId = roomId;
       room.sockets.add(ws);
 
-      // Assign player slots (2 players for now). Reconnect uses stable playerToken.
+      // Assign player slots. Reconnect uses stable playerToken.
       const token = playerToken || randomToken();
       const existingIndex = room.players.findIndex((p) => p?.token === token);
       if (existingIndex !== -1) {
@@ -170,7 +201,7 @@ wss.on('connection', (ws) => {
         assignedIndex = room.players.findIndex((p) => p == null);
         assignedToken = token;
         room.players[assignedIndex] = { token, name: name || `Player ${assignedIndex + 1}` };
-      } else if (room.players.length < 2) {
+      } else if (room.players.length < room.playerCount) {
         assignedIndex = room.players.length;
         assignedToken = token;
         room.players.push({ token, name: name || `Player ${assignedIndex + 1}` });
@@ -184,13 +215,16 @@ wss.on('connection', (ws) => {
         roomId,
         playerIndex: assignedIndex,
         seed: room.seed,
+        playerCount: room.playerCount,
         playerToken: assignedToken,
         players: playerNames(room),
         actions: room.actions,
         previews: [...room.previews.values()],
       });
+      ws.kingDominoPlayerIndex = assignedIndex;
+      ws.kingDominoPlayerToken = assignedToken;
 
-      broadcast(room, { type: 'players', players: playerNames(room) });
+      broadcastPlayers(room);
       return;
     }
 
@@ -212,7 +246,7 @@ wss.on('connection', (ws) => {
           name: leftName,
           players,
         });
-        broadcast(room, { type: 'players', players });
+        broadcastPlayers(room);
       }
       return;
     }
@@ -243,8 +277,8 @@ wss.on('connection', (ws) => {
           send(ws, { type: 'error', message: 'That player slot is no longer active.' });
           return;
         }
-        if (activePlayerCount(room) < 2) {
-          send(ws, { type: 'error', message: 'Waiting for another player to join.' });
+        if (activePlayerCount(room) < room.playerCount) {
+          send(ws, { type: 'error', message: 'Waiting for all players to join.' });
           return;
         }
         if (Number.isInteger(payload.playerIndex) && payload.playerIndex !== assignedIndex) {
@@ -308,12 +342,20 @@ wss.on('connection', (ws) => {
     const room = rooms.get(joinedRoomId);
     if (!room) return;
     room.sockets.delete(ws);
-    if (assignedIndex != null) {
+    const samePlayerStillConnected = [...room.sockets].some((peer) =>
+      peer.kingDominoPlayerIndex === assignedIndex
+      && peer.kingDominoPlayerToken === assignedToken
+    );
+    if (assignedIndex != null && !samePlayerStillConnected) {
       room.previews.delete(assignedIndex);
       broadcast(room, {
         type: 'placementPreview',
         preview: { playerIndex: assignedIndex, clear: true },
       });
+      if (room.actions.length === 0) {
+        vacatePlayerSlot(room, assignedIndex, assignedToken);
+        broadcastPlayers(room);
+      }
     }
     if (room.sockets.size === 0) {
       // Clean up empty rooms.

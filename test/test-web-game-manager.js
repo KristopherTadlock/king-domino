@@ -247,6 +247,61 @@ function placeFirstAvailableDominoForPlayer(game, playerIndex) {
     assert(game.round === 2);
   });
 
+  it('should discard the unclaimed draft tile in three-player games', () => {
+    const game = new WebGameManager(new GameConfiguration(3, false, false), 123);
+    game.start(['Codex', 'Helper', 'Scout']);
+
+    assert(game.players.length === 3);
+    assert(game.players.every((player) => player.board.maxBoardSize === 5));
+    assert(game.pickOrder.length === 3);
+    assert(new Set(game.pickOrder).size === 3);
+
+    for (const index of [0, 1, 2]) game.pickDraft(index);
+
+    assert(game.state.description === 'place');
+    assert(game.currentDraft.filter((slot) => slot.player != null).length === 3);
+    assert(game.currentDraft.filter((slot) => slot.player == null && slot.placed).length === 1);
+    assert(game.placeOrder.length === 3);
+    assert(new Set(game.placeOrder).size === 3);
+
+    for (const playerIndex of game.placeOrder) {
+      assert(game.getCurrentPlacingChoicesForPlayer(playerIndex).length === 1);
+      const result = placeFirstAvailableDominoForPlayer(game, playerIndex);
+      assert(result.ok);
+    }
+
+    assert(game.state.description === 'draft');
+    assert(game.round === 2);
+    assert(game.pickOrder.length === 3);
+  });
+
+  it('should support one draft pick and placement per player in four-player games', () => {
+    const game = new WebGameManager(new GameConfiguration(4, false, false), 123);
+    game.start(['Codex', 'Helper', 'Scout', 'Guide']);
+
+    assert(game.players.length === 4);
+    assert(game.players.every((player) => player.board.maxBoardSize === 5));
+    assert(game.pickOrder.length === 4);
+    assert(new Set(game.pickOrder).size === 4);
+
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    assert(game.state.description === 'place');
+    assert(game.currentDraft.every((slot) => slot.player != null));
+    assert(game.placeOrder.length === 4);
+    assert(new Set(game.placeOrder).size === 4);
+
+    for (const playerIndex of game.placeOrder) {
+      assert(game.getCurrentPlacingChoicesForPlayer(playerIndex).length === 1);
+      const result = placeFirstAvailableDominoForPlayer(game, playerIndex);
+      assert(result.ok);
+    }
+
+    assert(game.state.description === 'draft');
+    assert(game.round === 2);
+    assert(game.pickOrder.length === 4);
+  });
+
   it('should expose forced draft picks when the other two-player king has no choice left', () => {
     const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
     game.start(['Codex', 'Helper']);

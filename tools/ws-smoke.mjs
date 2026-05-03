@@ -68,13 +68,14 @@ function createClient(label) {
   };
 }
 
-async function join(name, playerToken, proposedSeed = seed) {
+async function join(name, playerToken, proposedSeed = seed, targetRoomId = roomId, playerCount = 2) {
   const client = createClient(name);
   await client.send({
     type: 'join',
-    roomId,
+    roomId: targetRoomId,
     name,
     playerToken,
+    playerCount,
     proposedSeed,
   });
   client.joined = await client.waitFor('joined');
@@ -88,7 +89,8 @@ try {
   assert.equal(alice.joined.playerIndex, 0, 'first explicit token should claim player 0');
   assert.equal(alice.joined.seed, seed, 'room should use the first creator proposed seed');
   assert.equal(alice.joined.playerToken, 'alice-token');
-  assert.deepEqual(alice.joined.players, ['Alice']);
+  assert.equal(alice.joined.playerCount, 2);
+  assert.deepEqual(alice.joined.players, ['Alice', '']);
 
   await alice.send({
     type: 'action',
@@ -96,7 +98,7 @@ try {
     action: { type: 'rotate', payload: { playerIndex: 0 } },
   });
   const waitingError = await alice.waitFor('error', (msg) =>
-    /waiting for another player/i.test(msg.message || '')
+    /waiting for all players/i.test(msg.message || '')
   );
   assert.equal(waitingError.type, 'error', 'solo players should be held in lobby until an opponent joins');
 
@@ -217,6 +219,94 @@ try {
   });
   const charlieActionBroadcast = await charlieActionSeen;
   assert.equal(charlieActionBroadcast.action.type, 'rotate');
+
+  const trioRoomId = `${roomId}-three`;
+  const ann = await join('Ann', 'ann-token', seed, trioRoomId, 3);
+  clients.push(ann);
+  assert.equal(ann.joined.playerIndex, 0, 'three-player room should assign first player');
+  assert.equal(ann.joined.playerCount, 3);
+  assert.deepEqual(ann.joined.players, ['Ann', '', '']);
+
+  await ann.send({
+    type: 'action',
+    roomId: trioRoomId,
+    action: { type: 'rotate', payload: { playerIndex: 0 } },
+  });
+  const trioWaitingError = await ann.waitFor('error', (msg) =>
+    /waiting for all players/i.test(msg.message || '')
+  );
+  assert.equal(trioWaitingError.type, 'error', 'three-player room should wait for all three players');
+
+  const ben = await join('Ben', 'ben-token', seed, trioRoomId, 3);
+  clients.push(ben);
+  assert.equal(ben.joined.playerIndex, 1);
+  assert.deepEqual(ben.joined.players, ['Ann', 'Ben', '']);
+
+  const annSeesCaraJoin = ann.waitFor('players', (msg) =>
+    Array.isArray(msg.players) && msg.players.join('|') === 'Ann|Ben|Cara'
+  );
+  const benSeesCaraJoin = ben.waitFor('players', (msg) =>
+    Array.isArray(msg.players) && msg.players.join('|') === 'Ann|Ben|Cara'
+  );
+  const cara = await join('Cara', 'cara-token', seed, trioRoomId, 3);
+  clients.push(cara);
+  assert.equal(cara.joined.playerIndex, 2);
+  assert.deepEqual(cara.joined.players, ['Ann', 'Ben', 'Cara']);
+  assert.deepEqual((await annSeesCaraJoin).players, ['Ann', 'Ben', 'Cara']);
+  assert.deepEqual((await benSeesCaraJoin).players, ['Ann', 'Ben', 'Cara']);
+
+  const trioSpectator = await join('Dana', 'dana-token', seed, trioRoomId, 3);
+  clients.push(trioSpectator);
+  assert.equal(trioSpectator.joined.playerIndex, null, 'fourth unique token should spectate a three-player room');
+
+  await ann.send({ type: 'ping', t: Date.now() });
+  const trioPong = await ann.waitFor('pong', (msg) =>
+    Array.isArray(msg.players) && msg.players.join('|') === 'Ann|Ben|Cara'
+  );
+  assert.equal(trioPong.playerCount, 3, 'keepalive should carry current lobby player count');
+
+  const expandedRoomId = `${roomId}-expanded`;
+  const earlyHost = await join('Early Host', 'early-host-token', seed, expandedRoomId, 2);
+  clients.push(earlyHost);
+  assert.equal(earlyHost.joined.playerIndex, 0);
+  assert.equal(earlyHost.joined.playerCount, 2);
+
+  const earlySecond = await join('Early Second', 'early-second-token', seed, expandedRoomId, 2);
+  clients.push(earlySecond);
+  assert.equal(earlySecond.joined.playerIndex, 1);
+  assert.equal(earlySecond.joined.playerCount, 2);
+
+  const hostSeesExpansion = earlyHost.waitFor('players', (msg) =>
+    msg.playerCount === 3
+    && Array.isArray(msg.players)
+    && msg.players.join('|') === 'Early Host|Early Second|Expanded Third'
+  );
+  const secondSeesExpansion = earlySecond.waitFor('players', (msg) =>
+    msg.playerCount === 3
+    && Array.isArray(msg.players)
+    && msg.players.join('|') === 'Early Host|Early Second|Expanded Third'
+  );
+  const expandedThird = await join('Expanded Third', 'expanded-third-token', seed, expandedRoomId, 3);
+  clients.push(expandedThird);
+  assert.equal(expandedThird.joined.playerIndex, 2, 'actionless lobby should expand to the larger requested player count');
+  assert.equal(expandedThird.joined.playerCount, 3);
+  assert.deepEqual(expandedThird.joined.players, ['Early Host', 'Early Second', 'Expanded Third']);
+  assert.deepEqual((await hostSeesExpansion).players, ['Early Host', 'Early Second', 'Expanded Third']);
+  assert.deepEqual((await secondSeesExpansion).players, ['Early Host', 'Early Second', 'Expanded Third']);
+
+  const reconnectRoomId = `${roomId}-reconnect`;
+  const firstSocket = await join('First Socket', 'same-player-token', seed, reconnectRoomId, 3);
+  clients.push(firstSocket);
+  assert.equal(firstSocket.joined.playerIndex, 0);
+  const replacementSocket = await join('Replacement Socket', 'same-player-token', seed, reconnectRoomId, 3);
+  clients.push(replacementSocket);
+  assert.equal(replacementSocket.joined.playerIndex, 0, 'same token should reconnect to player 0');
+  firstSocket.close();
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  const secondSeat = await join('Second Seat', 'second-seat-token', seed, reconnectRoomId, 3);
+  clients.push(secondSeat);
+  assert.equal(secondSeat.joined.playerIndex, 1, 'closing the old socket should not vacate the replacement connection');
+  assert.deepEqual(secondSeat.joined.players, ['Replacement Socket', 'Second Seat', '']);
 
   console.log(`OK: multiplayer room smoke passed for ${roomId}`);
 } finally {

@@ -880,6 +880,9 @@ export class GameLayout extends HTMLElement {
   /** @type {string[]} */
   #playerNames = ['Player 1', 'Player 2'];
 
+  /** @type {number} */
+  #playerCount = 2;
+
   /** @type {string} */
   #myName = 'Player';
 
@@ -906,6 +909,18 @@ export class GameLayout extends HTMLElement {
 
   /** @type {string | null} */
   #lobbyNotice = null;
+
+  /** @type {string} */
+  #pendingInviteRoom = '';
+
+  /** @type {number | null} */
+  #pendingInviteSeed = null;
+
+  /** @type {string} */
+  #pendingInviteToken = '';
+
+  /** @type {boolean} */
+  #showInviteOptions = false;
 
   /** @type {string} */
   #placementHint = '';
@@ -2139,6 +2154,23 @@ export class GameLayout extends HTMLElement {
         display: grid;
         gap: 10px;
       }
+      .inviteSummary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .inviteSummary span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.07);
+        color: rgba(233,238,245,0.84);
+        font-size: 12px;
+        font-weight: 850;
+      }
       .startField {
         display: grid;
         gap: 5px;
@@ -2149,7 +2181,8 @@ export class GameLayout extends HTMLElement {
         font-size: 12px;
         font-weight: 800;
       }
-      .startField input {
+      .startField input,
+      .startField select {
         width: 100%;
         min-width: 0;
         min-height: 38px;
@@ -2280,6 +2313,10 @@ export class GameLayout extends HTMLElement {
           bottom: 8px;
           max-height: min(50dvh, 420px);
         }
+        .root.players3.isDraftPhase .hud,
+        .root.players4.isDraftPhase .hud {
+          max-height: min(64dvh, 430px);
+        }
         .controlsPrimary {
           left: 8px;
           right: 8px;
@@ -2392,6 +2429,24 @@ export class GameLayout extends HTMLElement {
         canvas.mini {
           width: min(142px, calc(48vw - 42px));
           height: min(142px, calc(48vw - 42px));
+        }
+        .root.players3 .miniMapDock,
+        .root.players4 .miniMapDock {
+          width: min(360px, calc(48vw - 10px));
+          max-width: 360px;
+        }
+        .root.players3 .miniRow,
+        .root.players4 .miniRow {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .root.players3 .miniCard,
+        .root.players4 .miniCard {
+          padding: 5px;
+        }
+        .root.players3 canvas.mini,
+        .root.players4 canvas.mini {
+          width: min(112px, calc((48vw - 62px) / 2));
+          height: min(112px, calc((48vw - 62px) / 2));
         }
       }
       @media (min-width: 521px) and (max-height: 620px) {
@@ -2588,13 +2643,62 @@ export class GameLayout extends HTMLElement {
     this.#shadow.append(style, this.#root);
   }
 
-  #initGame(seed, playerNames) {
-    const config = new GameConfiguration(2, false, true);
+  #normalizePlayerCount(value, fallback = 2) {
+    const count = Number.parseInt(value, 10);
+    if (!Number.isFinite(count)) return Math.max(2, Math.min(4, fallback || 2));
+    return Math.max(2, Math.min(4, count));
+  }
+
+  #playerCountFromUrl(url = new URL(location.href), fallback = this.#playerCount) {
+    const explicit = url.searchParams.get('players') ?? url.searchParams.get('playerCount');
+    if (explicit != null) return this.#normalizePlayerCount(explicit, fallback);
+
+    let namedCount = 0;
+    for (let i = 1; i <= 4; i++) {
+      if ((url.searchParams.get(`p${i}`) || '').trim()) namedCount = i;
+    }
+    return this.#normalizePlayerCount(namedCount || fallback, fallback);
+  }
+
+  #playerCountFromInput(value, fallback = this.#playerCount) {
+    const raw = String(value || '').trim();
+    if (!raw) return this.#normalizePlayerCount(fallback, fallback);
+    try {
+      const parsed = new URL(raw, location.href);
+      return this.#playerCountFromUrl(parsed, fallback);
+    } catch {
+      return this.#normalizePlayerCount(fallback, fallback);
+    }
+  }
+
+  #defaultPlayerNames(primaryName, playerCount = this.#playerCount) {
+    return Array.from({ length: playerCount }, (_, index) => {
+      if (index === 0 && primaryName) return primaryName;
+      if (index === 1) return 'Helper';
+      return `Player ${index + 1}`;
+    });
+  }
+
+  #usesExpandedBoard(playerCount = this.#playerCount) {
+    return this.#normalizePlayerCount(playerCount, this.#playerCount) === 2;
+  }
+
+  #initGame(seed, playerNames, playerCount = this.#playerCount) {
+    const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
+    this.#playerCount = count;
+    this.#root?.classList.toggle('players3', count === 3);
+    this.#root?.classList.toggle('players4', count === 4);
+    const config = new GameConfiguration(count, false, this.#usesExpandedBoard(count));
     this.#game = new WebGameManager(config, seed);
-    this.#playerNames = playerNames?.length ? playerNames : ['Player 1', 'Player 2'];
+    const displayNames = Array.from({ length: count }, (_, index) => {
+      const provided = typeof playerNames?.[index] === 'string' ? playerNames[index].trim() : '';
+      return provided;
+    });
+    const gameNames = displayNames.map((name, index) => name || `Player ${index + 1}`);
+    this.#playerNames = displayNames;
     this.#remotePlacementPreviews.clear();
     this.#lastSentPlacementPreviewKey = '';
-    this.#game.start(this.#playerNames);
+    this.#game.start(gameNames);
   }
 
   #storedPlayerName() {
@@ -2617,6 +2721,10 @@ export class GameLayout extends HTMLElement {
 
   #cleanPlayerName(name, fallback = 'Player') {
     return String(name || '').trim().slice(0, 24) || fallback;
+  }
+
+  #cleanPlayerToken(token) {
+    return String(token || '').trim().replace(/[^a-z0-9-]/gi, '').slice(0, 96);
   }
 
   #randomRoomCode() {
@@ -2648,9 +2756,19 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #seedForRoomInput(value) {
+    const parsedSeed = this.#seedFromInput(value);
+    if (parsedSeed != null) return parsedSeed;
+    const room = this.#roomCodeFromInput(value);
+    if (room && room === this.#pendingInviteRoom && this.#pendingInviteSeed != null) {
+      return this.#pendingInviteSeed;
+    }
+    return null;
+  }
+
   #roomIsReady() {
     if (this.#hotseat || this.#homeMode || !this.#roomId) return true;
-    return this.#playerNames.filter(Boolean).length >= 2;
+    return this.#playerNames.filter(Boolean).length >= this.#playerCount;
   }
 
   #isLobbyWaiting() {
@@ -2671,11 +2789,18 @@ export class GameLayout extends HTMLElement {
     const url = new URL('/', location.href);
     if (this.#roomId) url.searchParams.set('room', this.#roomId);
     if (this.#game?.seed != null) url.searchParams.set('seed', String(this.#game.seed));
+    url.searchParams.set('players', String(this.#playerCount));
     return url.toString();
   }
 
   #enterHomeMode(url = new URL(location.href), preferredName = '') {
-    const name = this.#cleanPlayerName(url.searchParams.get('name') || preferredName || this.#storedPlayerName());
+    const name = this.#cleanPlayerName(url.searchParams.get('name') || url.searchParams.get('suggestedName') || preferredName || this.#storedPlayerName());
+    this.#playerCount = this.#playerCountFromUrl(url, this.#playerCount);
+    this.#pendingInviteRoom = this.#roomCodeFromInput(url.searchParams.get('room') || '');
+    const pendingSeed = Number.parseInt(url.searchParams.get('seed') || '', 10);
+    this.#pendingInviteSeed = this.#pendingInviteRoom && Number.isFinite(pendingSeed) ? pendingSeed >>> 0 : null;
+    this.#pendingInviteToken = this.#pendingInviteRoom ? this.#cleanPlayerToken(url.searchParams.get('joinToken') || '') : '';
+    this.#showInviteOptions = false;
     this.#mp?.disconnect?.();
     this.#mp = null;
     this.#homeMode = true;
@@ -2688,7 +2813,7 @@ export class GameLayout extends HTMLElement {
     this.#pendingUndoRequest = null;
     this.#lobbyNotice = null;
     this.#actionHistory = [];
-    this.#initGame(randomSeed(), [name]);
+    this.#initGame(randomSeed(), this.#defaultPlayerNames(name, this.#playerCount), this.#playerCount);
   }
 
   #returnToStartScreen() {
@@ -2709,6 +2834,10 @@ export class GameLayout extends HTMLElement {
     this.#lobbyNotice = null;
     this.#autoDraftInFlightKey = null;
     this.#hoverAnchor = null;
+    this.#pendingInviteRoom = '';
+    this.#pendingInviteSeed = null;
+    this.#pendingInviteToken = '';
+    this.#showInviteOptions = false;
     this.#remotePlacementPreviews.clear();
     this.#lastSentPlacementPreviewKey = '';
     this.#enterHomeMode(url, preferredName);
@@ -2717,12 +2846,13 @@ export class GameLayout extends HTMLElement {
     this.#centerOnFocusedBoard(true);
   }
 
-  #updateOnlineUrl(room, name, seed = null, playerToken = null) {
+  #updateOnlineUrl(room, name, seed = null, playerToken = null, playerCount = this.#playerCount) {
     const url = new URL(location.href);
     const version = url.searchParams.get('v');
     url.search = '';
     url.searchParams.set('room', room);
     if (seed != null) url.searchParams.set('seed', String(seed));
+    url.searchParams.set('players', String(this.#normalizePlayerCount(playerCount, this.#playerCount)));
     url.searchParams.set('name', name);
     if (version) url.searchParams.set('v', version);
     if (playerToken) url.searchParams.set('playerToken', playerToken);
@@ -2730,40 +2860,51 @@ export class GameLayout extends HTMLElement {
     return url;
   }
 
-  #connectOnlineRoom(room, name, seed = null) {
+  #connectOnlineRoom(room, name, seed = null, playerCount = this.#playerCount) {
     const cleanRoom = this.#roomCodeFromInput(room);
     if (!cleanRoom) return false;
     const cleanName = this.#savePlayerName(name);
+    const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
     const proposedSeed = Number.isFinite(seed) ? seed >>> 0 : randomSeed();
-    const explicitPlayerToken = new URL(location.href).searchParams.get('playerToken') || null;
-    this.#updateOnlineUrl(cleanRoom, cleanName, proposedSeed, explicitPlayerToken);
+    const urlPlayerToken = this.#cleanPlayerToken(new URL(location.href).searchParams.get('playerToken') || '');
+    const invitePlayerToken = cleanRoom === this.#pendingInviteRoom ? this.#pendingInviteToken : '';
+    const explicitPlayerToken = urlPlayerToken || invitePlayerToken || null;
+    this.#updateOnlineUrl(cleanRoom, cleanName, proposedSeed, explicitPlayerToken, count);
 
     this.#mp?.disconnect?.();
     this.#homeMode = false;
     this.#hotseat = false;
     this.#roomId = cleanRoom;
+    this.#playerCount = count;
     this.#myName = cleanName;
     this.#myPlayerIndex = null;
     this.#focusedPlayerIndex = 0;
     this.#connStatus = { state: 'connecting' };
     this.#pendingUndoRequest = null;
     this.#lobbyNotice = null;
+    this.#pendingInviteRoom = '';
+    this.#pendingInviteSeed = null;
+    this.#pendingInviteToken = '';
+    this.#showInviteOptions = false;
     this.#actionHistory = [];
-    this.#initGame(proposedSeed, [cleanName]);
+    this.#initGame(proposedSeed, [cleanName], count);
 
     this.#mp = new MultiplayerClient({
       roomId: cleanRoom,
       name: cleanName,
       playerToken: explicitPlayerToken || undefined,
+      playerCount: count,
       proposedSeed,
       onStatus: (s) => {
         this.#connStatus = s;
         this.#refreshHud();
       },
-      onJoined: ({ playerIndex, seed: joinedSeed, actions, players, previews }) => {
+      onJoined: ({ playerIndex, seed: joinedSeed, playerCount: joinedPlayerCount, actions, players, previews }) => {
         this.#myPlayerIndex = playerIndex;
+        this.#playerCount = this.#normalizePlayerCount(joinedPlayerCount, count);
         this.#focusedPlayerIndex = playerIndex ?? 0;
-        this.#initGame(joinedSeed, players);
+        this.#updateOnlineUrl(cleanRoom, cleanName, joinedSeed, this.#mp?.playerToken, this.#playerCount);
+        this.#initGame(joinedSeed, players, this.#playerCount);
         this.#pendingUndoRequest = null;
         if (this.#roomIsReady()) this.#lobbyNotice = null;
         this.#actionHistory = [];
@@ -2781,9 +2922,21 @@ export class GameLayout extends HTMLElement {
         this.#renderGhost();
         this.#autoResolveForcedDraft();
       },
-      onPlayers: (players) => {
-        this.#playerNames = players?.length ? players : this.#playerNames;
-        if (this.#roomIsReady()) this.#lobbyNotice = null;
+      onPlayers: (players, joinedPlayerCount) => {
+        const previousNames = this.#playerNames;
+        if (joinedPlayerCount != null) {
+          this.#playerCount = this.#normalizePlayerCount(joinedPlayerCount, this.#playerCount);
+        }
+        const nextNames = players?.length ? players : this.#playerNames;
+        const joinedNames = nextNames.filter((name, index) =>
+          name && !previousNames[index] && index !== this.#myPlayerIndex
+        );
+        this.#playerNames = nextNames;
+        if (this.#roomIsReady()) {
+          this.#lobbyNotice = null;
+        } else if (this.#myPlayerIndex != null && joinedNames.length) {
+          this.#lobbyNotice = `${joinedNames[joinedNames.length - 1]} joined.`;
+        }
         this.#refreshHud();
         this.#ensureMiniMaps();
         this.#renderMiniMaps();
@@ -2830,27 +2983,32 @@ export class GameLayout extends HTMLElement {
     return true;
   }
 
-  #startHotseatGame(name) {
+  #startHotseatGame(name, playerCount = this.#playerCount) {
     const cleanName = this.#savePlayerName(name);
+    const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
     const seed = randomSeed();
     const url = new URL(location.href);
     url.search = '';
     url.searchParams.set('hotseat', '1');
     url.searchParams.set('seed', String(seed));
-    url.searchParams.set('p1', cleanName);
-    url.searchParams.set('p2', 'Helper');
+    url.searchParams.set('players', String(count));
+    const playerNames = this.#defaultPlayerNames(cleanName, count);
+    playerNames.forEach((playerName, index) => {
+      url.searchParams.set(`p${index + 1}`, playerName);
+    });
     history.replaceState(null, '', url.toString());
 
     this.#mp?.disconnect?.();
     this.#homeMode = false;
     this.#hotseat = true;
     this.#roomId = null;
+    this.#playerCount = count;
     this.#myName = 'Hotseat';
     this.#connStatus = { state: 'hotseat' };
     this.#pendingUndoRequest = null;
     this.#lobbyNotice = null;
     this.#actionHistory = [];
-    this.#initGame(seed, [cleanName, 'Helper']);
+    this.#initGame(seed, playerNames, count);
     this.#syncHotseatPlayerIndex();
     this.#mp = {
       sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
@@ -2868,16 +3026,17 @@ export class GameLayout extends HTMLElement {
 
     if (this.#hotseat) {
       const seed = Number.parseInt(url.searchParams.get('seed') || '', 10);
-      const playerNames = [
-        url.searchParams.get('p1') || 'Codex',
-        url.searchParams.get('p2') || 'Helper',
-      ];
+      const playerCount = this.#playerCountFromUrl(url, 2);
+      const playerNames = Array.from({ length: playerCount }, (_, index) =>
+        url.searchParams.get(`p${index + 1}`) || (index === 0 ? 'Codex' : index === 1 ? 'Helper' : `Player ${index + 1}`)
+      );
+      this.#playerCount = playerCount;
       this.#myName = 'Hotseat';
       this.#connStatus = { state: 'hotseat' };
       this.#pendingUndoRequest = null;
       this.#lobbyNotice = null;
       this.#actionHistory = [];
-      this.#initGame(Number.isFinite(seed) ? seed : randomSeed(), playerNames);
+      this.#initGame(Number.isFinite(seed) ? seed : randomSeed(), playerNames, playerCount);
       this.#syncHotseatPlayerIndex();
       this.#mp = {
         sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
@@ -2893,15 +3052,22 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
+    const hasJoinIdentity = !!(url.searchParams.get('name') || url.searchParams.get('playerToken'));
+    if (!hasJoinIdentity) {
+      this.#enterHomeMode(url);
+      return;
+    }
+
     const name = this.#cleanPlayerName(url.searchParams.get('name') || this.#storedPlayerName());
     const proposedSeed = Number.parseInt(url.searchParams.get('seed') || '', 10);
-    this.#connectOnlineRoom(room, name, Number.isFinite(proposedSeed) ? proposedSeed : null);
+    const playerCount = this.#playerCountFromUrl(url, this.#playerCount);
+    this.#connectOnlineRoom(room, name, Number.isFinite(proposedSeed) ? proposedSeed : null, playerCount);
   }
 
   #syncHotseatPlayerIndex() {
     if (!this.#hotseat || !this.#game?.players?.length) return;
     if (this.#pendingUndoRequest) {
-      const other = this.#pendingUndoRequest.requesterIndex === 0 ? 1 : 0;
+      const other = this.#game.players.findIndex((_, index) => index !== this.#pendingUndoRequest.requesterIndex);
       this.#myPlayerIndex = this.#game.players[other] ? other : 0;
       this.#myName = this.#playerNames[this.#myPlayerIndex] ?? this.#game.players[this.#myPlayerIndex]?.name ?? 'Hotseat';
       return;
@@ -4722,7 +4888,9 @@ export class GameLayout extends HTMLElement {
     for (const slot of this.#game?.currentDraft ?? []) {
       const number = slot.domino.number;
       if (slot.player == null) {
-        result.set(number, { kind: 'available', label: 'Pick', color: 0xffd76a });
+        result.set(number, slot.placed
+          ? { kind: 'played', label: 'Discarded', color: 0x5b6170 }
+          : { kind: 'available', label: 'Pick', color: 0xffd76a });
         continue;
       }
 
@@ -4792,17 +4960,20 @@ export class GameLayout extends HTMLElement {
 
     const kicker = document.createElement('div');
     kicker.className = 'startKicker';
-    kicker.textContent = showHome ? 'Table Setup' : 'Online Room';
+    const isInviteJoin = showHome && !!this.#pendingInviteRoom;
+    kicker.textContent = showHome ? (isInviteJoin ? 'Online Invite' : 'Table Setup') : 'Online Room';
 
     const title = document.createElement('h1');
     title.className = 'startTitle';
-    title.textContent = showHome ? 'King Domino' : 'Waiting for opponent';
+    title.textContent = showHome ? (isInviteJoin ? 'Join Game' : 'King Domino') : 'Waiting for opponent';
 
     const copy = document.createElement('p');
     copy.className = 'startCopy';
 
     if (showHome) {
-      copy.textContent = 'Create a room, join by code, or play locally from the same screen.';
+      copy.textContent = isInviteJoin
+        ? 'Choose your name before joining this room.'
+        : 'Create a room, join by code, or play locally from the same screen.';
 
       const form = document.createElement('div');
       form.className = 'startForm';
@@ -4828,21 +4999,69 @@ export class GameLayout extends HTMLElement {
       roomInput.type = 'text';
       roomInput.placeholder = 'dev-abc123';
       roomInput.autocomplete = 'off';
+      roomInput.value = this.#pendingInviteRoom;
       roomLabel.htmlFor = 'kd-start-room';
       roomInput.id = 'kd-start-room';
       roomField.append(roomLabel, roomInput);
 
-      const actions = document.createElement('div');
-      actions.className = 'startActions';
+      const playersField = document.createElement('div');
+      playersField.className = 'startField';
+      const playersLabel = document.createElement('label');
+      playersLabel.textContent = 'Players';
+      const playersInput = document.createElement('select');
+      playersInput.id = 'kd-start-players';
+      playersLabel.htmlFor = playersInput.id;
+      for (const count of [2, 3, 4]) {
+        const option = document.createElement('option');
+        option.value = String(count);
+        option.textContent = `${count} players`;
+        option.selected = count === this.#playerCount;
+        playersInput.append(option);
+      }
+      playersField.append(playersLabel, playersInput);
+
       const create = document.createElement('button');
       create.type = 'button';
       create.className = 'startPrimary';
       create.textContent = 'Create Online Game';
       const join = document.createElement('button');
       join.type = 'button';
-      join.className = 'startSecondary';
-      join.textContent = 'Join Game';
-      actions.append(create, join);
+      join.className = isInviteJoin ? 'startPrimary' : 'startSecondary';
+      join.textContent = isInviteJoin ? 'Join This Game' : 'Join Game';
+      const actions = document.createElement('div');
+      actions.className = isInviteJoin ? 'startActions single' : 'startActions';
+      if (isInviteJoin) {
+        actions.append(join);
+      } else {
+        actions.append(create, join);
+      }
+
+      const inviteSummary = document.createElement('div');
+      inviteSummary.className = 'inviteSummary';
+      if (isInviteJoin) {
+        const roomChip = document.createElement('span');
+        roomChip.textContent = `Room ${this.#pendingInviteRoom}`;
+        const playersChip = document.createElement('span');
+        playersChip.textContent = `${this.#playerCount} players`;
+        inviteSummary.append(roomChip, playersChip);
+      }
+
+      const moreOptions = document.createElement('button');
+      moreOptions.type = 'button';
+      moreOptions.className = 'startSecondary';
+      moreOptions.textContent = this.#showInviteOptions ? 'Back to Invite' : 'Other Options';
+
+      const fallbackActions = document.createElement('div');
+      fallbackActions.className = 'startActions';
+      const fallbackCreate = document.createElement('button');
+      fallbackCreate.type = 'button';
+      fallbackCreate.className = 'startPrimary';
+      fallbackCreate.textContent = 'Create Online Game';
+      const joinDifferent = document.createElement('button');
+      joinDifferent.type = 'button';
+      joinDifferent.className = 'startSecondary';
+      joinDifferent.textContent = 'Join Room Code';
+      fallbackActions.append(fallbackCreate, joinDifferent);
 
       const hotseatActions = document.createElement('div');
       hotseatActions.className = 'startActions single';
@@ -4858,13 +5077,22 @@ export class GameLayout extends HTMLElement {
           roomInput.focus();
           return;
         }
-        this.#connectOnlineRoom(room, nameInput.value, this.#seedFromInput(roomInput.value));
+        const count = this.#playerCountFromInput(roomInput.value, Number.parseInt(playersInput.value, 10));
+        this.#connectOnlineRoom(room, nameInput.value, this.#seedForRoomInput(roomInput.value), count);
       };
 
       create.addEventListener('click', () => {
-        this.#connectOnlineRoom(this.#randomRoomCode(), nameInput.value);
+        this.#connectOnlineRoom(this.#randomRoomCode(), nameInput.value, null, Number.parseInt(playersInput.value, 10));
+      });
+      fallbackCreate.addEventListener('click', () => {
+        this.#connectOnlineRoom(this.#randomRoomCode(), nameInput.value, null, Number.parseInt(playersInput.value, 10));
       });
       join.addEventListener('click', joinRoom);
+      joinDifferent.addEventListener('click', joinRoom);
+      moreOptions.addEventListener('click', () => {
+        this.#showInviteOptions = !this.#showInviteOptions;
+        this.#refreshHud();
+      });
       roomInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') joinRoom();
       });
@@ -4872,10 +5100,17 @@ export class GameLayout extends HTMLElement {
         if (event.key === 'Enter' && roomInput.value.trim()) joinRoom();
       });
       hotseat.addEventListener('click', () => {
-        this.#startHotseatGame(nameInput.value);
+        this.#startHotseatGame(nameInput.value, Number.parseInt(playersInput.value, 10));
       });
 
-      form.append(nameField, roomField, actions, hotseatActions);
+      if (isInviteJoin) {
+        form.append(nameField, inviteSummary, actions, moreOptions);
+        if (this.#showInviteOptions) {
+          form.append(roomField, playersField, fallbackActions, hotseatActions);
+        }
+      } else {
+        form.append(nameField, roomField, playersField, actions, hotseatActions);
+      }
       card.append(kicker, title, copy, form);
       this.#startOverlay.append(card);
       return true;
@@ -4887,7 +5122,7 @@ export class GameLayout extends HTMLElement {
 
     copy.textContent = this.#lobbyNotice
       ? `${this.#lobbyNotice} Send the invite link again, wait for another player, or end this game.`
-      : 'Send the invite link or room code. The game will unlock when the second player joins.';
+      : `Send the invite link or room code. The game will unlock when all ${this.#playerCount} players join.`;
 
     const inviteField = document.createElement('div');
     inviteField.className = 'startField inviteField';
@@ -4904,7 +5139,7 @@ export class GameLayout extends HTMLElement {
 
     const players = document.createElement('div');
     players.className = 'lobbyPlayers';
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < this.#playerCount; i++) {
       const row = document.createElement('div');
       const name = this.#playerNames[i];
       row.className = 'lobbyPlayer';

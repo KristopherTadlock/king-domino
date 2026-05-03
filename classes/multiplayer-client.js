@@ -42,7 +42,7 @@ export class MultiplayerClient {
   proposedSeed = null;
 
   /**
-   * @param {{ roomId: string, name: string, playerToken?: string, proposedSeed?: number, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function, onPlacementPreview?: Function, onPlayerLeft?: Function }} opts
+   * @param {{ roomId: string, name: string, playerToken?: string, playerCount?: number, proposedSeed?: number, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function, onPlacementPreview?: Function, onPlayerLeft?: Function }} opts
    */
   constructor(opts) {
     this.roomId = opts.roomId;
@@ -55,10 +55,11 @@ export class MultiplayerClient {
     this.onPlacementPreview = opts.onPlacementPreview;
     this.onPlayerLeft = opts.onPlayerLeft;
     this.url = opts.url;
+    this.playerCount = Math.max(2, Math.min(4, Number.parseInt(opts.playerCount, 10) || 2));
 
     const explicitToken = typeof opts.playerToken === 'string' ? opts.playerToken.trim() : '';
     this.#usesExplicitPlayerToken = !!explicitToken;
-    this.playerToken = explicitToken || MultiplayerClient.getOrCreatePlayerToken();
+    this.playerToken = explicitToken || MultiplayerClient.getOrCreatePlayerToken(this.roomId);
     this.proposedSeed = Number.isFinite(opts.proposedSeed) ? opts.proposedSeed >>> 0 : null;
   }
 
@@ -78,6 +79,7 @@ export class MultiplayerClient {
         roomId: this.roomId,
         name: this.name,
         playerToken: this.playerToken,
+        playerCount: this.playerCount,
         // If the server is creating a room, allow client to propose a seed.
         proposedSeed: this.proposedSeed ?? randomSeed(),
       });
@@ -143,6 +145,7 @@ export class MultiplayerClient {
       case 'joined': {
         this.playerIndex = msg.playerIndex;
         this.seed = msg.seed;
+        this.playerCount = Math.max(2, Math.min(4, Number.parseInt(msg.playerCount, 10) || this.playerCount || 2));
         this.actions = msg.actions || [];
         if (typeof msg.playerToken === 'string' && msg.playerToken) {
           this.playerToken = msg.playerToken;
@@ -154,6 +157,7 @@ export class MultiplayerClient {
         this.onJoined?.({
           playerIndex: this.playerIndex,
           seed: this.seed,
+          playerCount: msg.playerCount,
           actions: this.actions,
           players: msg.players || [],
           previews: msg.previews || [],
@@ -161,11 +165,13 @@ export class MultiplayerClient {
         return;
       }
       case 'pong': {
-        // keepalive ack; nothing else to do
+        if (Array.isArray(msg.players)) {
+          this.onPlayers?.(msg.players, msg.playerCount);
+        }
         return;
       }
       case 'players': {
-        this.onPlayers?.(msg.players || []);
+        this.onPlayers?.(msg.players || [], msg.playerCount);
         return;
       }
       case 'playerLeft': {
@@ -239,7 +245,7 @@ export class MultiplayerClient {
     // App-level ping (browser WebSocket cannot send protocol ping frames).
     this.#pingTimer = setInterval(() => {
       this.send({ type: 'ping', t: Date.now() });
-    }, 20000);
+    }, 5000);
   }
 
   #clearPing() {
@@ -249,30 +255,35 @@ export class MultiplayerClient {
     }
   }
 
-  static getOrCreatePlayerToken() {
+  static #createPlayerToken() {
+    if (globalThis.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      globalThis.crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
+  }
+
+  static getOrCreatePlayerToken(roomId = '') {
+    const safeRoom = String(roomId || 'room').replace(/[^a-z0-9-]/gi, '').slice(0, 48) || 'room';
+    const key = `kd.playerToken.${safeRoom}`;
     try {
-      const existing = localStorage.getItem('kd.playerToken');
+      // Keep implicit tokens tab-scoped so local same-browser invite testing can
+      // claim multiple seats. Explicit playerToken URLs still reconnect exactly.
+      const existing = sessionStorage.getItem(key);
       if (existing) return existing;
 
-      let token = '';
-      if (globalThis.crypto?.getRandomValues) {
-        const bytes = new Uint8Array(16);
-        globalThis.crypto.getRandomValues(bytes);
-        token = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-      } else {
-        token = Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
-      }
-
-      localStorage.setItem('kd.playerToken', token);
+      const token = MultiplayerClient.#createPlayerToken();
+      sessionStorage.setItem(key, token);
       return token;
     } catch {
-      return Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
+      return MultiplayerClient.#createPlayerToken();
     }
   }
 
   static persistPlayerToken(token) {
     try {
-      localStorage.setItem('kd.playerToken', token);
+      sessionStorage.setItem('kd.lastPlayerToken', token);
     } catch {
       // ignore
     }

@@ -83,8 +83,16 @@
         gap: 8px;
       }
 
+      .linkGroup {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
       button,
-      a.button {
+      a.button,
+      input,
+      select {
         appearance: none;
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 7px;
@@ -100,7 +108,8 @@
       }
 
       button:hover,
-      a.button:hover {
+      a.button:hover,
+      select:hover {
         border-color: rgba(255, 255, 255, 0.28);
         background: rgba(255, 255, 255, 0.13);
       }
@@ -116,7 +125,7 @@
 
       .boards {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(var(--client-cols, 2), minmax(320px, 1fr));
         gap: 10px;
         min-height: 0;
         padding: 10px;
@@ -124,7 +133,7 @@
 
       .client {
         display: grid;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto auto 1fr;
         min-width: 0;
         min-height: 0;
         overflow: hidden;
@@ -159,12 +168,50 @@
         box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
       }
 
-      .host .swatch {
-        background: #4a9dff;
+      .clientState {
+        flex: 0 0 auto;
+        color: #b7c1cf;
+        font-size: 12px;
+        font-weight: 800;
       }
 
-      .friend .swatch {
-        background: #57c76b;
+      .slotControls {
+        display: grid;
+        grid-template-columns: minmax(120px, 1fr) repeat(3, auto);
+        gap: 6px;
+        padding: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .nameInput {
+        min-height: 34px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .frameWrap {
+        position: relative;
+        min-height: 0;
+        background: #111318;
+      }
+
+      .emptyState {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 6px;
+        padding: 24px;
+        color: #aeb7c4;
+        text-align: center;
+        background:
+          radial-gradient(circle at 50% 32%, rgba(88, 124, 190, 0.14), transparent 36%),
+          #111318;
+      }
+
+      .emptyState strong {
+        color: #f3f6fb;
+        font-size: 15px;
       }
 
       iframe {
@@ -173,6 +220,11 @@
         min-height: 680px;
         border: 0;
         background: #111318;
+      }
+
+      iframe[hidden],
+      .emptyState[hidden] {
+        display: none;
       }
 
       .copyState {
@@ -208,34 +260,27 @@
           <div class="meta">
             <span class="pill">Room <strong id="roomLabel"></strong></span>
             <span class="pill">Seed <strong id="seedLabel"></strong></span>
-            <span class="pill">Two browser clients, one local server</span>
+            <span class="pill"><strong id="clientCountLabel"></strong> clients, one local server</span>
           </div>
         </div>
         <div class="actions">
+          <select id="playerCount" aria-label="Player count">
+            <option value="2">2 players</option>
+            <option value="3">3 players</option>
+            <option value="4">4 players</option>
+          </select>
           <button id="copyInvite" type="button">Copy Invite Link</button>
-          <a id="hostLink" class="button" target="_blank" rel="noreferrer">Open Host</a>
-          <a id="friendLink" class="button" target="_blank" rel="noreferrer">Open Friend</a>
+          <span id="clientLinks" class="linkGroup"></span>
+          <button id="blankAll" type="button">Blank All</button>
+          <button id="inviteAll" type="button">Load Invites</button>
+          <button id="joinExpected" type="button">Join Expected</button>
           <button id="reloadPlayers" type="button">Reload Players</button>
           <button id="newRoom" class="primary" type="button">New Room</button>
           <span id="copyState" class="copyState" aria-live="polite"></span>
         </div>
       </header>
 
-      <section class="boards" aria-label="Two multiplayer clients">
-        <article class="client host">
-          <div class="clientHeader">
-            <div class="clientTitle"><span class="swatch"></span><span id="hostTitle"></span></div>
-            <span class="pill">playerToken: host</span>
-          </div>
-          <iframe id="hostFrame" title="Host player"></iframe>
-        </article>
-        <article class="client friend">
-          <div class="clientHeader">
-            <div class="clientTitle"><span class="swatch"></span><span id="friendTitle"></span></div>
-            <span class="pill">playerToken: friend</span>
-          </div>
-          <iframe id="friendFrame" title="Friend player"></iframe>
-        </article>
+      <section id="boards" class="boards" aria-label="Multiplayer clients">
       </section>
     </main>
 
@@ -256,27 +301,51 @@
         return clean || fallback;
       }
 
+      function normalizePlayerCount(value) {
+        const count = Number.parseInt(value, 10);
+        if (!Number.isFinite(count)) return 2;
+        return Math.max(2, Math.min(4, count));
+      }
+
+      const fallbackNames = ['Codex', 'Michael', 'Alex', 'Taylor'];
+      const slotModes = new Set(['empty', 'invite', 'joined']);
+
       const state = {
         room: normalizeRoom(params.get('room')),
         seed: Number.parseInt(params.get('seed') || '123', 10) || 123,
-        hostName: normalizeName(params.get('hostName'), 'Codex'),
-        friendName: normalizeName(params.get('friendName'), 'Michael'),
+        playerCount: normalizePlayerCount(params.get('players') || params.get('playerCount')),
+        names: [],
+        slots: [],
       };
+      for (let i = 0; i < 4; i++) {
+        const legacy = i === 0 ? params.get('hostName') : i === 1 ? params.get('friendName') : null;
+        state.names[i] = normalizeName(params.get(`name${i + 1}`) || legacy, fallbackNames[i]);
+        const mode = params.get(`slot${i + 1}`);
+        state.slots[i] = slotModes.has(mode) ? mode : (i < state.playerCount ? 'joined' : 'empty');
+      }
       let friendLoadTimer = null;
 
       function syncUrl() {
         const url = new URL(location.href);
         url.searchParams.set('room', state.room);
         url.searchParams.set('seed', String(state.seed));
-        url.searchParams.set('hostName', state.hostName);
-        url.searchParams.set('friendName', state.friendName);
+        url.searchParams.set('players', String(state.playerCount));
+        for (let i = 0; i < 4; i++) {
+          url.searchParams.set(`name${i + 1}`, state.names[i]);
+          url.searchParams.set(`slot${i + 1}`, state.slots[i]);
+        }
         history.replaceState(null, '', url);
+      }
+
+      function playerToken(index) {
+        return `harness-player-${index + 1}-${state.room}`;
       }
 
       function gameUrl(name, token, extra = {}) {
         const url = new URL('/', location.href);
         url.searchParams.set('room', state.room);
         url.searchParams.set('seed', String(state.seed));
+        url.searchParams.set('players', String(state.playerCount));
         url.searchParams.set('name', name);
         url.searchParams.set('playerToken', token);
         url.searchParams.set('v', 'mp-harness');
@@ -286,45 +355,237 @@
         return url.toString();
       }
 
-      function inviteUrl() {
+      function inviteUrl(slotIndex = null) {
         const url = new URL('/', location.href);
         url.searchParams.set('room', state.room);
         url.searchParams.set('seed', String(state.seed));
+        url.searchParams.set('players', String(state.playerCount));
+        if (Number.isInteger(slotIndex)) {
+          url.searchParams.set('suggestedName', state.names[slotIndex]);
+          url.searchParams.set('joinToken', playerToken(slotIndex));
+          url.searchParams.set('v', 'mp-harness');
+        }
         return url.toString();
+      }
+
+      function slotUrl(index) {
+        if (state.slots[index] === 'empty') return 'about:blank';
+        if (state.slots[index] === 'invite') return inviteUrl(index);
+        return gameUrl(state.names[index], playerToken(index));
+      }
+
+      function joinedCount() {
+        return state.slots.slice(0, state.playerCount).filter((mode) => mode === 'joined').length;
+      }
+
+      function slotLabel(index) {
+        const mode = state.slots[index];
+        if (index >= state.playerCount) {
+          return mode === 'joined' ? 'Spectator' : mode === 'invite' ? 'Invite Loaded' : 'Outside Room';
+        }
+        if (mode === 'empty') return 'Nothing Loaded';
+        if (mode === 'invite') return 'Invite Loaded';
+        return joinedCount() >= state.playerCount ? 'Game Loaded' : 'In Lobby';
+      }
+
+      function updateSlot(index, delay = 0) {
+        const article = document.querySelector(`[data-slot="${index}"]`);
+        if (!article) return;
+
+        const mode = state.slots[index];
+        const frame = article.querySelector('iframe');
+        const empty = article.querySelector('.emptyState');
+        const stateLabel = article.querySelector('.clientState');
+        const titleText = article.querySelector('.clientTitleText');
+        const nameInput = article.querySelector('.nameInput');
+        const openLink = document.querySelector(`[data-open-slot="${index}"]`);
+        const inRoom = index < state.playerCount;
+        const href = slotUrl(index);
+
+        article.classList.toggle('isInactive', !inRoom);
+        stateLabel.textContent = slotLabel(index);
+        titleText.textContent = `${state.names[index]} / ${inRoom ? `P${index + 1}` : 'spectator'}`;
+        if (document.activeElement !== nameInput) nameInput.value = state.names[index];
+        if (openLink) {
+          openLink.href = gameUrl(state.names[index], playerToken(index));
+          openLink.textContent = inRoom ? `Open P${index + 1}` : 'Open Spectator';
+        }
+
+        empty.hidden = mode !== 'empty';
+        frame.hidden = mode === 'empty';
+        const nextSrc = mode === 'empty' ? 'about:blank' : href;
+        window.setTimeout(() => {
+          if (frame.getAttribute('src') !== nextSrc) frame.src = nextSrc;
+        }, delay);
+      }
+
+      function updateAllSlots() {
+        syncUrl();
+        document.getElementById('roomLabel').textContent = state.room;
+        document.getElementById('seedLabel').textContent = String(state.seed);
+        document.getElementById('clientCountLabel').textContent = `${state.playerCount} player room`;
+        document.getElementById('playerCount').value = String(state.playerCount);
+        document.querySelectorAll('[data-slot]').forEach((_, index) => updateSlot(index));
+      }
+
+      function setSlotMode(index, mode, delay = 0) {
+        state.slots[index] = slotModes.has(mode) ? mode : 'empty';
+        syncUrl();
+        updateSlot(index, delay);
+        document.querySelectorAll('[data-slot]').forEach((_, slotIndex) => {
+          if (slotIndex !== index) updateSlot(slotIndex);
+        });
+      }
+
+      function setAllSlots(mode) {
+        friendLoadTimer?.clear?.();
+        const timers = [];
+        for (let i = 0; i < 4; i++) {
+          state.slots[i] = i < state.playerCount || mode === 'empty' ? mode : 'empty';
+        }
+        syncUrl();
+        for (let i = 0; i < 4; i++) {
+          updateSlot(i, i < state.playerCount ? i * 550 : 0);
+        }
+        friendLoadTimer = {
+          clear: () => timers.forEach(clearTimeout),
+        };
       }
 
       function render() {
         syncUrl();
-        const hostToken = `harness-host-${state.room}`;
-        const friendToken = `harness-friend-${state.room}`;
-        const hostUrl = gameUrl(state.hostName, hostToken);
-        const friendUrl = gameUrl(state.friendName, friendToken);
+        const clients = Array.from({ length: 4 }, (_, index) => ({
+          index,
+          name: state.names[index],
+          token: playerToken(index),
+        }));
 
         document.getElementById('roomLabel').textContent = state.room;
         document.getElementById('seedLabel').textContent = String(state.seed);
-        document.getElementById('hostTitle').textContent = `${state.hostName} / host`;
-        document.getElementById('friendTitle').textContent = `${state.friendName} / friend`;
-        document.getElementById('hostLink').href = hostUrl;
-        document.getElementById('friendLink').href = friendUrl;
-        const hostFrame = document.getElementById('hostFrame');
-        const friendFrame = document.getElementById('friendFrame');
-        if (friendLoadTimer) clearTimeout(friendLoadTimer);
-        friendFrame.src = 'about:blank';
-        hostFrame.src = hostUrl;
-        friendLoadTimer = setTimeout(() => {
-          friendFrame.src = friendUrl;
-        }, 700);
+        document.getElementById('clientCountLabel').textContent = `${state.playerCount} player room`;
+        document.getElementById('playerCount').value = String(state.playerCount);
+
+        const links = document.getElementById('clientLinks');
+        const boards = document.getElementById('boards');
+        links.innerHTML = '';
+        boards.innerHTML = '';
+        boards.style.setProperty('--client-cols', '2');
+        friendLoadTimer?.clear?.();
+
+        clients.forEach((client) => {
+          const url = gameUrl(client.name, client.token);
+          const link = document.createElement('a');
+          link.className = 'button';
+          link.dataset.openSlot = String(client.index);
+          link.target = '_blank';
+          link.rel = 'noreferrer';
+          link.href = url;
+          link.textContent = `Open P${client.index + 1}`;
+          links.append(link);
+
+          const article = document.createElement('article');
+          article.className = 'client';
+          const header = document.createElement('div');
+          header.className = 'clientHeader';
+          const title = document.createElement('div');
+          title.className = 'clientTitle';
+          const swatch = document.createElement('span');
+          swatch.className = 'swatch';
+          swatch.style.background = ['#4a9dff', '#57c76b', '#d495ff', '#ffbd5a'][client.index] || '#aeb7c4';
+          const titleText = document.createElement('span');
+          titleText.className = 'clientTitleText';
+          titleText.textContent = `${client.name} / P${client.index + 1}`;
+          title.append(swatch, titleText);
+          const stateLabel = document.createElement('span');
+          stateLabel.className = 'clientState';
+          header.append(title, stateLabel);
+
+          const controls = document.createElement('div');
+          controls.className = 'slotControls';
+          const nameInput = document.createElement('input');
+          nameInput.className = 'nameInput';
+          nameInput.type = 'text';
+          nameInput.value = client.name;
+          nameInput.maxLength = 24;
+          nameInput.setAttribute('aria-label', `Player ${client.index + 1} name`);
+          const clear = document.createElement('button');
+          clear.type = 'button';
+          clear.textContent = 'Blank';
+          const invite = document.createElement('button');
+          invite.type = 'button';
+          invite.textContent = 'Invite';
+          const join = document.createElement('button');
+          join.type = 'button';
+          join.className = 'primary';
+          join.textContent = 'Join';
+          controls.append(nameInput, clear, invite, join);
+
+          nameInput.addEventListener('change', () => {
+            state.names[client.index] = normalizeName(nameInput.value, fallbackNames[client.index]);
+            syncUrl();
+            updateSlot(client.index);
+          });
+          clear.addEventListener('click', () => setSlotMode(client.index, 'empty'));
+          invite.addEventListener('click', () => setSlotMode(client.index, 'invite'));
+          join.addEventListener('click', () => {
+            state.names[client.index] = normalizeName(nameInput.value, fallbackNames[client.index]);
+            setSlotMode(client.index, 'joined');
+          });
+
+          const frameWrap = document.createElement('div');
+          frameWrap.className = 'frameWrap';
+          const empty = document.createElement('div');
+          empty.className = 'emptyState';
+          const emptyTitle = document.createElement('strong');
+          emptyTitle.textContent = 'Nothing loaded';
+          const emptyCopy = document.createElement('span');
+          emptyCopy.textContent = 'Load an invite or join this slot.';
+          empty.append(emptyTitle, emptyCopy);
+          const frame = document.createElement('iframe');
+          frame.title = `Player ${client.index + 1}`;
+          frame.src = 'about:blank';
+          frameWrap.append(empty, frame);
+          article.dataset.slot = String(client.index);
+          article.append(header, controls, frameWrap);
+          boards.append(article);
+        });
+
+        updateAllSlots();
       }
 
       document.getElementById('reloadPlayers').addEventListener('click', () => {
-        document.getElementById('hostFrame').contentWindow?.location.reload();
-        document.getElementById('friendFrame').contentWindow?.location.reload();
+        document.querySelectorAll('iframe').forEach((frame) => frame.contentWindow?.location.reload());
       });
 
       document.getElementById('newRoom').addEventListener('click', () => {
         state.room = randomRoom();
         state.seed = Math.floor(Math.random() * 2 ** 32) >>> 0;
+        for (let i = 0; i < 4; i++) {
+          state.slots[i] = i < state.playerCount ? 'invite' : 'empty';
+        }
         render();
+      });
+
+      document.getElementById('playerCount').addEventListener('change', (event) => {
+        state.playerCount = normalizePlayerCount(event.target.value);
+        state.room = randomRoom();
+        state.seed = Math.floor(Math.random() * 2 ** 32) >>> 0;
+        for (let i = 0; i < 4; i++) {
+          state.slots[i] = i < state.playerCount ? 'invite' : 'empty';
+        }
+        render();
+      });
+
+      document.getElementById('blankAll').addEventListener('click', () => {
+        setAllSlots('empty');
+      });
+
+      document.getElementById('inviteAll').addEventListener('click', () => {
+        setAllSlots('invite');
+      });
+
+      document.getElementById('joinExpected').addEventListener('click', () => {
+        setAllSlots('joined');
       });
 
       document.getElementById('copyInvite').addEventListener('click', async () => {

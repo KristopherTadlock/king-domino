@@ -415,16 +415,25 @@ export class WebGameManager {
   pickDraft(draftIndex) {
     if (this.isGameOver) return;
     if (this.state !== GameState.DRAFT) return;
+    const pickingPlayer = this.currentPickingPlayerIndex;
+    if (pickingPlayer == null) return;
     if (draftIndex < 0 || draftIndex >= this.currentDraft.length) return;
     const slot = this.currentDraft[draftIndex];
     if (slot.player != null) return;
 
-    slot.player = this.currentPickingPlayerIndex;
+    slot.player = pickingPlayer;
     this.#pickCursor += 1;
-    if (!this.currentDraft.every((d) => d.player != null)) return;
+    if (this.#pickCursor < this.#pickOrder.length && !this.currentDraft.every((d) => d.player != null)) return;
 
-    // Placement order is by increasing domino number of what you picked.
+    // In 3-player games, one domino remains unclaimed each draft. Treat it as
+    // already resolved so placement can advance after the three claimed tiles.
+    for (const draft of this.currentDraft) {
+      if (draft.player == null) draft.placed = true;
+    }
+
+    // Placement order is by increasing domino number of what players picked.
     this.#placeOrder = [...this.currentDraft]
+      .filter((d) => d.player != null)
       .sort((a, b) => a.domino.number - b.domino.number)
       .map((d) => d.player);
 
