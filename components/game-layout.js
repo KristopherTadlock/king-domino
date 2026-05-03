@@ -73,6 +73,13 @@ const LANDSCAPE_TEXTURES = Object.freeze({
 });
 
 const ALL_EDGES = [Edges.TOP, Edges.BOTTOM, Edges.LEFT, Edges.RIGHT];
+const SCORE_HISTORY_STORAGE_KEY = 'kd.completedGames.v1';
+const SCORE_HISTORY_LIMIT = 50;
+
+const LANDSCAPE_COLOR_BY_KEY = Object.freeze(Object.fromEntries(
+  Object.getOwnPropertySymbols(LANDSCAPE_COLORS)
+    .map((landscape) => [landscapeKey(landscape), LANDSCAPE_COLORS[landscape]])
+));
 
 function landscapeLabel(landscape) {
   switch (landscape) {
@@ -872,6 +879,7 @@ export class GameLayout extends HTMLElement {
   #btnCenter;
   #btnMore;
   #btnLibrary;
+  #btnHighScores;
   #btnRestart;
   #btnEndGame;
   #mobileActions;
@@ -926,6 +934,9 @@ export class GameLayout extends HTMLElement {
   /** @type {HTMLDivElement} */
   #startOverlay;
 
+  /** @type {HTMLDivElement} */
+  #scoreHistoryOverlay;
+
   /** @type {{type:string,payload:any}[]} */
   #actionHistory = [];
 
@@ -979,6 +990,15 @@ export class GameLayout extends HTMLElement {
 
   /** @type {number | null} */
   #libraryFocusedDominoNumber = null;
+
+  /** @type {boolean} */
+  #scoreHistoryOpen = false;
+
+  /** @type {string | null} */
+  #scoreHistorySelectedId = null;
+
+  /** @type {string | null} */
+  #recordedCompletedGameKey = null;
 
   /** @type {number | null} */
   #startAttractFocusedDominoNumber = null;
@@ -2284,7 +2304,156 @@ export class GameLayout extends HTMLElement {
       }
       .endActions {
         display: flex;
+        gap: 8px;
         justify-content: flex-end;
+      }
+      .scoreHistoryOverlay {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(8, 10, 14, 0.42);
+        backdrop-filter: blur(3px);
+        z-index: 24;
+        color: #e9eef5;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      }
+      .scoreHistoryOverlay[hidden] { display: none !important; }
+      .scoreHistoryCard {
+        box-sizing: border-box;
+        width: min(920px, calc(100vw - 28px));
+        max-height: min(760px, calc(100dvh - 28px));
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 12px;
+        padding: 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(20,22,28,0.92);
+        box-shadow: 0 22px 72px rgba(0,0,0,0.48), inset 0 1px 0 rgba(255,255,255,0.08);
+      }
+      .scoreHistoryHeader {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 12px;
+      }
+      .scoreHistoryTitle {
+        display: grid;
+        gap: 3px;
+      }
+      .scoreHistoryTitle h2 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.05;
+      }
+      .scoreHistoryClose {
+        width: auto;
+        min-width: 40px;
+      }
+      .scoreHistoryBody {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(240px, 0.75fr) minmax(0, 1.25fr);
+        gap: 12px;
+      }
+      .scoreHistoryList {
+        min-height: 0;
+        overflow: auto;
+        display: grid;
+        align-content: start;
+        gap: 7px;
+        padding-right: 2px;
+      }
+      .scoreHistoryItem {
+        width: 100%;
+        display: grid;
+        gap: 4px;
+        padding: 9px;
+        text-align: left;
+        border-radius: 10px;
+        background: rgba(255,255,255,0.06);
+      }
+      .scoreHistoryItem.active {
+        border-color: rgba(126, 192, 255, 0.66);
+        background: rgba(42, 92, 145, 0.42);
+        box-shadow: 0 0 0 2px rgba(126, 192, 255, 0.10);
+      }
+      .scoreHistoryItemTop,
+      .scoreHistoryPlayerRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .scoreHistoryItemTop strong {
+        font-size: 13px;
+      }
+      .scoreHistoryDate {
+        font-size: 11px;
+        color: rgba(233,238,245,0.58);
+      }
+      .scoreHistoryPlayers {
+        display: grid;
+        gap: 3px;
+        font-size: 12px;
+        color: rgba(233,238,245,0.80);
+      }
+      .scoreHistoryDetail {
+        min-height: 0;
+        overflow: auto;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(255,255,255,0.045);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .scoreHistoryDetailHeader {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 10px;
+      }
+      .scoreHistoryDetailHeader h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .scoreBoardGrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .scoreBoardCard {
+        display: grid;
+        gap: 7px;
+        padding: 9px;
+        border-radius: 10px;
+        background: rgba(0,0,0,0.18);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .scoreBoardTitle {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      canvas.scoreBoard {
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 8px;
+        background: rgba(0,0,0,0.35);
+      }
+      .scoreHistoryEmpty {
+        grid-column: 1 / -1;
+        padding: 18px;
+        border-radius: 12px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(233,238,245,0.74);
+        text-align: center;
       }
       .root.isStartMode .topBar,
       .root.isStartMode .hud,
@@ -2434,6 +2603,23 @@ export class GameLayout extends HTMLElement {
         }
         .startCard {
           width: min(440px, calc(100vw - 24px));
+        }
+        .scoreHistoryOverlay {
+          padding: 10px;
+        }
+        .scoreHistoryCard {
+          width: calc(100vw - 20px);
+          max-height: calc(100dvh - 20px);
+          padding: 12px;
+        }
+        .scoreHistoryBody {
+          grid-template-columns: 1fr;
+        }
+        .scoreHistoryList {
+          max-height: 230px;
+        }
+        .scoreHistoryTitle h2 {
+          font-size: 21px;
         }
       }
       .lobbyPlayers {
@@ -2821,6 +3007,9 @@ export class GameLayout extends HTMLElement {
     this.#btnLibrary = document.createElement('button');
     this.#btnLibrary.textContent = 'Library';
     this.#btnLibrary.className = 'secondaryAction';
+    this.#btnHighScores = document.createElement('button');
+    this.#btnHighScores.textContent = 'High Scores';
+    this.#btnHighScores.className = 'secondaryAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
     this.#btnRestart.className = 'secondaryAction destructiveAction';
@@ -2830,7 +3019,7 @@ export class GameLayout extends HTMLElement {
     this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
     this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnLibrary, this.#btnMore);
     this.#tertiaryControlsRow.hidden = true;
-    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnRestart, this.#btnEndGame);
+    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnHighScores, this.#btnRestart, this.#btnEndGame);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -2850,8 +3039,12 @@ export class GameLayout extends HTMLElement {
     this.#startOverlay.className = 'startOverlay';
     this.#startOverlay.hidden = true;
 
+    this.#scoreHistoryOverlay = document.createElement('div');
+    this.#scoreHistoryOverlay.className = 'scoreHistoryOverlay';
+    this.#scoreHistoryOverlay.hidden = true;
+
     this.#hud.append(this.#hudBody);
-    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#localPlacementDock, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay, this.#startOverlay);
+    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#localPlacementDock, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay, this.#startOverlay, this.#scoreHistoryOverlay);
     this.#shadow.append(style, this.#root);
   }
 
@@ -2910,6 +3103,7 @@ export class GameLayout extends HTMLElement {
     this.#playerNames = displayNames;
     this.#remotePlacementPreviews.clear();
     this.#lastSentPlacementPreviewKey = '';
+    this.#recordedCompletedGameKey = null;
     this.#game.start(gameNames);
   }
 
@@ -2929,6 +3123,342 @@ export class GameLayout extends HTMLElement {
       // ignore
     }
     return clean;
+  }
+
+  #loadScoreHistory() {
+    try {
+      const raw = localStorage.getItem(SCORE_HISTORY_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((record) => record && Array.isArray(record.players) && record.players.length)
+        .slice(0, SCORE_HISTORY_LIMIT);
+    } catch {
+      return [];
+    }
+  }
+
+  #saveScoreHistory(records) {
+    try {
+      localStorage.setItem(SCORE_HISTORY_STORAGE_KEY, JSON.stringify(records.slice(0, SCORE_HISTORY_LIMIT)));
+    } catch {
+      // ignore storage quota/private mode failures
+    }
+  }
+
+  #currentScoreHistoryRecord() {
+    if (!this.#game?.isGameOver || !this.#game.players?.length) return null;
+
+    const players = this.#game.players.map((player, index) => {
+      const boardManager = player.board;
+      const board = boardManager.board;
+      const boardSize = boardManager.boardSize;
+      const tiles = Object.values(board)
+        .map((tile) => ({
+          x: tile.x,
+          y: tile.y,
+          landscape: landscapeKey(tile.landscape),
+          crowns: tile.crowns,
+          artSeed: tile.artSeed || '',
+        }))
+        .sort((a, b) => a.x - b.x || a.y - b.y || a.landscape.localeCompare(b.landscape));
+
+      return {
+        index,
+        name: this.#playerNames[index] || player.name || `Player ${index + 1}`,
+        score: boardManager.score,
+        boardSize: {
+          xMin: boardSize.xMin,
+          xMax: boardSize.xMax,
+          yMin: boardSize.yMin,
+          yMax: boardSize.yMax,
+        },
+        tiles,
+      };
+    });
+
+    const topScore = Math.max(...players.map((player) => player.score));
+    const winnerNames = players
+      .filter((player) => player.score === topScore)
+      .map((player) => player.name);
+    const keySource = JSON.stringify({
+      seed: this.#game.seed,
+      playerCount: this.#playerCount,
+      players: players.map((player) => ({
+        name: player.name,
+        score: player.score,
+        tiles: player.tiles,
+      })),
+    });
+    const gameKey = hash32(keySource).toString(36);
+
+    return {
+      schema: 1,
+      id: `game-${Date.now().toString(36)}-${gameKey}`,
+      gameKey,
+      completedAt: Date.now(),
+      seed: this.#game.seed,
+      playerCount: this.#playerCount,
+      mode: this.#hotseat ? 'Hotseat' : this.#roomId ? 'Online' : 'Local',
+      roomId: this.#roomId || '',
+      topScore,
+      winnerNames,
+      players,
+    };
+  }
+
+  #recordCompletedGameIfNeeded() {
+    const record = this.#currentScoreHistoryRecord();
+    if (!record) return;
+    if (this.#recordedCompletedGameKey === record.gameKey) return;
+
+    const history = this.#loadScoreHistory()
+      .filter((item) => item.gameKey !== record.gameKey);
+    history.unshift(record);
+    this.#saveScoreHistory(history);
+    this.#recordedCompletedGameKey = record.gameKey;
+    if (this.#scoreHistoryOpen) this.#renderScoreHistoryOverlay();
+  }
+
+  #openScoreHistory(selectedId = null) {
+    this.#scoreHistoryOpen = true;
+    this.#scoreHistorySelectedId = selectedId;
+    this.#moreOpen = false;
+    this.#renderScoreHistoryOverlay();
+    this.#refreshHud();
+  }
+
+  #closeScoreHistory() {
+    this.#scoreHistoryOpen = false;
+    this.#scoreHistorySelectedId = null;
+    this.#renderScoreHistoryOverlay();
+  }
+
+  #scoreHistoryDate(record) {
+    const date = new Date(record?.completedAt || 0);
+    if (!Number.isFinite(date.getTime())) return 'Completed game';
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  #scoreHistoryTime(record) {
+    const date = new Date(record?.completedAt || 0);
+    if (!Number.isFinite(date.getTime())) return '';
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  #renderScoreHistoryOverlay() {
+    if (!this.#scoreHistoryOverlay) return;
+    this.#scoreHistoryOverlay.hidden = !this.#scoreHistoryOpen;
+    this.#scoreHistoryOverlay.innerHTML = '';
+    if (!this.#scoreHistoryOpen) return;
+
+    const history = this.#loadScoreHistory();
+    if (this.#scoreHistorySelectedId && !history.some((record) => record.id === this.#scoreHistorySelectedId)) {
+      this.#scoreHistorySelectedId = null;
+    }
+    const selected = history.find((record) => record.id === this.#scoreHistorySelectedId) ?? history[0] ?? null;
+    if (selected) this.#scoreHistorySelectedId = selected.id;
+
+    const card = document.createElement('div');
+    card.className = 'scoreHistoryCard';
+    const header = document.createElement('div');
+    header.className = 'scoreHistoryHeader';
+    const title = document.createElement('div');
+    title.className = 'scoreHistoryTitle';
+    const heading = document.createElement('h2');
+    heading.textContent = 'High Scores';
+    const copy = document.createElement('div');
+    copy.className = 'muted';
+    copy.textContent = 'Last 50 completed games saved on this browser.';
+    title.append(heading, copy);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'secondaryAction scoreHistoryClose';
+    close.textContent = 'Close';
+    close.addEventListener('click', () => this.#closeScoreHistory());
+    header.append(title, close);
+
+    const body = document.createElement('div');
+    body.className = 'scoreHistoryBody';
+
+    if (!history.length) {
+      const empty = document.createElement('div');
+      empty.className = 'scoreHistoryEmpty';
+      empty.textContent = 'Completed games will appear here after the final tile is placed.';
+      body.append(empty);
+      card.append(header, body);
+      this.#scoreHistoryOverlay.append(card);
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'scoreHistoryList';
+    for (const record of history) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'scoreHistoryItem';
+      item.classList.toggle('active', record.id === selected?.id);
+
+      const top = document.createElement('div');
+      top.className = 'scoreHistoryItemTop';
+      const winner = document.createElement('strong');
+      winner.textContent = `${record.winnerNames?.join(', ') || 'Winner'} · ${record.topScore}`;
+      const date = document.createElement('span');
+      date.className = 'scoreHistoryDate';
+      date.textContent = `${this.#scoreHistoryDate(record)} ${this.#scoreHistoryTime(record)}`;
+      top.append(winner, date);
+
+      const players = document.createElement('div');
+      players.className = 'scoreHistoryPlayers';
+      for (const player of [...record.players].sort((a, b) => b.score - a.score || a.index - b.index)) {
+        const row = document.createElement('div');
+        row.className = 'scoreHistoryPlayerRow';
+        const name = document.createElement('span');
+        name.textContent = player.name;
+        const score = document.createElement('strong');
+        score.textContent = String(player.score);
+        row.append(name, score);
+        players.append(row);
+      }
+
+      item.append(top, players);
+      item.addEventListener('click', () => {
+        this.#scoreHistorySelectedId = record.id;
+        this.#renderScoreHistoryOverlay();
+      });
+      list.append(item);
+    }
+
+    const detail = document.createElement('div');
+    detail.className = 'scoreHistoryDetail';
+    this.#renderScoreHistoryDetail(detail, selected);
+
+    body.append(list, detail);
+    card.append(header, body);
+    this.#scoreHistoryOverlay.append(card);
+  }
+
+  #renderScoreHistoryDetail(container, record) {
+    container.innerHTML = '';
+    if (!record) return;
+
+    const header = document.createElement('div');
+    header.className = 'scoreHistoryDetailHeader';
+    const text = document.createElement('div');
+    const title = document.createElement('h3');
+    title.textContent = record.winnerNames?.length > 1
+      ? `Tie at ${record.topScore}`
+      : `${record.winnerNames?.[0] || 'Winner'} wins`;
+    const meta = document.createElement('div');
+    meta.className = 'muted';
+    meta.textContent = `${record.mode || 'Game'} · ${record.playerCount || record.players.length} players · Seed ${record.seed}`;
+    text.append(title, meta);
+    const date = document.createElement('div');
+    date.className = 'scoreHistoryDate';
+    date.textContent = `${this.#scoreHistoryDate(record)} ${this.#scoreHistoryTime(record)}`;
+    header.append(text, date);
+
+    const boards = document.createElement('div');
+    boards.className = 'scoreBoardGrid';
+    for (const player of record.players) {
+      const card = document.createElement('div');
+      card.className = 'scoreBoardCard';
+      const titleRow = document.createElement('div');
+      titleRow.className = 'scoreBoardTitle';
+      const name = document.createElement('span');
+      name.textContent = player.name;
+      const score = document.createElement('strong');
+      score.textContent = String(player.score);
+      titleRow.append(name, score);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 180;
+      canvas.height = 180;
+      canvas.className = 'scoreBoard';
+      card.append(titleRow, canvas);
+      boards.append(card);
+      this.#drawScoreBoardSnapshot(canvas, player, player.index ?? 0);
+    }
+
+    container.append(header, boards);
+  }
+
+  #drawScoreBoardSnapshot(canvas, player, playerIndex = 0) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const tiles = Array.isArray(player?.tiles) ? player.tiles : [];
+    if (!tiles.length) return;
+
+    const storedSize = player.boardSize || {};
+    const xMin = Number.isFinite(storedSize.xMin) ? storedSize.xMin : Math.min(...tiles.map((tile) => tile.x));
+    const xMax = Number.isFinite(storedSize.xMax) ? storedSize.xMax : Math.max(...tiles.map((tile) => tile.x));
+    const yMin = Number.isFinite(storedSize.yMin) ? storedSize.yMin : Math.min(...tiles.map((tile) => tile.y));
+    const yMax = Number.isFinite(storedSize.yMax) ? storedSize.yMax : Math.max(...tiles.map((tile) => tile.y));
+    const minX = Math.min(xMin - 2, -3);
+    const maxX = Math.max(xMax + 2, 3);
+    const minY = Math.min(yMin - 2, -3);
+    const maxY = Math.max(yMax + 2, 3);
+    const gridW = maxX - minX + 1;
+    const gridH = maxY - minY + 1;
+    const tilePx = Math.max(6, Math.floor((Math.min(canvas.width, canvas.height) - 8) / Math.max(gridW, gridH)));
+    const drawW = gridW * tilePx;
+    const drawH = gridH * tilePx;
+    const ox = Math.floor((canvas.width - drawW) / 2);
+    const oy = Math.floor((canvas.height - drawH) / 2);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    for (let gx = 0; gx <= gridW; gx++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + gx * tilePx, oy);
+      ctx.lineTo(ox + gx * tilePx, oy + drawH);
+      ctx.stroke();
+    }
+    for (let gy = 0; gy <= gridH; gy++) {
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + gy * tilePx);
+      ctx.lineTo(ox + drawW, oy + gy * tilePx);
+      ctx.stroke();
+    }
+
+    for (const tile of tiles) {
+      const px = ox + (tile.x - minX) * tilePx;
+      const py = oy + (tile.y - minY) * tilePx;
+      const color = LANDSCAPE_COLOR_BY_KEY[tile.landscape] ?? 0xeeeeee;
+      ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+      ctx.fillRect(px + 1, py + 1, tilePx - 2, tilePx - 2);
+
+      if (tile.crowns > 0 || tile.landscape === landscapeKey(Landscapes.CASTLE)) {
+        const cx = px + tilePx / 2;
+        const cy = py + tilePx / 2;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if (tile.landscape === landscapeKey(Landscapes.CASTLE)) {
+          const radius = Math.max(4, tilePx * 0.34);
+          ctx.fillStyle = this.#playerMiniMapColor(playerIndex, 0.22);
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = this.#playerMiniMapColor(playerIndex, 0.95);
+          ctx.lineWidth = Math.max(1.5, tilePx * 0.12);
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(245,248,255,0.86)';
+          ctx.font = `${Math.max(8, Math.floor(tilePx * 0.46))}px system-ui`;
+          ctx.fillText('C', cx, cy);
+        } else {
+          ctx.fillStyle = 'rgba(0,0,0,0.65)';
+          ctx.font = `${Math.max(8, Math.floor(tilePx * 0.55))}px system-ui`;
+          ctx.fillText(String(tile.crowns), cx, cy);
+        }
+      }
+    }
   }
 
   #cleanPlayerName(name, fallback = 'Player') {
@@ -4675,6 +5205,10 @@ export class GameLayout extends HTMLElement {
       this.#refreshHud();
     });
 
+    this.#btnHighScores.addEventListener('click', () => {
+      this.#openScoreHistory();
+    });
+
     this.#btnLibrary.addEventListener('click', () => {
       this.#setLibraryOpen(!this.#libraryOpen);
     });
@@ -4739,6 +5273,9 @@ export class GameLayout extends HTMLElement {
     });
     this.#btnLocalClear.addEventListener('click', () => {
       this.#clearPlacementSpotFocus();
+    });
+    this.#scoreHistoryOverlay.addEventListener('click', (event) => {
+      if (event.target === this.#scoreHistoryOverlay) this.#closeScoreHistory();
     });
 
     this.#renderer.domElement.addEventListener('pointerdown', (e) => this.#onPointerDown(e));
@@ -5363,7 +5900,11 @@ export class GameLayout extends HTMLElement {
       hotseat.type = 'button';
       hotseat.className = 'startSecondary';
       hotseat.textContent = 'Play Hotseat';
-      hotseatActions.append(hotseat);
+      const highScores = document.createElement('button');
+      highScores.type = 'button';
+      highScores.className = 'startSecondary';
+      highScores.textContent = 'High Scores';
+      hotseatActions.append(hotseat, highScores);
 
       const joinRoom = () => {
         const room = this.#roomCodeFromInput(roomInput.value);
@@ -5395,6 +5936,9 @@ export class GameLayout extends HTMLElement {
       });
       hotseat.addEventListener('click', () => {
         this.#startHotseatGame(nameInput.value, Number.parseInt(playersInput.value, 10));
+      });
+      highScores.addEventListener('click', () => {
+        this.#openScoreHistory();
       });
 
       if (isInviteJoin) {
@@ -5488,6 +6032,7 @@ export class GameLayout extends HTMLElement {
   #refreshHud() {
     const g = this.#game;
     this.#root?.classList.toggle('isLibraryMode', this.#libraryOpen);
+    this.#renderScoreHistoryOverlay();
     this.#syncHotseatPlayerIndex();
     this.#syncMobilePanelForPhase();
     if (this.#renderStartOverlay()) return;
@@ -5508,6 +6053,7 @@ export class GameLayout extends HTMLElement {
       this.#btnScores.hidden = true;
       this.#btnSkip.hidden = true;
       this.#btnUndoRequest.hidden = true;
+      this.#btnHighScores.hidden = true;
       this.#btnRestart.hidden = true;
       this.#btnEndGame.hidden = true;
       this.#btnMore.hidden = true;
@@ -5619,6 +6165,7 @@ export class GameLayout extends HTMLElement {
     this.#btnSkip.hidden = !canSkip;
     this.#btnUndoRequest.disabled = !canRequestUndo;
     this.#btnUndoRequest.hidden = !canRequestUndo;
+    this.#btnHighScores.hidden = false;
     this.#btnRestart.hidden = false;
     this.#btnEndGame.hidden = false;
     this.#btnScores.disabled = !canPlaceUi;
@@ -5712,6 +6259,7 @@ export class GameLayout extends HTMLElement {
     }
 
     if (g.isGameOver) {
+      this.#recordCompletedGameIfNeeded();
       const topScore = standings.length ? standings[0].score : 0;
       const winners = standings.filter((s) => s.score === topScore);
 
@@ -5767,7 +6315,11 @@ export class GameLayout extends HTMLElement {
           this.#endSummaryCollapsed = !this.#endSummaryCollapsed;
           this.#refreshHud();
         });
-        actions.append(inspect);
+        const highScores = document.createElement('button');
+        highScores.className = 'secondaryAction';
+        highScores.textContent = 'High Scores';
+        highScores.addEventListener('click', () => this.#openScoreHistory());
+        actions.append(inspect, highScores);
 
         card.append(kicker, title, summary, rank, actions);
         this.#endOverlay.append(card);
