@@ -38,8 +38,11 @@ export class MultiplayerClient {
   /** @type {{type:string, payload:any}[]} */
   actions = [];
 
+  /** @type {number | null} */
+  proposedSeed = null;
+
   /**
-   * @param {{ roomId: string, name: string, playerToken?: string, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function }} opts
+   * @param {{ roomId: string, name: string, playerToken?: string, proposedSeed?: number, url?: string, onJoined: Function, onAction: Function, onPlayers: Function, onError: Function, onStatus?: Function, onPlacementPreview?: Function, onPlayerLeft?: Function }} opts
    */
   constructor(opts) {
     this.roomId = opts.roomId;
@@ -49,11 +52,14 @@ export class MultiplayerClient {
     this.onPlayers = opts.onPlayers;
     this.onError = opts.onError;
     this.onStatus = opts.onStatus;
+    this.onPlacementPreview = opts.onPlacementPreview;
+    this.onPlayerLeft = opts.onPlayerLeft;
     this.url = opts.url;
 
     const explicitToken = typeof opts.playerToken === 'string' ? opts.playerToken.trim() : '';
     this.#usesExplicitPlayerToken = !!explicitToken;
     this.playerToken = explicitToken || MultiplayerClient.getOrCreatePlayerToken();
+    this.proposedSeed = Number.isFinite(opts.proposedSeed) ? opts.proposedSeed >>> 0 : null;
   }
 
   connect() {
@@ -73,7 +79,7 @@ export class MultiplayerClient {
         name: this.name,
         playerToken: this.playerToken,
         // If the server is creating a room, allow client to propose a seed.
-        proposedSeed: randomSeed(),
+        proposedSeed: this.proposedSeed ?? randomSeed(),
       });
 
       this.#flushOutbox();
@@ -93,8 +99,6 @@ export class MultiplayerClient {
       this.onStatus?.({ state: 'closed' });
       if (this.#shouldReconnect) {
         this.#scheduleReconnect();
-      } else {
-        this.onError?.('Disconnected from server.');
       }
     });
     this.#ws.addEventListener('error', () => {
@@ -109,8 +113,20 @@ export class MultiplayerClient {
     this.#ws?.close();
   }
 
+  leaveRoom() {
+    this.#shouldReconnect = false;
+    this.#clearReconnectTimer();
+    this.#clearPing();
+    this.send({ type: 'leave', roomId: this.roomId });
+    this.#ws?.close();
+  }
+
   sendAction(type, payload = {}) {
     this.send({ type: 'action', roomId: this.roomId, action: { type, payload } });
+  }
+
+  sendPlacementPreview(preview = {}) {
+    this.send({ type: 'placementPreview', roomId: this.roomId, preview });
   }
 
   send(obj) {
@@ -135,7 +151,13 @@ export class MultiplayerClient {
           }
         }
         this.onPlayers?.(msg.players || []);
-        this.onJoined?.({ playerIndex: this.playerIndex, seed: this.seed, actions: this.actions, players: msg.players || [] });
+        this.onJoined?.({
+          playerIndex: this.playerIndex,
+          seed: this.seed,
+          actions: this.actions,
+          players: msg.players || [],
+          previews: msg.previews || [],
+        });
         return;
       }
       case 'pong': {
@@ -146,9 +168,22 @@ export class MultiplayerClient {
         this.onPlayers?.(msg.players || []);
         return;
       }
+      case 'playerLeft': {
+        this.onPlayers?.(msg.players || []);
+        this.onPlayerLeft?.({
+          playerIndex: msg.playerIndex,
+          name: msg.name || 'Player',
+          players: msg.players || [],
+        });
+        return;
+      }
       case 'action': {
         this.actions.push(msg.action);
         this.onAction?.(msg.action);
+        return;
+      }
+      case 'placementPreview': {
+        this.onPlacementPreview?.(msg.preview);
         return;
       }
       case 'error': {

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "node test/test-runner.js",
+    "test:ws": "node tools/ws-smoke.mjs",
     "start": "http-server &",
     "start-mp": "node server.js",
     "init-bot": "node bot-init.js",

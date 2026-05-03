@@ -17,6 +17,20 @@ King domino is a board game where 2 - 4 players compete to build the best kingdo
 ## How to test
 
 1. Run `npm test`
+2. With the multiplayer server running on port 8081, run `npm run test:ws`
+
+## How to run the multiplayer harness
+
+1. Start the multiplayer server with `PORT=8081 npm run start-mp`
+2. Open `http://127.0.0.1:8081/multiplayer-harness.html`
+3. Use New Room to reset both local browser clients into the same fresh room
+
+## How to play online locally
+
+1. Start the multiplayer server with `PORT=8081 npm run start-mp`
+2. Open `http://127.0.0.1:8081`
+3. Create an online game, copy the invite link, and send that link to the second player
+4. Or paste a room code or invite link into the Join Game field
 
 ## How to contribute
 

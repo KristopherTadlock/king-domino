@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>King Domino Multiplayer Harness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #111318;
+        color: #f3f5f8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(180deg, rgba(24, 28, 36, 0.96), rgba(13, 15, 20, 0.98)),
+          #111318;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100vh;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(20, 23, 30, 0.94);
+      }
+
+      .title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: #aeb7c4;
+        font-size: 12px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .pill strong {
+        margin-left: 4px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      button,
+      a.button {
+        appearance: none;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 7px;
+        min-height: 34px;
+        padding: 7px 10px;
+        color: #f3f6fb;
+        background: rgba(255, 255, 255, 0.08);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      button:hover,
+      a.button:hover {
+        border-color: rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.13);
+      }
+
+      .primary {
+        background: #2f7adf;
+        border-color: rgba(160, 203, 255, 0.55);
+      }
+
+      .primary:hover {
+        background: #3989f5;
+      }
+
+      .boards {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        min-height: 0;
+        padding: 10px;
+      }
+
+      .client {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: #0d1016;
+      }
+
+      .clientHeader {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .clientTitle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .swatch {
+        width: 11px;
+        height: 11px;
+        border-radius: 999px;
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+      }
+
+      .host .swatch {
+        background: #4a9dff;
+      }
+
+      .friend .swatch {
+        background: #57c76b;
+      }
+
+      iframe {
+        width: 100%;
+        height: 100%;
+        min-height: 680px;
+        border: 0;
+        background: #111318;
+      }
+
+      .copyState {
+        color: #98e6aa;
+        font-size: 12px;
+        min-width: 70px;
+      }
+
+      @media (max-width: 900px) {
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .actions {
+          justify-content: flex-start;
+        }
+
+        .boards {
+          grid-template-columns: 1fr;
+        }
+
+        iframe {
+          min-height: 760px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="toolbar">
+        <div class="title">
+          <h1>Multiplayer Harness</h1>
+          <div class="meta">
+            <span class="pill">Room <strong id="roomLabel"></strong></span>
+            <span class="pill">Seed <strong id="seedLabel"></strong></span>
+            <span class="pill">Two browser clients, one local server</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="copyInvite" type="button">Copy Invite Link</button>
+          <a id="hostLink" class="button" target="_blank" rel="noreferrer">Open Host</a>
+          <a id="friendLink" class="button" target="_blank" rel="noreferrer">Open Friend</a>
+          <button id="reloadPlayers" type="button">Reload Players</button>
+          <button id="newRoom" class="primary" type="button">New Room</button>
+          <span id="copyState" class="copyState" aria-live="polite"></span>
+        </div>
+      </header>
+
+      <section class="boards" aria-label="Two multiplayer clients">
+        <article class="client host">
+          <div class="clientHeader">
+            <div class="clientTitle"><span class="swatch"></span><span id="hostTitle"></span></div>
+            <span class="pill">playerToken: host</span>
+          </div>
+          <iframe id="hostFrame" title="Host player"></iframe>
+        </article>
+        <article class="client friend">
+          <div class="clientHeader">
+            <div class="clientTitle"><span class="swatch"></span><span id="friendTitle"></span></div>
+            <span class="pill">playerToken: friend</span>
+          </div>
+          <iframe id="friendFrame" title="Friend player"></iframe>
+        </article>
+      </section>
+    </main>
+
+    <script type="module">
+      const params = new URL(location.href).searchParams;
+
+      function randomRoom() {
+        return `dev-${Math.random().toString(36).slice(2, 8)}`;
+      }
+
+      function normalizeRoom(value) {
+        const clean = String(value || '').trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+        return clean || randomRoom();
+      }
+
+      function normalizeName(value, fallback) {
+        const clean = String(value || '').trim().slice(0, 24);
+        return clean || fallback;
+      }
+
+      const state = {
+        room: normalizeRoom(params.get('room')),
+        seed: Number.parseInt(params.get('seed') || '123', 10) || 123,
+        hostName: normalizeName(params.get('hostName'), 'Codex'),
+        friendName: normalizeName(params.get('friendName'), 'Michael'),
+      };
+      let friendLoadTimer = null;
+
+      function syncUrl() {
+        const url = new URL(location.href);
+        url.searchParams.set('room', state.room);
+        url.searchParams.set('seed', String(state.seed));
+        url.searchParams.set('hostName', state.hostName);
+        url.searchParams.set('friendName', state.friendName);
+        history.replaceState(null, '', url);
+      }
+
+      function gameUrl(name, token, extra = {}) {
+        const url = new URL('/', location.href);
+        url.searchParams.set('room', state.room);
+        url.searchParams.set('seed', String(state.seed));
+        url.searchParams.set('name', name);
+        url.searchParams.set('playerToken', token);
+        url.searchParams.set('v', 'mp-harness');
+        for (const [key, value] of Object.entries(extra)) {
+          if (value != null) url.searchParams.set(key, String(value));
+        }
+        return url.toString();
+      }
+
+      function inviteUrl() {
+        const url = new URL('/', location.href);
+        url.searchParams.set('room', state.room);
+        url.searchParams.set('seed', String(state.seed));
+        return url.toString();
+      }
+
+      function render() {
+        syncUrl();
+        const hostToken = `harness-host-${state.room}`;
+        const friendToken = `harness-friend-${state.room}`;
+        const hostUrl = gameUrl(state.hostName, hostToken);
+        const friendUrl = gameUrl(state.friendName, friendToken);
+
+        document.getElementById('roomLabel').textContent = state.room;
+        document.getElementById('seedLabel').textContent = String(state.seed);
+        document.getElementById('hostTitle').textContent = `${state.hostName} / host`;
+        document.getElementById('friendTitle').textContent = `${state.friendName} / friend`;
+        document.getElementById('hostLink').href = hostUrl;
+        document.getElementById('friendLink').href = friendUrl;
+        const hostFrame = document.getElementById('hostFrame');
+        const friendFrame = document.getElementById('friendFrame');
+        if (friendLoadTimer) clearTimeout(friendLoadTimer);
+        friendFrame.src = 'about:blank';
+        hostFrame.src = hostUrl;
+        friendLoadTimer = setTimeout(() => {
+          friendFrame.src = friendUrl;
+        }, 700);
+      }
+
+      document.getElementById('reloadPlayers').addEventListener('click', () => {
+        document.getElementById('hostFrame').contentWindow?.location.reload();
+        document.getElementById('friendFrame').contentWindow?.location.reload();
+      });
+
+      document.getElementById('newRoom').addEventListener('click', () => {
+        state.room = randomRoom();
+        state.seed = Math.floor(Math.random() * 2 ** 32) >>> 0;
+        render();
+      });
+
+      document.getElementById('copyInvite').addEventListener('click', async () => {
+        const output = document.getElementById('copyState');
+        try {
+          await navigator.clipboard.writeText(inviteUrl());
+          output.textContent = 'Copied';
+          setTimeout(() => { output.textContent = ''; }, 1600);
+        } catch {
+          output.textContent = 'Copy failed';
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>

@@ -845,6 +845,7 @@ export class GameLayout extends HTMLElement {
   #btnMore;
   #btnLibrary;
   #btnRestart;
+  #btnEndGame;
   #mobileActions;
   #btnMobileRotate;
   #btnMobileSkip;
@@ -885,6 +886,15 @@ export class GameLayout extends HTMLElement {
   /** @type {{state:string, attempt?:number, delay?:number} | null} */
   #connStatus = null;
 
+  /** @type {string | null} */
+  #roomId = null;
+
+  /** @type {boolean} */
+  #homeMode = false;
+
+  /** @type {HTMLDivElement} */
+  #startOverlay;
+
   /** @type {{type:string,payload:any}[]} */
   #actionHistory = [];
 
@@ -893,6 +903,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {string | null} */
   #autoDraftInFlightKey = null;
+
+  /** @type {string | null} */
+  #lobbyNotice = null;
 
   /** @type {string} */
   #placementHint = '';
@@ -979,6 +992,18 @@ export class GameLayout extends HTMLElement {
   /** @type {boolean} */
   #isApplyingPlacementOption = false;
 
+  /** @type {number} */
+  #placementSelectionSequence = 0;
+
+  /** @type {number} */
+  #latestLocalPlacementSelectionId = 0;
+
+  /** @type {Map<number, {playerIndex:number,dominoNumber:number,orientation:number,x:number,y:number,anchorEnd:symbol,t?:number}>} */
+  #remotePlacementPreviews = new Map();
+
+  /** @type {string} */
+  #lastSentPlacementPreviewKey = '';
+
   /** @type {boolean} */
   #hoverAnchorAuto = false;
 
@@ -1052,7 +1077,7 @@ export class GameLayout extends HTMLElement {
 
   #placementBoardOrigin() {
     const idx = this.#game?.state === GameState.PLACE
-      ? this.#game.currentPlacingPlayerIndex
+      ? this.#placementPlayerIndex()
       : this.#focusedPlayerIndex;
     return this.#boardOriginForPlayer(idx ?? this.#focusedPlayerIndex);
   }
@@ -1062,7 +1087,7 @@ export class GameLayout extends HTMLElement {
     group.add(...objects);
   }
 
-  #frameToBoardSize(boardSize, pad = 2, origin = { x: 0, z: 0 }, animate = false) {
+  #frameToBoardSize(boardSize, pad = 2, origin = { x: 0, z: 0 }, animate = false, minViewSize = null) {
     if (!this.#camera || !this.#controls) return;
     if (!boardSize) return;
 
@@ -1088,7 +1113,7 @@ export class GameLayout extends HTMLElement {
 
     // Fit both X and Z extents for an orthographic camera (size is vertical half-extent).
     const neededVertical = Math.max(spanZ / 2, (spanX / 2) / aspect);
-    this.#viewSize = Math.max(this.#viewSizeForBoardSize(boardSize), neededVertical);
+    this.#viewSize = Math.max(minViewSize ?? this.#viewSizeForBoardSize(boardSize), neededVertical);
 
     this.#controls.target.set(centerX, 0, centerZ);
 
@@ -1242,14 +1267,23 @@ export class GameLayout extends HTMLElement {
 
   connectedCallback() {
     this.#buildDom();
-    this.#libraryOpen = new URL(location.href).searchParams.get('library') === '1';
+    const urlParams = new URL(location.href).searchParams;
+    this.#libraryOpen = urlParams.get('library') === '1';
+    const libraryFocus = Number(urlParams.get('focus'));
+    if (this.#libraryOpen && Number.isInteger(libraryFocus) && this.#dominoLibraryPlacementByNumber(libraryFocus)) {
+      this.#libraryFocusedDominoNumber = libraryFocus;
+    }
     this.#safeInitThree();
     if (this.#threeOk) this.#wireEvents();
     this.#initMultiplayer();
     this.#refreshHud();
     if (this.#threeOk) {
       this.#renderBoard();
-      this.#centerOnFocusedBoard();
+      if (this.#libraryOpen && this.#libraryFocusedDominoNumber != null) {
+        this.#centerOnLibraryDomino(this.#libraryFocusedDominoNumber);
+      } else {
+        this.#centerOnFocusedBoard();
+      }
       this.#ensureSizing();
       this.#tick();
     }
@@ -1973,6 +2007,156 @@ export class GameLayout extends HTMLElement {
         display: flex;
         justify-content: flex-end;
       }
+      .root.isStartMode .topBar,
+      .root.isStartMode .hud,
+      .root.isStartMode .miniMapDock,
+      .root.isStartMode .controlsPrimary,
+      .root.isStartMode .controlsSecondary,
+      .root.isStartMode .controlsTertiary,
+      .root.isStartMode .mobileActions,
+      .root.isStartMode .localPlacementDock,
+      .root.isStartMode .canvasNotice {
+        display: none !important;
+      }
+      .startOverlay {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+        z-index: 20;
+        background: radial-gradient(circle at 50% 34%, rgba(40, 48, 62, 0.24), rgba(10, 12, 16, 0.42));
+        color: #e9eef5;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        pointer-events: auto;
+      }
+      .startOverlay *,
+      .startOverlay *::before,
+      .startOverlay *::after {
+        box-sizing: border-box;
+      }
+      .startOverlay[hidden] { display: none !important; }
+      .startCard {
+        width: min(460px, calc(100vw - 32px));
+        min-width: 0;
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(20,22,28,0.90);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 60px rgba(0,0,0,0.38);
+      }
+      .startKicker {
+        color: rgba(233,238,245,0.66);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .startTitle {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.04;
+        font-weight: 900;
+      }
+      .startCopy {
+        margin: 0;
+        color: rgba(233,238,245,0.78);
+        font-size: 13px;
+        line-height: 1.42;
+      }
+      .startForm {
+        display: grid;
+        gap: 10px;
+      }
+      .startField {
+        display: grid;
+        gap: 5px;
+        min-width: 0;
+      }
+      .startField label {
+        color: rgba(233,238,245,0.72);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .startField input {
+        width: 100%;
+        min-width: 0;
+        min-height: 38px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.08);
+        color: #f3f7fb;
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 14px;
+      }
+      .startField.inviteField input {
+        color: #d8ecff;
+        font-size: 12px;
+      }
+      .startField[hidden] {
+        display: none !important;
+      }
+      .startActions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .startActions.single {
+        grid-template-columns: 1fr;
+      }
+      .startActions button {
+        min-height: 38px;
+        font-weight: 850;
+      }
+      .startPrimary {
+        border-color: rgba(126, 192, 255, 0.72);
+        background: rgba(42, 112, 190, 0.86);
+        color: #eef7ff;
+      }
+      .startPrimary:hover {
+        background: rgba(52, 132, 222, 0.94);
+      }
+      .startSecondary {
+        background: rgba(255,255,255,0.08);
+      }
+      .lobbyPlayers {
+        display: grid;
+        gap: 7px;
+      }
+      .lobbyPlayer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 38px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.06);
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .lobbyPlayer.isEmpty {
+        color: rgba(233,238,245,0.55);
+        border-style: dashed;
+      }
+      .roomCode {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 32px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: rgba(126, 192, 255, 0.14);
+        border: 1px solid rgba(126, 192, 255, 0.30);
+        color: #d8ecff;
+        font-size: 13px;
+        font-weight: 900;
+      }
 
       @media (max-width: 760px) {
         .topBar {
@@ -2278,15 +2462,18 @@ export class GameLayout extends HTMLElement {
     this.#btnMore.textContent = 'More';
     this.#btnMore.className = 'secondaryAction iconAction';
     this.#btnLibrary = document.createElement('button');
-    this.#btnLibrary.textContent = 'Domino Library';
+    this.#btnLibrary.textContent = 'Library';
     this.#btnLibrary.className = 'secondaryAction';
     this.#btnRestart = document.createElement('button');
     this.#btnRestart.textContent = 'Restart';
     this.#btnRestart.className = 'secondaryAction destructiveAction';
+    this.#btnEndGame = document.createElement('button');
+    this.#btnEndGame.textContent = 'End Game';
+    this.#btnEndGame.className = 'secondaryAction destructiveAction';
     this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
-    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnMore);
+    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnLibrary, this.#btnMore);
     this.#tertiaryControlsRow.hidden = true;
-    this.#tertiaryControlsRow.append(this.#btnLibrary, this.#btnUndoRequest, this.#btnRestart);
+    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnRestart, this.#btnEndGame);
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -2302,8 +2489,12 @@ export class GameLayout extends HTMLElement {
     this.#endOverlay.className = 'endOverlay';
     this.#endOverlay.hidden = true;
 
+    this.#startOverlay = document.createElement('div');
+    this.#startOverlay.className = 'startOverlay';
+    this.#startOverlay.hidden = true;
+
     this.#hud.append(this.#hudBody);
-    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#localPlacementDock, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay);
+    this.#root.append(this.#canvasHost, this.#canvasTurn, this.#canvasNotice, this.#mobileActions, this.#localPlacementDock, this.#topBar, this.#hud, this.#miniMapDock, this.#primaryControlsRow, this.#secondaryControlsRow, this.#tertiaryControlsRow, this.#endOverlay, this.#startOverlay);
     this.#shadow.append(style, this.#root);
   }
 
@@ -2311,7 +2502,274 @@ export class GameLayout extends HTMLElement {
     const config = new GameConfiguration(2, false, true);
     this.#game = new WebGameManager(config, seed);
     this.#playerNames = playerNames?.length ? playerNames : ['Player 1', 'Player 2'];
+    this.#remotePlacementPreviews.clear();
+    this.#lastSentPlacementPreviewKey = '';
     this.#game.start(this.#playerNames);
+  }
+
+  #storedPlayerName() {
+    try {
+      return localStorage.getItem('kd.playerName') || '';
+    } catch {
+      return '';
+    }
+  }
+
+  #savePlayerName(name) {
+    const clean = this.#cleanPlayerName(name);
+    try {
+      localStorage.setItem('kd.playerName', clean);
+    } catch {
+      // ignore
+    }
+    return clean;
+  }
+
+  #cleanPlayerName(name, fallback = 'Player') {
+    return String(name || '').trim().slice(0, 24) || fallback;
+  }
+
+  #randomRoomCode() {
+    return Math.random().toString(36).slice(2, 8);
+  }
+
+  #roomCodeFromInput(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw, location.href);
+      const room = parsed.searchParams.get('room');
+      if (room) return room.trim().replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+    } catch {
+      // fall through to plain room code cleanup
+    }
+    return raw.replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+  }
+
+  #seedFromInput(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    try {
+      const parsed = new URL(raw, location.href);
+      const seed = Number.parseInt(parsed.searchParams.get('seed') || '', 10);
+      return Number.isFinite(seed) ? seed >>> 0 : null;
+    } catch {
+      return null;
+    }
+  }
+
+  #roomIsReady() {
+    if (this.#hotseat || this.#homeMode || !this.#roomId) return true;
+    return this.#playerNames.filter(Boolean).length >= 2;
+  }
+
+  #isLobbyWaiting() {
+    return !this.#hotseat
+      && !this.#homeMode
+      && !!this.#roomId
+      && this.#myPlayerIndex != null
+      && !this.#roomIsReady();
+  }
+
+  #canUseOnlineGame() {
+    if (this.#hotseat) return true;
+    if (this.#homeMode || !this.#roomId) return false;
+    return this.#roomIsReady() && this.#myPlayerIndex != null;
+  }
+
+  #inviteUrl() {
+    const url = new URL('/', location.href);
+    if (this.#roomId) url.searchParams.set('room', this.#roomId);
+    if (this.#game?.seed != null) url.searchParams.set('seed', String(this.#game.seed));
+    return url.toString();
+  }
+
+  #enterHomeMode(url = new URL(location.href), preferredName = '') {
+    const name = this.#cleanPlayerName(url.searchParams.get('name') || preferredName || this.#storedPlayerName());
+    this.#mp?.disconnect?.();
+    this.#mp = null;
+    this.#homeMode = true;
+    this.#hotseat = false;
+    this.#roomId = null;
+    this.#myName = name;
+    this.#myPlayerIndex = null;
+    this.#focusedPlayerIndex = 0;
+    this.#connStatus = { state: 'home' };
+    this.#pendingUndoRequest = null;
+    this.#lobbyNotice = null;
+    this.#actionHistory = [];
+    this.#initGame(randomSeed(), [name]);
+  }
+
+  #returnToStartScreen() {
+    const preferredName = this.#myName;
+    if (!this.#hotseat && this.#roomId && typeof this.#mp?.leaveRoom === 'function') {
+      this.#mp.leaveRoom();
+      this.#mp = null;
+    }
+    const url = new URL(location.href);
+    url.search = '';
+    history.replaceState(null, '', url.toString());
+
+    this.#moreOpen = false;
+    this.#libraryOpen = false;
+    this.#libraryFilter = null;
+    this.#libraryFocusedDominoNumber = null;
+    this.#pendingUndoRequest = null;
+    this.#lobbyNotice = null;
+    this.#autoDraftInFlightKey = null;
+    this.#hoverAnchor = null;
+    this.#remotePlacementPreviews.clear();
+    this.#lastSentPlacementPreviewKey = '';
+    this.#enterHomeMode(url, preferredName);
+    this.#refreshHud();
+    this.#renderBoard();
+    this.#centerOnFocusedBoard(true);
+  }
+
+  #updateOnlineUrl(room, name, seed = null, playerToken = null) {
+    const url = new URL(location.href);
+    const version = url.searchParams.get('v');
+    url.search = '';
+    url.searchParams.set('room', room);
+    if (seed != null) url.searchParams.set('seed', String(seed));
+    url.searchParams.set('name', name);
+    if (version) url.searchParams.set('v', version);
+    if (playerToken) url.searchParams.set('playerToken', playerToken);
+    history.replaceState(null, '', url.toString());
+    return url;
+  }
+
+  #connectOnlineRoom(room, name, seed = null) {
+    const cleanRoom = this.#roomCodeFromInput(room);
+    if (!cleanRoom) return false;
+    const cleanName = this.#savePlayerName(name);
+    const proposedSeed = Number.isFinite(seed) ? seed >>> 0 : randomSeed();
+    const explicitPlayerToken = new URL(location.href).searchParams.get('playerToken') || null;
+    this.#updateOnlineUrl(cleanRoom, cleanName, proposedSeed, explicitPlayerToken);
+
+    this.#mp?.disconnect?.();
+    this.#homeMode = false;
+    this.#hotseat = false;
+    this.#roomId = cleanRoom;
+    this.#myName = cleanName;
+    this.#myPlayerIndex = null;
+    this.#focusedPlayerIndex = 0;
+    this.#connStatus = { state: 'connecting' };
+    this.#pendingUndoRequest = null;
+    this.#lobbyNotice = null;
+    this.#actionHistory = [];
+    this.#initGame(proposedSeed, [cleanName]);
+
+    this.#mp = new MultiplayerClient({
+      roomId: cleanRoom,
+      name: cleanName,
+      playerToken: explicitPlayerToken || undefined,
+      proposedSeed,
+      onStatus: (s) => {
+        this.#connStatus = s;
+        this.#refreshHud();
+      },
+      onJoined: ({ playerIndex, seed: joinedSeed, actions, players, previews }) => {
+        this.#myPlayerIndex = playerIndex;
+        this.#focusedPlayerIndex = playerIndex ?? 0;
+        this.#initGame(joinedSeed, players);
+        this.#pendingUndoRequest = null;
+        if (this.#roomIsReady()) this.#lobbyNotice = null;
+        this.#actionHistory = [];
+        for (const a of (actions || [])) {
+          this.#actionHistory.push(a);
+          this.#applyNetworkAction(a);
+        }
+        for (const preview of (previews || [])) {
+          this.#handlePlacementPreview(preview, { render: false });
+        }
+        this.#syncFocusedBoardToPhase();
+        this.#refreshHud();
+        this.#renderBoard();
+        this.#centerOnFocusedBoard();
+        this.#renderGhost();
+        this.#autoResolveForcedDraft();
+      },
+      onPlayers: (players) => {
+        this.#playerNames = players?.length ? players : this.#playerNames;
+        if (this.#roomIsReady()) this.#lobbyNotice = null;
+        this.#refreshHud();
+        this.#ensureMiniMaps();
+        this.#renderMiniMaps();
+      },
+      onAction: (action) => {
+        const previousState = this.#game?.state;
+        this.#actionHistory.push(action);
+        this.#applyNetworkAction(action);
+        const focusChanged = this.#syncFocusedBoardToPhase();
+        const phaseChanged = previousState != null && previousState !== this.#game?.state;
+        this.#refreshHud();
+        this.#renderBoard();
+        this.#renderGhost();
+        if (action.type === 'rotate' || action.type === 'selectPlacementTile' || action.type === 'setPlacementSelection') {
+          this.#sendPlacementPreview();
+        }
+        if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
+          this.#centerOnFocusedBoard(focusChanged || phaseChanged);
+        }
+        this.#autoResolveForcedDraft();
+      },
+      onPlacementPreview: (preview) => {
+        this.#handlePlacementPreview(preview);
+      },
+      onPlayerLeft: ({ playerIndex, name, players }) => {
+        this.#playerNames = players?.length ? players : this.#playerNames;
+        if (playerIndex !== this.#myPlayerIndex) {
+          this.#lobbyNotice = `${name || 'The other player'} left the room.`;
+        }
+        this.#pendingUndoRequest = null;
+        this.#remotePlacementPreviews.delete(playerIndex);
+        this.#refreshHud();
+        this.#renderBoard();
+        this.#renderGhost();
+      },
+      onError: (message) => {
+        this.#flashError(message);
+      },
+    });
+
+    this.#mp.connect();
+    this.#refreshHud();
+    this.#renderBoard();
+    return true;
+  }
+
+  #startHotseatGame(name) {
+    const cleanName = this.#savePlayerName(name);
+    const seed = randomSeed();
+    const url = new URL(location.href);
+    url.search = '';
+    url.searchParams.set('hotseat', '1');
+    url.searchParams.set('seed', String(seed));
+    url.searchParams.set('p1', cleanName);
+    url.searchParams.set('p2', 'Helper');
+    history.replaceState(null, '', url.toString());
+
+    this.#mp?.disconnect?.();
+    this.#homeMode = false;
+    this.#hotseat = true;
+    this.#roomId = null;
+    this.#myName = 'Hotseat';
+    this.#connStatus = { state: 'hotseat' };
+    this.#pendingUndoRequest = null;
+    this.#lobbyNotice = null;
+    this.#actionHistory = [];
+    this.#initGame(seed, [cleanName, 'Helper']);
+    this.#syncHotseatPlayerIndex();
+    this.#mp = {
+      sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
+      disconnect: () => {},
+    };
+    this.#ensureMiniMaps();
+    this.#refreshHud();
+    this.#renderBoard();
+    this.#centerOnFocusedBoard(true);
   }
 
   #initMultiplayer() {
@@ -2327,6 +2785,7 @@ export class GameLayout extends HTMLElement {
       this.#myName = 'Hotseat';
       this.#connStatus = { state: 'hotseat' };
       this.#pendingUndoRequest = null;
+      this.#lobbyNotice = null;
       this.#actionHistory = [];
       this.#initGame(Number.isFinite(seed) ? seed : randomSeed(), playerNames);
       this.#syncHotseatPlayerIndex();
@@ -2340,70 +2799,13 @@ export class GameLayout extends HTMLElement {
 
     let room = url.searchParams.get('room');
     if (!room) {
-      room = Math.random().toString(36).slice(2, 8);
-      url.searchParams.set('room', room);
-      history.replaceState(null, '', url.toString());
+      this.#enterHomeMode(url);
+      return;
     }
 
-    const name = url.searchParams.get('name') || prompt('Your name?', 'Player') || 'Player';
-    this.#myName = name;
-    url.searchParams.set('name', name);
-    history.replaceState(null, '', url.toString());
-
-    this.#mp = new MultiplayerClient({
-      roomId: room,
-      name,
-      playerToken: url.searchParams.get('playerToken') || undefined,
-      onStatus: (s) => {
-        this.#connStatus = s;
-        this.#refreshHud();
-      },
-      onJoined: ({ playerIndex, seed, actions, players }) => {
-        this.#myPlayerIndex = playerIndex;
-        this.#focusedPlayerIndex = playerIndex ?? 0;
-        this.#initGame(seed, players);
-        this.#pendingUndoRequest = null;
-        this.#actionHistory = [];
-        // Replay history
-        for (const a of (actions || [])) {
-          this.#actionHistory.push(a);
-          this.#applyNetworkAction(a);
-        }
-        this.#syncFocusedBoardToPhase();
-        this.#refreshHud();
-        this.#renderBoard();
-        this.#centerOnFocusedBoard();
-        this.#renderGhost();
-        this.#autoResolveForcedDraft();
-      },
-      onPlayers: (players) => {
-        this.#playerNames = players?.length ? players : this.#playerNames;
-        this.#refreshHud();
-        this.#ensureMiniMaps();
-        this.#renderMiniMaps();
-      },
-      onAction: (action) => {
-        const previousState = this.#game?.state;
-        this.#actionHistory.push(action);
-        this.#applyNetworkAction(action);
-        const focusChanged = this.#syncFocusedBoardToPhase();
-        const phaseChanged = previousState != null && previousState !== this.#game?.state;
-        this.#refreshHud();
-        this.#renderBoard();
-        this.#renderGhost();
-        if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
-          this.#centerOnFocusedBoard(focusChanged || phaseChanged);
-        }
-        this.#autoResolveForcedDraft();
-      },
-      onError: (message) => {
-        this.#flashError(message);
-      },
-    });
-
-    // Provisional local state until join response.
-    this.#initGame(randomSeed(), ['Player 1', 'Player 2']);
-    this.#mp.connect();
+    const name = this.#cleanPlayerName(url.searchParams.get('name') || this.#storedPlayerName());
+    const proposedSeed = Number.parseInt(url.searchParams.get('seed') || '', 10);
+    this.#connectOnlineRoom(room, name, Number.isFinite(proposedSeed) ? proposedSeed : null);
   }
 
   #syncHotseatPlayerIndex() {
@@ -2442,22 +2844,26 @@ export class GameLayout extends HTMLElement {
       this.#autoDraftInFlightKey = null;
       return;
     }
+    if (!this.#canUseOnlineGame()) return;
     if (this.#pendingUndoRequest || !this.#isMyTurnToPick()) return;
 
     const available = this.#game.currentDraft
       .map((slot, index) => ({ slot, index }))
       .filter(({ slot }) => slot.player == null);
-    if (available.length !== 1) {
+    const index = this.#game.forcedDraftIndex;
+    if (index == null) {
       this.#autoDraftInFlightKey = null;
       return;
     }
 
-    const index = available[0].index;
     const key = `${this.#game.round}:${this.#game.pickCursor}:${this.#game.currentPickingPlayerIndex}:${index}`;
     if (this.#autoDraftInFlightKey === key) return;
 
     this.#autoDraftInFlightKey = key;
-    this.#setCanvasNotice('Only one draft tile remains. Picking it automatically.', 'info', 1200);
+    const message = available.length === 1
+      ? 'Only one draft tile remains. Picking it automatically.'
+      : 'No draft choice remains. Picking remaining tiles automatically.';
+    this.#setCanvasNotice(message, 'info', 1200);
     this.#mp?.sendAction('pickDraft', { index, auto: true });
   }
 
@@ -2466,6 +2872,7 @@ export class GameLayout extends HTMLElement {
       || type === 'rotate'
       || type === 'skip'
       || type === 'selectPlacementTile'
+      || type === 'setPlacementSelection'
       || type === 'place'
       || type === 'restart';
   }
@@ -2475,24 +2882,52 @@ export class GameLayout extends HTMLElement {
       case 'pickDraft':
         this.#game.pickDraft(action.payload.index);
         return;
-      case 'rotate':
-        this.#game.rotateCurrentDomino();
+      case 'rotate': {
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        if (playerIndex == null) this.#game.rotateCurrentDomino();
+        else this.#game.rotatePlacementDominoForPlayer(playerIndex);
         return;
-      case 'skip':
-        this.#game.skipCurrentPlacement();
+      }
+      case 'skip': {
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        if (playerIndex == null) this.#game.skipCurrentPlacement();
+        else this.#game.skipPlacementForPlayer(playerIndex);
         return;
-      case 'selectPlacementTile':
-        this.#game.selectCurrentPlacementDomino(action.payload.dominoNumber);
+      }
+      case 'selectPlacementTile': {
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        if (playerIndex == null) this.#game.selectCurrentPlacementDomino(action.payload?.dominoNumber);
+        else this.#game.selectPlacementDominoForPlayer(playerIndex, action.payload?.dominoNumber);
         return;
-      case 'place':
+      }
+      case 'setPlacementSelection': {
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        if (playerIndex == null) {
+          this.#game.setCurrentPlacementSelection(
+            action.payload?.dominoNumber,
+            action.payload?.orientation
+          );
+        } else {
+          this.#game.setPlacementSelectionForPlayer(
+            playerIndex,
+            action.payload?.dominoNumber,
+            action.payload?.orientation
+          );
+        }
+        return;
+      }
+      case 'place': {
         // Network-safe payloads use string anchor ends.
         // Default to LEFT for backwards/defensive compatibility.
-        this.#game.tryPlaceCurrentDominoAt(
-          action.payload.x,
-          action.payload.y,
-          action.payload.anchorEnd === 'RIGHT' ? DominoEnd.RIGHT : DominoEnd.LEFT
-        );
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        const anchorEnd = action.payload.anchorEnd === 'RIGHT' ? DominoEnd.RIGHT : DominoEnd.LEFT;
+        if (playerIndex == null) {
+          this.#game.tryPlaceCurrentDominoAt(action.payload.x, action.payload.y, anchorEnd);
+        } else {
+          this.#game.tryPlaceDominoAtForPlayer(playerIndex, action.payload.x, action.payload.y, anchorEnd);
+        }
         return;
+      }
       case 'restart': {
         // Restart uses a new seed to avoid repeating the same shuffle.
         const seed = action.payload.seed ?? randomSeed();
@@ -2631,18 +3066,41 @@ export class GameLayout extends HTMLElement {
 
   #applyNetworkAction(action) {
     if (this.#isGameplayActionType(action.type)) {
-      this.#applyGameplayAction(action);
-      if ((action.type === 'rotate' || action.type === 'selectPlacementTile') && !this.#isApplyingPlacementOption) {
-        this.#repairSelectedPlacementAfterDominoChange();
-      } else if (action.type === 'pickDraft' || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
-        this.#hoverAnchor = null;
-        this.#localPlacementFocus = null;
-        this.#hoverAnchorAuto = false;
+      if (
+        action.type === 'setPlacementSelection'
+        && !this.#hotseat
+        && action.payload?.playerIndex === this.#myPlayerIndex
+        && Number.isInteger(action.payload?.selectionId)
+        && action.payload.selectionId < this.#latestLocalPlacementSelectionId
+      ) {
+        return;
       }
-      return;
-    }
+        this.#applyGameplayAction(action);
+        if ((action.type === 'rotate' || action.type === 'selectPlacementTile') && !this.#isApplyingPlacementOption) {
+          this.#repairSelectedPlacementAfterDominoChange();
+        } else if (action.type === 'pickDraft' || action.type === 'restart') {
+          this.#remotePlacementPreviews.clear();
+          this.#hoverAnchor = null;
+          this.#localPlacementFocus = null;
+          this.#hoverAnchorAuto = false;
+        } else if (action.type === 'place' || action.type === 'skip') {
+          const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+          if (playerIndex == null) this.#remotePlacementPreviews.clear();
+          else this.#remotePlacementPreviews.delete(playerIndex);
+
+          if (this.#hotseat || playerIndex == null || playerIndex === this.#myPlayerIndex) {
+            this.#hoverAnchor = null;
+            this.#localPlacementFocus = null;
+            this.#hoverAnchorAuto = false;
+          }
+        }
+        return;
+      }
 
     switch (action.type) {
+      case 'placementPreview':
+        this.#handlePlacementPreview(action.payload, { render: false });
+        return;
       case 'requestUndo': {
         const requestId = String(action.payload?.requestId || '').trim();
         const requesterIndex = Number.isInteger(action.payload?.requesterIndex)
@@ -2682,22 +3140,132 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #handlePlacementPreview(preview, { render = true } = {}) {
+    const playerIndex = Number(preview?.playerIndex);
+    if (!Number.isInteger(playerIndex) || playerIndex < 0) return;
+    if (playerIndex === this.#myPlayerIndex) return;
+
+    const hasPendingPlacement = (this.#game?.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? []).length > 0;
+    if (
+      preview?.clear
+      || this.#game?.state !== GameState.PLACE
+      || !hasPendingPlacement
+    ) {
+      this.#remotePlacementPreviews.delete(playerIndex);
+      if (render) this.#renderGhost();
+      return;
+    }
+
+    const dominoNumber = Number(preview.dominoNumber);
+    const orientation = Number(preview.orientation);
+    const x = Number(preview.x);
+    const y = Number(preview.y);
+    if (
+      !Number.isInteger(dominoNumber)
+      || ![0, 90, 180, 270].includes(orientation)
+      || !Number.isInteger(x)
+      || !Number.isInteger(y)
+    ) {
+      return;
+    }
+
+    this.#remotePlacementPreviews.set(playerIndex, {
+      playerIndex,
+      dominoNumber,
+      orientation,
+      x,
+      y,
+      anchorEnd: preview.anchorEnd === 'RIGHT' ? DominoEnd.RIGHT : DominoEnd.LEFT,
+      t: Number(preview.t) || Date.now(),
+    });
+    if (render) this.#renderGhost();
+  }
+
+  #sendPlacementPreview(clear = false) {
+    if (this.#hotseat || typeof this.#mp?.sendPlacementPreview !== 'function') return;
+    if (this.#myPlayerIndex == null) return;
+    if (!this.#canUseOnlineGame()) return;
+    if (!this.#isMyTurnToPlace()) return;
+
+    const payload = { playerIndex: this.#myPlayerIndex, clear: Boolean(clear) };
+    if (!clear) {
+      const drafted = this.#currentPlacementDraftedTile();
+      if (!drafted || !this.#hoverAnchor) return this.#sendPlacementPreview(true);
+      payload.dominoNumber = drafted.domino.number;
+      payload.orientation = drafted.domino.orientation;
+      payload.x = this.#hoverAnchor.x;
+      payload.y = this.#hoverAnchor.y;
+      payload.anchorEnd = this.#hoverAnchor.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT';
+    }
+
+    const key = JSON.stringify(payload);
+    if (key === this.#lastSentPlacementPreviewKey) return;
+    this.#lastSentPlacementPreviewKey = key;
+    this.#mp.sendPlacementPreview(payload);
+  }
+
   #isMyTurnToPick() {
+    if (!this.#game) return false;
+    if (!this.#canUseOnlineGame()) return false;
     if (this.#hotseat) return this.#game.state === GameState.DRAFT && this.#game.currentPickingPlayerIndex != null;
     return this.#myPlayerIndex != null && this.#game.state === GameState.DRAFT && this.#myPlayerIndex === this.#game.currentPickingPlayerIndex;
   }
 
   #isMyTurnToPlace() {
+    if (!this.#game) return false;
+    if (!this.#canUseOnlineGame()) return false;
     if (this.#hotseat) return this.#game.state === GameState.PLACE && this.#game.currentPlacingPlayerIndex != null;
-    return this.#myPlayerIndex != null && this.#game.state === GameState.PLACE && this.#myPlayerIndex === this.#game.currentPlacingPlayerIndex;
+    return this.#myPlayerIndex != null
+      && this.#game.state === GameState.PLACE
+      && this.#game.getCurrentPlacingChoicesForPlayer?.(this.#myPlayerIndex).length > 0;
+  }
+
+  #placementPlayerIndex() {
+    if (!this.#game || this.#game.state !== GameState.PLACE) return null;
+    if (this.#hotseat) return this.#game.currentPlacingPlayerIndex;
+    if (
+      this.#myPlayerIndex != null
+      && this.#game.getCurrentPlacingChoicesForPlayer?.(this.#myPlayerIndex).length > 0
+    ) {
+      return this.#myPlayerIndex;
+    }
+    return this.#game.currentPlacingPlayerIndex;
+  }
+
+  #placementActionPayload(payload = {}) {
+    if (this.#hotseat || this.#myPlayerIndex == null) return payload;
+    return { ...payload, playerIndex: this.#myPlayerIndex };
+  }
+
+  #currentPlacementDraftedTile() {
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return null;
+    return this.#game.currentPlacingDraftedTileForPlayer?.(playerIndex) ?? this.#game.currentPlacingDraftedTile;
+  }
+
+  #currentPlacementChoices() {
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return [];
+    return this.#game.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? this.#game.getCurrentPlacingChoices?.() ?? [];
+  }
+
+  #currentPlacementOptions() {
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return [];
+    return this.#game.getCurrentPlacementOptionsForPlayer?.(playerIndex) ?? this.#game.getCurrentPlacementOptions?.() ?? [];
+  }
+
+  #canSkipPlacement() {
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return false;
+    return this.#game.canSkipPlacementForPlayer?.(playerIndex) ?? this.#game.canSkipCurrentPlacement?.() ?? false;
   }
 
   #activePlayerIndex() {
     if (!this.#game?.players?.length) return null;
     if (this.#game.isGameOver) return null;
-    return this.#game.state === GameState.PLACE
-      ? this.#game.currentPlacingPlayerIndex
-      : this.#game.currentPickingPlayerIndex;
+    if (this.#game.state === GameState.PLACE) return this.#placementPlayerIndex();
+    return this.#game.currentPickingPlayerIndex;
   }
 
   #syncFocusedBoardToPhase() {
@@ -2744,7 +3312,7 @@ export class GameLayout extends HTMLElement {
 
   #syncMobileActions() {
     if (!this.#mobileActions || !this.#game) return;
-    const drafted = this.#game.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     const show = false;
     this.#mobileActions.classList.toggle('show', show);
     if (!show) {
@@ -2753,7 +3321,7 @@ export class GameLayout extends HTMLElement {
     }
 
     const canAct = !!drafted && !this.#isGameplayPausedForUndo();
-    const canSkip = canAct && this.#game.canSkipCurrentPlacement();
+    const canSkip = canAct && this.#canSkipPlacement();
     const canUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     this.#btnMobileRotate.disabled = !canAct;
     this.#btnMobileSkip.disabled = !canSkip;
@@ -2950,7 +3518,8 @@ export class GameLayout extends HTMLElement {
     projected
       .sort((a, b) => a.y - b.y || a.x - b.x)
       .forEach((p) => {
-        this.#drawIsoTile(ctx, p.tile, p.x + ox, p.y + oy, tileW, tileH, depth, `preview|${domino.number}|${p.x}|${p.y}`);
+        const endName = p.tile === domino.leftEnd ? 'left' : 'right';
+        this.#drawIsoTile(ctx, p.tile, p.x + ox, p.y + oy, tileW, tileH, depth, this.#tileArtSeedKey(p.tile, `preview|${domino.number}|${endName}`));
       });
   }
 
@@ -3156,7 +3725,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #placementOptionCells(option) {
-    const choice = this.#game.getCurrentPlacingChoices?.()
+    const choice = this.#currentPlacementChoices()
       ?.find((c) => c.domino.number === option.dominoNumber);
     const domino = choice?.domino;
     if (!domino) return [{ x: option.x, y: option.y }];
@@ -3199,7 +3768,7 @@ export class GameLayout extends HTMLElement {
 
     const dense = occupiedCells.size > 18 || options.length > 56;
     if (dense) {
-      const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+      const selectedDominoNumber = this.#currentPlacementDraftedTile()?.domino.number;
       const selectedOptions = options.filter((option) => option.dominoNumber === selectedDominoNumber);
       const denseOptions = selectedOptions.length ? selectedOptions : options;
       const selectedAnchorCells = new Map();
@@ -3467,16 +4036,17 @@ export class GameLayout extends HTMLElement {
     this.#btnRotate.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (this.#isGameplayPausedForUndo()) return;
-      this.#mp?.sendAction('rotate');
+      this.#mp?.sendAction('rotate', this.#placementActionPayload());
     });
     this.#btnSkip.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (this.#isGameplayPausedForUndo()) return;
-      if (!this.#game.canSkipCurrentPlacement()) {
+      if (!this.#canSkipPlacement()) {
         this.#setCanvasNotice('You can only skip when no legal placement exists.', 'error', 1400);
         return;
       }
-      this.#mp?.sendAction('skip');
+      this.#sendPlacementPreview(true);
+      this.#mp?.sendAction('skip', this.#placementActionPayload());
     });
     this.#btnUndoRequest.addEventListener('click', () => {
       this.#requestUndo();
@@ -3485,6 +4055,9 @@ export class GameLayout extends HTMLElement {
       const seed = randomSeed();
       this.#moreOpen = false;
       this.#mp?.sendAction('restart', { seed });
+    });
+    this.#btnEndGame.addEventListener('click', () => {
+      this.#returnToStartScreen();
     });
 
     this.#btnNextValid.addEventListener('click', () => {
@@ -3527,17 +4100,18 @@ export class GameLayout extends HTMLElement {
     this.#btnMobileRotate.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (this.#isGameplayPausedForUndo()) return;
-      this.#mp?.sendAction('rotate');
+      this.#mp?.sendAction('rotate', this.#placementActionPayload());
     });
 
     this.#btnMobileSkip.addEventListener('click', () => {
       if (!this.#isMyTurnToPlace()) return;
       if (this.#isGameplayPausedForUndo()) return;
-      if (!this.#game.canSkipCurrentPlacement()) {
+      if (!this.#canSkipPlacement()) {
         this.#setCanvasNotice('You can only skip when no legal placement exists.', 'error', 1400);
         return;
       }
-      this.#mp?.sendAction('skip');
+      this.#sendPlacementPreview(true);
+      this.#mp?.sendAction('skip', this.#placementActionPayload());
     });
 
     this.#btnMobileUndo.addEventListener('click', () => {
@@ -3610,7 +4184,7 @@ export class GameLayout extends HTMLElement {
     if (e.key.toLowerCase() === 'r') {
       if (!this.#isMyTurnToPlace()) return;
       if (this.#isGameplayPausedForUndo()) return;
-      this.#mp?.sendAction('rotate');
+      this.#mp?.sendAction('rotate', this.#placementActionPayload());
     }
   };
 
@@ -3779,9 +4353,11 @@ export class GameLayout extends HTMLElement {
     }
 
     const gridOptions = this.#placementOptionsForGrid(grid, null, { preserveDomino: true });
-    const feedback = this.#game.getPlacementFeedbackAt(grid.x, grid.y);
+    const playerIndex = this.#placementPlayerIndex();
+    const feedback = this.#game.getPlacementFeedbackAtForPlayer?.(playerIndex, grid.x, grid.y)
+      ?? this.#game.getPlacementFeedbackAt(grid.x, grid.y);
     if (!feedback.ok) {
-      const selectedDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+      const selectedDominoNumber = this.#currentPlacementDraftedTile()?.domino.number;
       const matchedOption = gridOptions.find((option) => option.dominoNumber === selectedDominoNumber)
         ?? gridOptions[0];
       if (matchedOption) {
@@ -3807,6 +4383,7 @@ export class GameLayout extends HTMLElement {
     this.#hoverAnchorAuto = auto;
     this.#placementHint = '';
     this.#setCanvasNotice('');
+    this.#sendPlacementPreview();
     if (render) this.#renderGhost();
     return true;
   }
@@ -3834,13 +4411,14 @@ export class GameLayout extends HTMLElement {
     this.#setCanvasNotice('');
     this.#localPlacementFocus = null;
     this.#syncLocalPlacementDock();
+    this.#sendPlacementPreview(true);
 
-    this.#mp?.sendAction('place', {
+    this.#mp?.sendAction('place', this.#placementActionPayload({
       x,
       y,
       anchorEnd,
       placeId: `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    });
+    }));
   }
 
   #flashError(message) {
@@ -3853,14 +4431,18 @@ export class GameLayout extends HTMLElement {
       this.#libraryFilter = null;
       this.#libraryFocusedDominoNumber = null;
     }
-    this.#moreOpen = this.#libraryOpen ? true : this.#moreOpen;
+    if (this.#libraryOpen) this.#moreOpen = false;
     this.#hoverAnchor = null;
     this.#localPlacementFocus = null;
     this.#hoverAnchorAuto = false;
+    this.#sendPlacementPreview(true);
     this.#setCanvasNotice('');
     const url = new URL(location.href);
     if (this.#libraryOpen) url.searchParams.set('library', '1');
-    else url.searchParams.delete('library');
+    else {
+      url.searchParams.delete('library');
+      url.searchParams.delete('focus');
+    }
     history.replaceState(null, '', url);
     this.#renderBoard();
     if (this.#libraryOpen) this.#centerOnDominoLibrary(true);
@@ -3874,6 +4456,9 @@ export class GameLayout extends HTMLElement {
   #setLibraryFilter(kind) {
     this.#libraryFilter = this.#libraryFilter === kind ? null : kind;
     this.#libraryFocusedDominoNumber = null;
+    const url = new URL(location.href);
+    url.searchParams.delete('focus');
+    history.replaceState(null, '', url);
     this.#renderBoard();
     this.#centerOnDominoLibrary(true);
     this.#refreshHud();
@@ -3946,12 +4531,19 @@ export class GameLayout extends HTMLElement {
     const dominoNumber = this.#libraryDominoAtClient(clientX, clientY);
     if (dominoNumber == null) {
       this.#libraryFocusedDominoNumber = null;
+      const url = new URL(location.href);
+      url.searchParams.delete('focus');
+      history.replaceState(null, '', url);
       this.#centerOnDominoLibrary(true);
       this.#renderBoard();
       return;
     }
 
     this.#libraryFocusedDominoNumber = dominoNumber;
+    const url = new URL(location.href);
+    url.searchParams.set('library', '1');
+    url.searchParams.set('focus', String(dominoNumber));
+    history.replaceState(null, '', url);
     this.#renderBoard();
     this.#centerOnLibraryDomino(dominoNumber, true);
   }
@@ -3974,7 +4566,13 @@ export class GameLayout extends HTMLElement {
   #dominoLibraryStatusByNumber() {
     const result = new Map();
     const remaining = new Set(this.#game?.remainingDominoNumbers ?? []);
-    const activePlacingNumber = this.#game?.currentPlacingDraftedTile?.domino?.number ?? null;
+    const activePlacingNumbers = new Set(
+      this.#game?.state === GameState.PLACE
+        ? (this.#game?.currentDraft ?? [])
+          .filter((slot) => slot.player != null && !slot.placed)
+          .map((slot) => slot.domino.number)
+        : []
+    );
 
     for (const domino of DominoPoolManager.getStartingDominoPool()) {
       result.set(domino.number, remaining.has(domino.number)
@@ -3993,7 +4591,7 @@ export class GameLayout extends HTMLElement {
       const ownerColor = this.#playerColorHex(slot.player);
       if (slot.placed) {
         result.set(number, { kind: 'played-current', label: ownerName, color: ownerColor, playerIndex: slot.player });
-      } else if (this.#game?.state === GameState.PLACE && number === activePlacingNumber) {
+      } else if (this.#game?.state === GameState.PLACE && activePlacingNumbers.has(number)) {
         result.set(number, { kind: 'placing', label: ownerName, color: ownerColor, playerIndex: slot.player });
       } else {
         result.set(number, { kind: 'claimed', label: ownerName, color: ownerColor, playerIndex: slot.player });
@@ -4030,11 +4628,201 @@ export class GameLayout extends HTMLElement {
       .filter((item) => item.count > 0);
   }
 
+  #renderStartOverlay() {
+    const showHome = this.#homeMode;
+    const showLobby = this.#isLobbyWaiting();
+    const show = showHome || showLobby;
+    this.#root?.classList.toggle('isStartMode', show);
+    if (!this.#startOverlay) return show;
+
+    if (!show) {
+      this.#startOverlay.hidden = true;
+      this.#startOverlay.innerHTML = '';
+      return false;
+    }
+
+    this.#startOverlay.hidden = false;
+    this.#startOverlay.innerHTML = '';
+    if (this.#endOverlay) this.#endOverlay.hidden = true;
+    if (this.#canvasTurn) this.#canvasTurn.classList.remove('show');
+    if (this.#mobileActions) this.#mobileActions.classList.remove('show');
+    if (this.#localPlacementDock) this.#localPlacementDock.hidden = true;
+
+    const card = document.createElement('div');
+    card.className = 'startCard';
+
+    const kicker = document.createElement('div');
+    kicker.className = 'startKicker';
+    kicker.textContent = showHome ? 'Table Setup' : 'Online Room';
+
+    const title = document.createElement('h1');
+    title.className = 'startTitle';
+    title.textContent = showHome ? 'King Domino' : 'Waiting for opponent';
+
+    const copy = document.createElement('p');
+    copy.className = 'startCopy';
+
+    if (showHome) {
+      copy.textContent = 'Create a room, join by code, or play locally from the same screen.';
+
+      const form = document.createElement('div');
+      form.className = 'startForm';
+
+      const nameField = document.createElement('div');
+      nameField.className = 'startField';
+      const nameLabel = document.createElement('label');
+      nameLabel.textContent = 'Your name';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.autocomplete = 'name';
+      nameInput.value = this.#myName || this.#storedPlayerName() || 'Player';
+      nameInput.maxLength = 24;
+      nameLabel.htmlFor = 'kd-start-name';
+      nameInput.id = 'kd-start-name';
+      nameField.append(nameLabel, nameInput);
+
+      const roomField = document.createElement('div');
+      roomField.className = 'startField';
+      const roomLabel = document.createElement('label');
+      roomLabel.textContent = 'Room code or invite link';
+      const roomInput = document.createElement('input');
+      roomInput.type = 'text';
+      roomInput.placeholder = 'dev-abc123';
+      roomInput.autocomplete = 'off';
+      roomLabel.htmlFor = 'kd-start-room';
+      roomInput.id = 'kd-start-room';
+      roomField.append(roomLabel, roomInput);
+
+      const actions = document.createElement('div');
+      actions.className = 'startActions';
+      const create = document.createElement('button');
+      create.type = 'button';
+      create.className = 'startPrimary';
+      create.textContent = 'Create Online Game';
+      const join = document.createElement('button');
+      join.type = 'button';
+      join.className = 'startSecondary';
+      join.textContent = 'Join Game';
+      actions.append(create, join);
+
+      const hotseatActions = document.createElement('div');
+      hotseatActions.className = 'startActions single';
+      const hotseat = document.createElement('button');
+      hotseat.type = 'button';
+      hotseat.className = 'startSecondary';
+      hotseat.textContent = 'Play Hotseat';
+      hotseatActions.append(hotseat);
+
+      const joinRoom = () => {
+        const room = this.#roomCodeFromInput(roomInput.value);
+        if (!room) {
+          roomInput.focus();
+          return;
+        }
+        this.#connectOnlineRoom(room, nameInput.value, this.#seedFromInput(roomInput.value));
+      };
+
+      create.addEventListener('click', () => {
+        this.#connectOnlineRoom(this.#randomRoomCode(), nameInput.value);
+      });
+      join.addEventListener('click', joinRoom);
+      roomInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') joinRoom();
+      });
+      nameInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && roomInput.value.trim()) joinRoom();
+      });
+      hotseat.addEventListener('click', () => {
+        this.#startHotseatGame(nameInput.value);
+      });
+
+      form.append(nameField, roomField, actions, hotseatActions);
+      card.append(kicker, title, copy, form);
+      this.#startOverlay.append(card);
+      return true;
+    }
+
+    const roomCode = document.createElement('div');
+    roomCode.className = 'roomCode';
+    roomCode.textContent = this.#roomId ?? '';
+
+    copy.textContent = this.#lobbyNotice
+      ? `${this.#lobbyNotice} Send the invite link again, wait for another player, or end this game.`
+      : 'Send the invite link or room code. The game will unlock when the second player joins.';
+
+    const inviteField = document.createElement('div');
+    inviteField.className = 'startField inviteField';
+    const inviteLabel = document.createElement('label');
+    inviteLabel.textContent = 'Invite link';
+    const inviteInput = document.createElement('input');
+    inviteInput.type = 'text';
+    inviteInput.readOnly = true;
+    inviteInput.value = this.#inviteUrl();
+    inviteLabel.htmlFor = 'kd-invite-link';
+    inviteInput.id = 'kd-invite-link';
+    inviteField.append(inviteLabel, inviteInput);
+    inviteField.hidden = true;
+
+    const players = document.createElement('div');
+    players.className = 'lobbyPlayers';
+    for (let i = 0; i < 2; i++) {
+      const row = document.createElement('div');
+      const name = this.#playerNames[i];
+      row.className = 'lobbyPlayer';
+      row.classList.toggle('isEmpty', !name);
+      const left = document.createElement('span');
+      left.textContent = name || 'Waiting for player';
+      const right = document.createElement('span');
+      right.textContent = i === this.#myPlayerIndex ? 'You' : `Player ${i + 1}`;
+      row.append(left, right);
+      players.append(row);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'startActions';
+    const copyInvite = document.createElement('button');
+    copyInvite.type = 'button';
+    copyInvite.className = 'startPrimary';
+    copyInvite.textContent = 'Copy Link';
+    const leave = document.createElement('button');
+    leave.type = 'button';
+    leave.className = 'startSecondary';
+    leave.textContent = 'End Game';
+    actions.append(copyInvite, leave);
+
+    const resetCopyButton = () => {
+      if (copyInvite.isConnected) copyInvite.textContent = 'Copy Link';
+    };
+
+    copyInvite.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(inviteInput.value);
+        copyInvite.textContent = 'Copied';
+        setTimeout(resetCopyButton, 1400);
+      } catch {
+        inviteField.hidden = false;
+        inviteInput.focus();
+        inviteInput.select();
+        copyInvite.textContent = 'Link Selected';
+        setTimeout(resetCopyButton, 1800);
+      }
+    });
+
+    leave.addEventListener('click', () => {
+      this.#returnToStartScreen();
+    });
+
+    card.append(kicker, title, roomCode, copy, inviteField, players, actions);
+    this.#startOverlay.append(card);
+    return true;
+  }
+
   #refreshHud() {
     const g = this.#game;
     this.#root?.classList.toggle('isLibraryMode', this.#libraryOpen);
     this.#syncHotseatPlayerIndex();
     this.#syncMobilePanelForPhase();
+    if (this.#renderStartOverlay()) return;
     if (this.#libraryOpen) {
       this.#hudTitle.textContent = 'Domino Library';
       this.#hudBody.innerHTML = '';
@@ -4045,13 +4833,14 @@ export class GameLayout extends HTMLElement {
       if (this.#localPlacementDock) this.#localPlacementDock.hidden = true;
       this.#primaryControlsRow.hidden = true;
       this.#secondaryControlsRow.hidden = false;
-      this.#tertiaryControlsRow.hidden = false;
+      this.#tertiaryControlsRow.hidden = true;
       this.#btnRotate.hidden = true;
       this.#btnResetTile.hidden = true;
       this.#btnScores.hidden = true;
       this.#btnSkip.hidden = true;
       this.#btnUndoRequest.hidden = true;
       this.#btnRestart.hidden = true;
+      this.#btnEndGame.hidden = true;
       this.#btnMore.hidden = true;
       this.#btnCenter.hidden = false;
       this.#btnCenter.disabled = false;
@@ -4123,7 +4912,9 @@ export class GameLayout extends HTMLElement {
     }
     if (this.#miniMapDock) this.#miniMapDock.hidden = false;
     this.#btnMore.hidden = false;
-    this.#btnLibrary.textContent = 'Domino Library';
+    this.#btnLibrary.hidden = false;
+    this.#btnLibrary.disabled = false;
+    this.#btnLibrary.textContent = 'Library';
 
     const standings = g.players
       .map((p, i) => ({
@@ -4150,11 +4941,11 @@ export class GameLayout extends HTMLElement {
     if (this.#hud) this.#hud.hidden = g.isGameOver;
     if (this.#endOverlay) this.#endOverlay.hidden = !g.isGameOver;
 
-    const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!g.currentPlacingDraftedTile && !this.#isGameplayPausedForUndo();
-    const placementOptions = canPlaceUi ? this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []) : [];
+    const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!this.#currentPlacementDraftedTile() && !this.#isGameplayPausedForUndo();
+    const placementOptions = canPlaceUi ? this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions()) : [];
     const hasPlacementOptions = placementOptions.length > 0;
     const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
-    const canSkip = canPlaceUi && g.canSkipCurrentPlacement();
+    const canSkip = canPlaceUi && this.#canSkipPlacement();
     const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
     this.#primaryControlsRow.hidden = !canSkip;
     this.#primaryControlsRow.classList.toggle('skipOnly', canSkip);
@@ -4168,6 +4959,7 @@ export class GameLayout extends HTMLElement {
     this.#btnUndoRequest.disabled = !canRequestUndo;
     this.#btnUndoRequest.hidden = !canRequestUndo;
     this.#btnRestart.hidden = false;
+    this.#btnEndGame.hidden = false;
     this.#btnScores.disabled = !canPlaceUi;
     this.#btnScores.hidden = !isPlacementPhase || canSkip;
     this.#btnScores.classList.toggle('active', this.#showPlacementScores);
@@ -4431,15 +5223,16 @@ export class GameLayout extends HTMLElement {
       });
       this.#hudBody.append(list);
     } else {
-      const drafted = g.currentPlacingDraftedTile;
+      const drafted = this.#currentPlacementDraftedTile();
       if (drafted) {
-        const choices = g.getCurrentPlacingChoices();
+        const choices = this.#currentPlacementChoices();
         if (choices.length > 0) {
           const chooser = document.createElement('div');
           chooser.className = 'placementChoices';
-          chooser.style.setProperty('--player-color', this.#playerMiniMapColor(g.currentPlacingPlayerIndex, 0.95));
-          chooser.style.setProperty('--player-color-soft', this.#playerMiniMapColor(g.currentPlacingPlayerIndex, 0.30));
-          chooser.style.setProperty('--player-color-glow', this.#playerMiniMapColor(g.currentPlacingPlayerIndex, 0.24));
+          const placementPlayerIndex = this.#placementPlayerIndex();
+          chooser.style.setProperty('--player-color', this.#playerMiniMapColor(placementPlayerIndex, 0.95));
+          chooser.style.setProperty('--player-color-soft', this.#playerMiniMapColor(placementPlayerIndex, 0.30));
+          chooser.style.setProperty('--player-color-glow', this.#playerMiniMapColor(placementPlayerIndex, 0.24));
 
           const list = document.createElement('div');
           list.className = 'placementChoiceList';
@@ -4465,8 +5258,8 @@ export class GameLayout extends HTMLElement {
             b.addEventListener('click', () => {
               if (!this.#isMyTurnToPlace()) return;
               if (this.#isGameplayPausedForUndo()) return;
-              if (n === this.#game.currentPlacingDraftedTile?.domino.number) return;
-              this.#mp?.sendAction('selectPlacementTile', { dominoNumber: n });
+              if (n === this.#currentPlacementDraftedTile()?.domino.number) return;
+              this.#mp?.sendAction('selectPlacementTile', this.#placementActionPayload({ dominoNumber: n }));
             });
             list.append(b);
           }
@@ -4514,7 +5307,7 @@ export class GameLayout extends HTMLElement {
 
       for (const k of Object.keys(board)) {
         const tile = board[k];
-        const tileSeedKey = `${playerIndex}|${k}|${tile.x},${tile.y}`;
+        const tileSeedKey = this.#tileArtSeedKey(tile, `${playerIndex}|${k}`);
         const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, tileSeedKey, false);
 
         const tileMesh = new THREE.Mesh(
@@ -4642,14 +5435,15 @@ export class GameLayout extends HTMLElement {
       }
 
       for (const [endName, tile] of [['left', left], ['right', right]]) {
-        const seedKey = `library|${domino.number}|${endName}`;
+        const sourceTile = endName === 'left' ? domino.leftEnd : domino.rightEnd;
+        const seedKey = this.#tileArtSeedKey(sourceTile, `library|${domino.number}|${endName}`);
         const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, seedKey, false);
         const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
         if (filtered) {
           tileMesh.material = material.clone();
           tileMesh.material.color = new THREE.Color(0x535861);
-          tileMesh.material.transparent = true;
-          tileMesh.material.opacity = 0.34;
+          tileMesh.material.transparent = false;
+          tileMesh.material.opacity = 1;
         }
         tileMesh.position.set(tile.x, 0.11, tile.y);
         this.#addTileObjects(tileMesh);
@@ -4706,9 +5500,9 @@ export class GameLayout extends HTMLElement {
     const pad = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({
-        color: this.#playerColorHex(playerIndex),
+        color: 0xffffff,
         transparent: true,
-        opacity: focused ? 0.070 : 0.038,
+        opacity: focused ? 0.026 : 0.018,
         depthWrite: false,
         side: THREE.DoubleSide,
       })
@@ -4760,7 +5554,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #variationRand(tile, tag = 'v', seedKey = '') {
-    return mulberry32(hash32(`${tag}|${seedKey}|${tile.x},${tile.y}|${landscapeKey(tile.landscape)}|${tile.crowns || 0}`));
+    return mulberry32(hash32(`${tag}|${this.#tileArtSeedKey(tile, seedKey)}|${landscapeKey(tile.landscape)}|${tile.crowns || 0}`));
   }
 
   #detailSpot(rand, limit = 0.32) {
@@ -4775,6 +5569,22 @@ export class GameLayout extends HTMLElement {
     };
   }
 
+  #spacedDetailSpots(rand, count, limit = 0.32, minDistance = 0.17, avoid = []) {
+    const spots = [];
+    for (let attempt = 0; attempt < count * 26 && spots.length < count; attempt++) {
+      const spot = this.#detailSpot(rand, limit);
+      const clear = spots.every((other) => Math.hypot(spot.dx - other.dx, spot.dz - other.dz) >= minDistance)
+        && avoid.every((other) => Math.hypot(spot.dx - other.dx, spot.dz - other.dz) >= (other.r ?? minDistance));
+      if (clear) spots.push(spot);
+    }
+    while (spots.length < count) spots.push(this.#detailSpot(rand, limit));
+    return spots;
+  }
+
+  #tileArtSeedKey(tile, fallback = '') {
+    return tile?.artSeed || fallback || `${tile?.x ?? 0},${tile?.y ?? 0}`;
+  }
+
   #addCrownStars(x, y, crowns, options = {}) {
     const count = Math.max(0, Math.min(3, crowns || 0));
     if (!count) return;
@@ -4787,42 +5597,71 @@ export class GameLayout extends HTMLElement {
     };
 
     const plaqueMat = new THREE.MeshStandardMaterial({
-      color: 0x2c2430,
-      roughness: 0.52,
-      metalness: 0.18,
-      emissive: 0x231604,
-      emissiveIntensity: ghost ? 0.08 : 0.16,
+      color: 0x181320,
+      roughness: 0.48,
+      metalness: 0.20,
+      emissive: 0x4d2c06,
+      emissiveIntensity: ghost ? 0.08 : 0.22,
       transparent: true,
-      opacity: ghost ? 0.68 : 0.94,
+      opacity: ghost ? 0.70 : 0.98,
+    });
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0xffcf61,
+      transparent: true,
+      opacity: ghost ? 0.12 : 0.24,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const starOutlineMat = new THREE.MeshBasicMaterial({
+      color: 0x130e17,
+      transparent: true,
+      opacity: ghost ? 0.72 : 0.96,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
     const starMat = new THREE.MeshStandardMaterial({
-      color: 0xffd76a,
-      roughness: 0.30,
-      metalness: 0.64,
-      emissive: 0x7a4d08,
-      emissiveIntensity: ghost ? 0.16 : 0.30,
+      color: 0xfff0a6,
+      roughness: 0.26,
+      metalness: 0.66,
+      emissive: 0xffb22c,
+      emissiveIntensity: ghost ? 0.20 : 0.50,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: ghost ? 0.76 : 1,
+      opacity: ghost ? 0.82 : 1,
       polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
     });
 
-    const plaque = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.030, 0.21), plaqueMat);
+    const plaqueWidth = count === 1 ? 0.30 : count === 2 ? 0.43 : 0.55;
+    const plaque = new THREE.Mesh(new THREE.BoxGeometry(plaqueWidth, 0.034, 0.23), plaqueMat);
     plaque.position.set(x + 0.27, ghost ? 0.205 : 0.245, y - 0.30);
     plaque.rotation.y = -0.08;
     add(plaque);
 
-    const starGeometry = createStarShapeGeometry(0.052, 0.023);
-    const offsets = count === 1 ? [0] : count === 2 ? [-0.055, 0.055] : [-0.078, 0, 0.078];
-    for (const offset of offsets) {
+    const starGeometry = createStarShapeGeometry(0.047, 0.021);
+    const outlineGeometry = createStarShapeGeometry(0.060, 0.027);
+    const offsets = count === 1 ? [0] : count === 2 ? [-0.078, 0.078] : [-0.124, 0, 0.124];
+    offsets.forEach((offset, index) => {
+      const layerLift = index * 0.001;
+      const halo = new THREE.Mesh(new THREE.CircleGeometry(0.064, 18), haloMat);
+      halo.position.set(x + 0.27 + offset, (ghost ? 0.221 : 0.263) + layerLift, y - 0.30);
+      halo.rotation.x = -Math.PI / 2;
+      halo.rotation.z = -0.10;
+      add(halo);
+
+      const outline = new THREE.Mesh(outlineGeometry, starOutlineMat);
+      outline.position.set(x + 0.27 + offset, (ghost ? 0.223 : 0.267) + layerLift, y - 0.30);
+      outline.rotation.x = -Math.PI / 2;
+      outline.rotation.z = -0.10;
+      add(outline);
+
       const star = new THREE.Mesh(starGeometry, starMat);
-      star.position.set(x + 0.27 + offset, ghost ? 0.224 : 0.266, y - 0.30);
+      star.position.set(x + 0.27 + offset, (ghost ? 0.226 : 0.272) + layerLift, y - 0.30);
       star.rotation.x = -Math.PI / 2;
       star.rotation.z = -0.10;
       add(star);
-    }
+    });
   }
 
   #addWaterFish(x, y, dx, dz, angle, scale, bodyMat, tailMat) {
@@ -4999,164 +5838,417 @@ export class GameLayout extends HTMLElement {
 
     switch (tile.landscape) {
       case Landscapes.FOREST: {
-        const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4428, roughness: 0.74, metalness: 0.03 });
-        const leafMat = new THREE.MeshStandardMaterial({ color: 0x2c8b4d, roughness: 0.68, metalness: 0.02 });
-        const deepLeafMat = new THREE.MeshStandardMaterial({ color: 0x155a32, roughness: 0.72, metalness: 0.02 });
-        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.34, metalness: 0.42, emissive: 0x7d4a08, emissiveIntensity: 0.28 });
-        addCyl(0.036, 0.052, 0.35, 9, trunkMat, 0, 0.22 + 0.35 / 2, 0);
-        const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.17, 13, 9), leafMat);
-        canopy.scale.set(1.10, 0.82, 1.02);
-        canopy.position.set(0, 0.62, 0);
-        group.add(canopy);
-        for (const [dx, dz, s] of [[-0.10, 0.04, 0.72], [0.11, 0.02, 0.66], [0.02, -0.10, 0.58]]) {
-          const cluster = new THREE.Mesh(new THREE.SphereGeometry(0.13 * s, 11, 8), deepLeafMat);
-          cluster.scale.set(1.12, 0.76, 0.96);
-          cluster.position.set(dx, 0.58 + s * 0.08, dz);
-          group.add(cluster);
+        const logMat = new THREE.MeshStandardMaterial({ color: 0x7a4d2d, roughness: 0.76, metalness: 0.03 });
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x9a6840, roughness: 0.70, metalness: 0.04 });
+        const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x4f2f1f, roughness: 0.82, metalness: 0.02 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x2f5a36, roughness: 0.72, metalness: 0.03 });
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0x236f3d, roughness: 0.70, metalness: 0.02 });
+        const lightMat = new THREE.MeshStandardMaterial({ color: 0xffd76a, roughness: 0.34, metalness: 0.42, emissive: 0x7d4a08, emissiveIntensity: 0.30 });
+
+        addBox(0.24, 0.15, 0.20, cabinMat, 0.00, 0.22 + 0.075, -0.02);
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.12, 4), roofMat);
+        roof.rotation.y = Math.PI / 4;
+        roof.position.set(0.00, 0.44, -0.02);
+        group.add(roof);
+        addBox(0.048, 0.070, 0.012, darkWoodMat, 0.060, 0.265, -0.126);
+        addBox(0.055, 0.045, 0.014, lightMat, -0.060, 0.304, -0.126);
+
+        for (let tier = 0; tier < 3; tier++) {
+          for (const lx of [-0.12, -0.04, 0.04, 0.12]) {
+            const log = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.18, 8), logMat);
+            log.position.set(lx, 0.253 + tier * 0.030, 0.185 + (tier % 2) * 0.020);
+            log.rotation.z = Math.PI / 2;
+            log.rotation.y = -0.08 + rand() * 0.16;
+            group.add(log);
+          }
         }
-        addBox(0.18, 0.026, 0.14, trunkMat, 0.02, 0.46, -0.02);
-        const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.026, 9, 7), lightMat);
-        lantern.position.set(0.11, 0.48, -0.03);
-        group.add(lantern);
+
+        for (const [dx, dz, s] of [[-0.19, -0.13, 0.75], [0.20, 0.08, 0.64]]) {
+          addCyl(0.016 * s, 0.022 * s, 0.18 * s, 7, darkWoodMat, dx, 0.22 + 0.09 * s, dz);
+          const tree = new THREE.Mesh(new THREE.ConeGeometry(0.070 * s, 0.16 * s, 8), leafMat);
+          tree.position.set(dx, 0.22 + 0.19 * s, dz);
+          tree.rotation.y = rand() * Math.PI * 2;
+          group.add(tree);
+        }
+
+        if (crowns >= 2) {
+          addCyl(0.012, 0.014, 0.24, 6, darkWoodMat, 0.20, 0.36, -0.12);
+          const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.10, 0.06), lightMat);
+          flag.position.set(0.245, 0.49, -0.12);
+          flag.rotation.y = -Math.PI / 5;
+          group.add(flag);
+        }
         break;
       }
       case Landscapes.WHEAT: {
         const woodMat = new THREE.MeshStandardMaterial({ color: 0x9a6635, roughness: 0.70, metalness: 0.04 });
+        const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x5f3820, roughness: 0.78, metalness: 0.03 });
         const roofMat = new THREE.MeshStandardMaterial({ color: 0x7d3f22, roughness: 0.64, metalness: 0.08 });
         const grainMat = new THREE.MeshStandardMaterial({ color: 0xf1c452, roughness: 0.70, metalness: 0.04, emissive: 0x3b2104, emissiveIntensity: 0.06 });
+        const baleMat = new THREE.MeshStandardMaterial({ color: 0xdb9e34, roughness: 0.78, metalness: 0.03, emissive: 0x2f1803, emissiveIntensity: 0.06 });
         const paleMat = new THREE.MeshStandardMaterial({ color: 0xffe7a1, roughness: 0.58, metalness: 0.04 });
+        const clothMat = new THREE.MeshStandardMaterial({ color: 0xf6ecd0, roughness: 0.72, metalness: 0.02 });
+
+        const addBale = (px, pz, angle = 0, scale = 1) => {
+          const bale = new THREE.Group();
+          bale.position.set(px, 0.285, pz);
+          bale.rotation.y = angle;
+          const body = new THREE.Mesh(new THREE.BoxGeometry(0.14 * scale, 0.060 * scale, 0.095 * scale), baleMat);
+          bale.add(body);
+          for (const bx of [-0.038, 0.038]) {
+            const band = new THREE.Mesh(new THREE.BoxGeometry(0.010 * scale, 0.066 * scale, 0.104 * scale), darkWoodMat);
+            band.position.set(bx * scale, 0.001, 0);
+            bale.add(band);
+          }
+          group.add(bale);
+        };
+
+        const addSack = (px, pz, angle = 0, scale = 1) => {
+          const sack = new THREE.Mesh(new THREE.SphereGeometry(0.044 * scale, 9, 7), clothMat);
+          sack.scale.set(1.28, 0.58, 0.88);
+          sack.position.set(px, 0.275, pz);
+          sack.rotation.y = angle;
+          group.add(sack);
+        };
+
         if (crowns >= 2) {
+          addBox(0.26, 0.13, 0.20, woodMat, -0.01, 0.22 + 0.065, 0.03);
+          addBox(0.30, 0.020, 0.22, darkWoodMat, -0.01, 0.355, 0.03);
           const tower = addCyl(0.060, 0.085, 0.34, 10, woodMat, 0, 0.22 + 0.17, 0);
           tower.rotation.y = rand() * Math.PI;
           const roof = new THREE.Mesh(new THREE.ConeGeometry(0.105, 0.095, 4), roofMat);
           roof.rotation.y = Math.PI / 4;
           roof.position.set(0, 0.62, 0);
           group.add(roof);
-          const hub = new THREE.Mesh(new THREE.SphereGeometry(0.027, 9, 7), paleMat);
+          const hub = new THREE.Mesh(new THREE.SphereGeometry(0.030, 9, 7), paleMat);
           hub.position.set(0.065, 0.51, -0.072);
           group.add(hub);
-          for (const [sx, sy, rz] of [[0.11, 0.014, 0], [0.014, 0.11, Math.PI / 2]]) {
+          for (const [sx, sy, rz] of [
+            [0.15, 0.016, 0],
+            [0.016, 0.15, Math.PI / 2],
+          ]) {
             const blade = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.010, sy), paleMat);
             blade.position.copy(hub.position);
             blade.rotation.y = -Math.PI / 4;
             blade.rotation.z = rz;
             group.add(blade);
           }
-          addBox(0.17, 0.074, 0.12, grainMat, -0.16, 0.26, 0.09, 0.18);
+          addBox(0.17, 0.035, 0.055, paleMat, 0.105, 0.495, -0.114, -0.42);
+          addBox(0.18, 0.042, 0.060, paleMat, 0.028, 0.585, -0.128, -0.42);
+          addBox(0.17, 0.074, 0.12, grainMat, -0.18, 0.26, 0.11, 0.18);
+          addBale(0.19, 0.15, -0.30, 0.88);
+          addSack(-0.18, -0.13, 0.35, 0.82);
+          addSack(-0.10, -0.16, -0.18, 0.68);
         } else {
-          addBox(0.24, 0.17, 0.20, woodMat, 0, 0.22 + 0.085, 0);
+          addBox(0.25, 0.16, 0.20, woodMat, -0.02, 0.22 + 0.080, -0.02);
           const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.12, 4), roofMat);
           roof.rotation.y = Math.PI / 4;
-          roof.position.set(0, 0.44, 0);
+          roof.position.set(-0.02, 0.425, -0.02);
           group.add(roof);
-          for (const dx of [-0.07, 0.02]) {
-            addBox(0.07, 0.05, 0.10, grainMat, dx, 0.25, -0.16, -0.14 + rand() * 0.28);
+          addBox(0.060, 0.070, 0.014, darkWoodMat, 0.050, 0.275, -0.127);
+          addBox(0.045, 0.040, 0.014, paleMat, -0.088, 0.315, -0.127);
+          for (const dx of [-0.10, -0.02, 0.07]) {
+            addBox(0.065, 0.045, 0.090, grainMat, dx, 0.25, 0.155, -0.14 + rand() * 0.28);
           }
+          addBale(0.16, -0.02, -0.18, 0.82);
+          addSack(-0.18, 0.04, 0.28, 0.75);
         }
         break;
       }
       case Landscapes.WATER: {
-        const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe8eef1, roughness: 0.46, metalness: 0.08 });
+        const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe5ecef, roughness: 0.48, metalness: 0.08 });
         const redMat = new THREE.MeshStandardMaterial({ color: 0xb83b35, roughness: 0.48, metalness: 0.10 });
         const lightMat = new THREE.MeshStandardMaterial({ color: 0xffec9d, roughness: 0.28, metalness: 0.28, emissive: 0xffc846, emissiveIntensity: 0.55 });
+        const sandMat = new THREE.MeshStandardMaterial({ color: 0xd9c986, roughness: 0.78, metalness: 0.02 });
+        const shoreMat = new THREE.MeshStandardMaterial({ color: 0xf3e5a3, roughness: 0.72, metalness: 0.02 });
+        const rockMat = new THREE.MeshStandardMaterial({ color: 0x7d8b90, roughness: 0.74, metalness: 0.04 });
         const dockMat = new THREE.MeshStandardMaterial({ color: 0x7a5637, roughness: 0.78, metalness: 0.03 });
-        addBox(0.34, 0.030, 0.10, dockMat, -0.04, 0.245, 0.15, 0.06);
-        for (const px of [-0.18, 0.06]) addCyl(0.010, 0.012, 0.10, 6, dockMat, px, 0.28, 0.15);
-        addCyl(0.052, 0.074, 0.32, 12, stoneMat, 0.02, 0.22 + 0.16, -0.03);
-        addCyl(0.054, 0.056, 0.035, 12, redMat, 0.02, 0.37, -0.03);
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(0.076, 0.080, 12), redMat);
-        roof.position.set(0.02, 0.60, -0.03);
-        group.add(roof);
-        const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 8), lightMat);
-        beacon.position.set(0.02, 0.53, -0.03);
-        group.add(beacon);
+        const boatMat = new THREE.MeshStandardMaterial({ color: 0x6b3f2b, roughness: 0.72, metalness: 0.04 });
+        const hullTrimMat = new THREE.MeshStandardMaterial({ color: 0xdca956, roughness: 0.56, metalness: 0.08 });
+        const ropeMat = new THREE.MeshStandardMaterial({ color: 0xe4d29c, roughness: 0.74, metalness: 0.02 });
+        const netMat = new THREE.MeshBasicMaterial({ color: 0xdaf7ff, transparent: true, opacity: 0.32, side: THREE.DoubleSide });
+        const variant = Math.floor(rand() * 3);
+
+        const addIsland = (cx, cz, sx = 1, sz = 1) => {
+          const shore = addCyl(0.18, 0.23, 0.028, 10, shoreMat, cx, 0.234, cz);
+          shore.scale.set(sx * 1.12, 1, sz * 0.86);
+          const sand = addCyl(0.13, 0.17, 0.032, 9, sandMat, cx - 0.01, 0.254, cz + 0.002);
+          sand.scale.set(sx * 0.98, 1, sz * 0.74);
+          for (let i = 0; i < 2 + Math.floor(rand() * 2); i++) {
+            const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.026 + rand() * 0.018, 0), rockMat);
+            rock.position.set(cx - 0.11 + rand() * 0.22, 0.282, cz - 0.08 + rand() * 0.16);
+            rock.scale.set(1.0 + rand() * 0.5, 0.42, 0.78 + rand() * 0.4);
+            rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            group.add(rock);
+          }
+        };
+
+        const addPier = (cx, cz, angle = 0) => {
+          const pier = new THREE.Group();
+          pier.position.set(cx, 0, cz);
+          pier.rotation.y = angle;
+          for (let i = 0; i < 4; i++) {
+            const plank = new THREE.Mesh(new THREE.BoxGeometry(0.050, 0.018, 0.17), dockMat);
+            plank.position.set(-0.085 + i * 0.057, 0.251, 0);
+            plank.rotation.y = -0.04 + rand() * 0.08;
+            pier.add(plank);
+          }
+          for (const px of [-0.12, 0.13]) {
+            for (const pz of [-0.070, 0.070]) {
+              const post = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.013, 0.105, 6), dockMat);
+              post.position.set(px, 0.286, pz);
+              pier.add(post);
+            }
+          }
+          group.add(pier);
+        };
+
+        const addFishingBoat = (cx, cz, angle = 0, scale = 1) => {
+          const boat = new THREE.Group();
+          boat.position.set(cx, 0.268, cz);
+          boat.rotation.y = angle;
+          const hull = new THREE.Mesh(new THREE.SphereGeometry(0.070 * scale, 12, 7), boatMat);
+          hull.scale.set(1.72, 0.35, 0.62);
+          hull.position.set(0, 0.014, 0);
+          boat.add(hull);
+          const deck = new THREE.Mesh(new THREE.BoxGeometry(0.12 * scale, 0.018, 0.050 * scale), hullTrimMat);
+          deck.position.set(0.010 * scale, 0.046, 0);
+          boat.add(deck);
+          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.006, 0.115 * scale, 6), ropeMat);
+          mast.position.set(-0.026 * scale, 0.103, 0);
+          boat.add(mast);
+          const rod = new THREE.Mesh(new THREE.BoxGeometry(0.130 * scale, 0.006, 0.006), ropeMat);
+          rod.position.set(0.052 * scale, 0.090, -0.016 * scale);
+          rod.rotation.z = -0.34;
+          boat.add(rod);
+          const net = new THREE.Mesh(new THREE.CircleGeometry(0.046 * scale, 12), netMat);
+          net.rotation.x = -Math.PI / 2;
+          net.position.set(-0.104 * scale, 0.015, 0.050 * scale);
+          boat.add(net);
+          group.add(boat);
+        };
+
+        const addMarkerBuoy = (cx, cz, colorMat = redMat) => {
+          addCyl(0.024, 0.032, 0.070, 8, colorMat, cx, 0.290, cz);
+          addCyl(0.010, 0.012, 0.080, 6, ropeMat, cx, 0.352, cz);
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 6), lightMat);
+          cap.position.set(cx, 0.405, cz);
+          group.add(cap);
+        };
+
+        if (variant === 0) {
+          addIsland(0.02, -0.04, 1.05, 0.95);
+          addPier(-0.11, 0.18, 0.10);
+          addCyl(0.052, 0.074, 0.30, 12, stoneMat, 0.02, 0.22 + 0.15, -0.04);
+          addCyl(0.054, 0.056, 0.035, 12, redMat, 0.02, 0.37, -0.04);
+          const roof = new THREE.Mesh(new THREE.ConeGeometry(0.076, 0.080, 12), redMat);
+          roof.position.set(0.02, 0.60, -0.04);
+          group.add(roof);
+          const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 8), lightMat);
+          beacon.position.set(0.02, 0.53, -0.04);
+          group.add(beacon);
+        } else if (variant === 1) {
+          addIsland(-0.17, 0.11, 0.78, 0.56);
+          addPier(-0.05, 0.11, -0.08);
+          addFishingBoat(0.12, -0.09, -0.48 + rand() * 0.42, 1.08);
+          addMarkerBuoy(-0.23, -0.12, redMat);
+        } else {
+          addFishingBoat(-0.05, 0.02, 0.30 + rand() * 0.55, 1.00);
+          addMarkerBuoy(0.18, -0.15, redMat);
+          addMarkerBuoy(-0.19, 0.17, hullTrimMat);
+          const net = new THREE.Mesh(new THREE.CircleGeometry(0.080, 14), netMat);
+          net.rotation.x = -Math.PI / 2;
+          net.position.set(0.12, 0.246, 0.11);
+          group.add(net);
+        }
         break;
       }
       case Landscapes.PASTURE: {
         const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b623a, roughness: 0.76, metalness: 0.03 });
+        const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x5a3a24, roughness: 0.82, metalness: 0.02 });
         const roofMat = new THREE.MeshStandardMaterial({ color: 0x5f7940, roughness: 0.68, metalness: 0.04 });
         const woolMat = new THREE.MeshStandardMaterial({ color: 0xfff8df, roughness: 0.82, metalness: 0.01 });
+        const sheepHeadMat = new THREE.MeshStandardMaterial({ color: 0x3f352e, roughness: 0.78, metalness: 0.02 });
         const trimMat = new THREE.MeshStandardMaterial({ color: 0xf4e7b0, roughness: 0.70, metalness: 0.02 });
+        const hayMat = new THREE.MeshStandardMaterial({ color: 0xe2b34d, roughness: 0.76, metalness: 0.03, emissive: 0x2f1a04, emissiveIntensity: 0.05 });
+        const flowerMat = new THREE.MeshStandardMaterial({ color: 0xfff0a6, roughness: 0.58, metalness: 0.02 });
+        const addTinySheep = (dx, dz, s = 1, angle = 0) => {
+          const sheep = new THREE.Group();
+          sheep.position.set(dx, 0, dz);
+          sheep.rotation.y = angle;
+          const body = new THREE.Mesh(new THREE.SphereGeometry(0.044 * s, 10, 7), woolMat);
+          body.scale.set(1.48, 0.72, 0.92);
+          body.position.set(0, 0.285, 0);
+          sheep.add(body);
+          const head = new THREE.Mesh(new THREE.SphereGeometry(0.018 * s, 8, 6), sheepHeadMat);
+          head.position.set(0.056 * s, 0.286, 0.000);
+          sheep.add(head);
+          group.add(sheep);
+        };
+
+        for (const z of [-0.18, 0.18]) {
+          addBox(0.46, 0.022, 0.016, woodMat, 0.00, 0.292, z);
+          addBox(0.46, 0.018, 0.014, woodMat, 0.00, 0.350, z);
+          for (const px of [-0.22, -0.05, 0.13, 0.22]) addCyl(0.009, 0.012, 0.13, 6, darkWoodMat, px, 0.285, z);
+        }
+        for (const xRail of [-0.23, 0.23]) {
+          addBox(0.018, 0.018, 0.30, woodMat, xRail, 0.325, 0.00);
+        }
+
         if (crowns >= 2) {
-          addBox(0.25, 0.15, 0.20, trimMat, -0.02, 0.22 + 0.075, 0.02);
+          addBox(0.25, 0.15, 0.20, trimMat, -0.04, 0.22 + 0.075, -0.01);
           const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.11, 4), roofMat);
           roof.rotation.y = Math.PI / 4;
-          roof.position.set(-0.02, 0.43, 0.02);
+          roof.position.set(-0.04, 0.43, -0.01);
           group.add(roof);
-        }
-        for (const z of [-0.15, 0.18]) {
-          addBox(0.42, 0.025, 0.018, woodMat, 0.00, 0.30, z);
-          for (const px of [-0.20, 0.20]) addCyl(0.010, 0.012, 0.12, 6, woodMat, px, 0.27, z);
-        }
-        const flock = crowns >= 2 ? [[0.18, 0.04, 1.0], [0.06, -0.14, 0.78], [-0.20, 0.12, 0.70]] : [[0.10, 0.02, 0.9], [-0.13, -0.08, 0.68]];
-        for (const [dx, dz, s] of flock) {
-          const sheep = new THREE.Mesh(new THREE.SphereGeometry(0.045 * s, 10, 7), woolMat);
-          sheep.scale.set(1.45, 0.70, 0.92);
-          sheep.position.set(dx, 0.285, dz);
-          group.add(sheep);
+          addBox(0.070, 0.060, 0.014, darkWoodMat, 0.02, 0.272, -0.116);
+          addBox(0.20, 0.045, 0.070, hayMat, 0.14, 0.268, 0.14, -0.20);
+          addTinySheep(0.17, -0.06, 0.90, rand() * Math.PI * 2);
+          addTinySheep(-0.19, 0.11, 0.72, rand() * Math.PI * 2);
+          addTinySheep(0.04, 0.12, 0.66, rand() * Math.PI * 2);
+        } else {
+          addBox(0.21, 0.052, 0.075, hayMat, -0.05, 0.265, 0.13, 0.12);
+          addCyl(0.008, 0.010, 0.24, 6, darkWoodMat, 0.16, 0.35, -0.07);
+          const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 6), flowerMat);
+          lantern.position.set(0.16, 0.48, -0.07);
+          group.add(lantern);
+          addTinySheep(0.09, -0.02, 0.92, rand() * Math.PI * 2);
+          addTinySheep(-0.16, -0.08, 0.68, rand() * Math.PI * 2);
         }
         break;
       }
       case Landscapes.BOG: {
         const plankMat = new THREE.MeshStandardMaterial({ color: 0x6b5332, roughness: 0.84, metalness: 0.03 });
+        const darkPlankMat = new THREE.MeshStandardMaterial({ color: 0x463622, roughness: 0.86, metalness: 0.03 });
         const hutMat = new THREE.MeshStandardMaterial({ color: 0x4e365d, roughness: 0.78, metalness: 0.05, emissive: 0x17091f, emissiveIntensity: 0.10 });
         const roofMat = new THREE.MeshStandardMaterial({ color: 0x8b7c48, roughness: 0.80, metalness: 0.03 });
         const glowMat = new THREE.MeshStandardMaterial({ color: 0xece184, roughness: 0.28, metalness: 0.18, emissive: 0xe6d65a, emissiveIntensity: 0.48 });
-        for (let i = 0; i < 4; i++) {
-          addBox(0.23, 0.018, 0.055, plankMat, -0.20 + i * 0.13, 0.245, 0.16 + (i % 2) * 0.018, 0.22);
+        const mossMat = new THREE.MeshStandardMaterial({ color: 0xa3a064, roughness: 0.80, metalness: 0.02 });
+        const reedMat = new THREE.MeshStandardMaterial({ color: 0x787a3e, roughness: 0.76, metalness: 0.02 });
+        const platform = addBox(0.42, 0.024, 0.28, darkPlankMat, 0.00, 0.255, 0.04, 0.04);
+        platform.scale.set(1, 1, 0.86);
+        for (let i = 0; i < 5; i++) {
+          addBox(0.24, 0.018, 0.045, plankMat, -0.24 + i * 0.12, 0.275, 0.18 + (i % 2) * 0.018, 0.22 + rand() * 0.08);
         }
         if (crowns >= 2) {
           for (const [px, pz] of [[-0.11, -0.11], [0.12, -0.09], [-0.10, 0.10], [0.12, 0.12]]) {
-            addCyl(0.010, 0.014, 0.16, 6, plankMat, px, 0.29, pz);
+            addCyl(0.010, 0.014, 0.19, 6, plankMat, px, 0.315, pz);
           }
-          addBox(0.25, 0.15, 0.22, hutMat, 0.01, 0.39, 0);
+          addBox(0.26, 0.15, 0.22, hutMat, 0.01, 0.40, -0.01);
           const roof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.10, 4), roofMat);
           roof.rotation.y = Math.PI / 4 + 0.14;
-          roof.position.set(0.01, 0.525, 0);
+          roof.scale.set(1.05, 0.86, 0.86);
+          roof.position.set(0.01, 0.535, -0.01);
           group.add(roof);
+          addBox(0.048, 0.060, 0.014, glowMat, -0.055, 0.395, -0.128);
+          addBox(0.060, 0.070, 0.014, darkPlankMat, 0.070, 0.375, -0.128);
         } else {
-          addCyl(0.028, 0.038, 0.16, 7, hutMat, 0.02, 0.31, -0.04);
+          addCyl(0.028, 0.040, 0.18, 7, hutMat, 0.02, 0.335, -0.04);
+          addBox(0.15, 0.025, 0.10, roofMat, 0.02, 0.435, -0.04, 0.28);
+          addBox(0.020, 0.17, 0.020, plankMat, -0.11, 0.335, 0.05, -0.12);
         }
         const lantern = new THREE.Mesh(new THREE.SphereGeometry(crowns >= 2 ? 0.034 : 0.027, 10, 8), glowMat);
-        lantern.position.set(0.17, crowns >= 2 ? 0.43 : 0.36, -0.09);
+        lantern.position.set(0.17, crowns >= 2 ? 0.44 : 0.38, -0.09);
         group.add(lantern);
+        for (const [rx, rz, scale] of [[-0.22, -0.14, 0.86], [0.22, 0.12, 0.72], [0.20, -0.18, 0.62]]) {
+          addCyl(0.005 * scale, 0.008 * scale, 0.14 * scale, 5, reedMat, rx, 0.285 + 0.070 * scale, rz);
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.026 * scale, 8, 5), mossMat);
+          cap.scale.set(1.42, 0.24, 0.78);
+          cap.position.set(rx + 0.020 * scale, 0.256, rz + 0.016 * scale);
+          cap.rotation.y = rand() * Math.PI * 2;
+          group.add(cap);
+        }
         break;
       }
       case Landscapes.MINE: {
         const timberMat = new THREE.MeshStandardMaterial({ color: 0x704e31, roughness: 0.76, metalness: 0.04 });
+        const railMat = new THREE.MeshStandardMaterial({ color: 0x5f442d, roughness: 0.78, metalness: 0.05 });
         const darkMat = new THREE.MeshStandardMaterial({ color: 0x05080d, roughness: 0.86, metalness: 0.06, emissive: 0x020305, emissiveIntensity: 0.12 });
         const oreMat = new THREE.MeshStandardMaterial({ color: 0xf0bc4a, roughness: 0.34, metalness: 0.45, emissive: 0x6b3d08, emissiveIntensity: 0.22 });
         const crystalMat = new THREE.MeshStandardMaterial({ color: 0x89dbff, roughness: 0.25, metalness: 0.30, emissive: 0x1d526f, emissiveIntensity: crowns >= 3 ? 0.44 : 0.26 });
         const stoneMat = new THREE.MeshStandardMaterial({ color: 0x526272, roughness: 0.70, metalness: 0.16 });
+
+        const addLocalCart = (px, pz, angle = 0, scale = 1) => {
+          const cart = new THREE.Group();
+          cart.position.set(px, 0.260, pz);
+          cart.rotation.y = angle;
+          const body = new THREE.Mesh(new THREE.BoxGeometry(0.13 * scale, 0.060 * scale, 0.095 * scale), stoneMat);
+          body.position.set(0, 0.030 * scale, 0);
+          cart.add(body);
+          const lip = new THREE.Mesh(new THREE.BoxGeometry(0.15 * scale, 0.012 * scale, 0.108 * scale), stoneMat);
+          lip.position.set(0, 0.066 * scale, 0);
+          cart.add(lip);
+          for (const ox of [-0.034, 0.012, 0.044]) {
+            const ore = new THREE.Mesh(new THREE.DodecahedronGeometry(0.017 * scale, 0), oreMat);
+            ore.position.set(ox * scale, 0.086 * scale, -0.010 * scale + rand() * 0.020 * scale);
+            ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            cart.add(ore);
+          }
+          for (const wx of [-0.048, 0.048]) {
+            for (const wz of [-0.052, 0.052]) {
+              const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.017 * scale, 0.017 * scale, 0.010 * scale, 10), darkMat);
+              wheel.position.set(wx * scale, 0.010 * scale, wz * scale);
+              wheel.rotation.x = Math.PI / 2;
+              cart.add(wheel);
+            }
+          }
+          group.add(cart);
+        };
+
+        const addOrePile = (px, pz, amount = 3, mat = oreMat) => {
+          for (let i = 0; i < amount; i++) {
+            const ore = new THREE.Mesh(new THREE.OctahedronGeometry(0.022 + rand() * 0.018, 0), mat);
+            ore.position.set(px + rand() * 0.11 - 0.055, 0.265 + rand() * 0.045, pz + rand() * 0.09 - 0.045);
+            ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+            group.add(ore);
+          }
+        };
+
+        for (const rz of [-0.034, 0.034]) {
+          addBox(0.42, 0.014, 0.012, railMat, 0.02, 0.244, 0.145 + rz, -0.16);
+        }
+        for (const tx of [-0.13, 0.03, 0.19]) {
+          addBox(0.032, 0.010, 0.130, railMat, tx, 0.238, 0.145, -0.16);
+        }
         const entrance = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 8), darkMat);
-        entrance.scale.set(1.25, 0.88, 0.40);
-        entrance.position.set(-0.05, 0.31, -0.10);
+        entrance.scale.set(1.32, 0.88, 0.36);
+        entrance.position.set(-0.05, 0.31, -0.115);
         group.add(entrance);
-        addBox(0.035, 0.24, 0.035, timberMat, -0.18, 0.34, -0.10);
-        addBox(0.035, 0.24, 0.035, timberMat, 0.08, 0.34, -0.10);
-        addBox(0.32, 0.035, 0.040, timberMat, -0.05, 0.46, -0.10);
+        addBox(0.034, 0.25, 0.034, timberMat, -0.18, 0.34, -0.115);
+        addBox(0.034, 0.25, 0.034, timberMat, 0.08, 0.34, -0.115);
+        addBox(0.32, 0.035, 0.040, timberMat, -0.05, 0.46, -0.115);
+        addBox(0.26, 0.030, 0.050, timberMat, -0.05, 0.505, -0.115);
+        addLocalCart(0.15, 0.155, -0.16, 0.86);
+        addOrePile(-0.20, 0.12, crowns >= 2 ? 3 : 2, oreMat);
         if (crowns >= 2) {
-          addBox(0.030, 0.36, 0.030, timberMat, 0.17, 0.40, 0.06, 0.18);
-          addBox(0.030, 0.36, 0.030, timberMat, 0.00, 0.40, 0.18, -0.18);
-          addBox(0.24, 0.026, 0.026, timberMat, 0.08, 0.58, 0.12, 0.58);
-          const pulley = new THREE.Mesh(new THREE.TorusGeometry(0.040, 0.007, 8, 18), stoneMat);
-          pulley.position.set(0.20, 0.57, 0.02);
+          addBox(0.026, 0.34, 0.026, timberMat, 0.18, 0.405, -0.02, 0.18);
+          addBox(0.026, 0.34, 0.026, timberMat, 0.02, 0.405, 0.09, -0.18);
+          addBox(0.22, 0.024, 0.024, timberMat, 0.10, 0.565, 0.035, 0.58);
+          const pulley = new THREE.Mesh(new THREE.TorusGeometry(0.036, 0.007, 8, 18), stoneMat);
+          pulley.position.set(0.21, 0.555, -0.030);
           pulley.rotation.y = Math.PI / 2;
           group.add(pulley);
-        }
-        const oreCount = crowns >= 3 ? 5 : crowns >= 2 ? 3 : 2;
-        for (let i = 0; i < oreCount; i++) {
-          const ore = new THREE.Mesh(new THREE.OctahedronGeometry(0.025 + rand() * 0.022, 0), rand() > 0.42 ? crystalMat : oreMat);
-          ore.position.set(-0.22 + rand() * 0.46, 0.26 + rand() * 0.07, 0.12 + rand() * 0.15);
-          ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-          group.add(ore);
+          const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.18, 6), darkMat);
+          rope.position.set(0.21, 0.470, -0.030);
+          group.add(rope);
+          addBox(0.060, 0.040, 0.070, timberMat, 0.21, 0.350, -0.030, 0.20);
         }
         if (crowns >= 3) {
-          const spire = new THREE.Mesh(new THREE.ConeGeometry(0.070, 0.36, 5), crystalMat);
-          spire.position.set(0.18, 0.22 + 0.18, 0.18);
-          spire.rotation.y = rand() * Math.PI;
-          group.add(spire);
-          addBox(0.18, 0.070, 0.13, stoneMat, -0.19, 0.27, 0.12, -0.22);
+          const cluster = new THREE.Group();
+          cluster.position.set(-0.18, 0.245, 0.18);
+          cluster.rotation.y = -0.18 + rand() * 0.36;
+          for (const [cx, cz, h, r] of [
+            [0, 0, 0.29, 0.052],
+            [0.060, -0.024, 0.21, 0.036],
+            [-0.052, 0.030, 0.18, 0.032],
+          ]) {
+            const spire = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), crystalMat);
+            spire.position.set(cx, h / 2, cz);
+            spire.rotation.y = rand() * Math.PI;
+            cluster.add(spire);
+          }
+          group.add(cluster);
+          addOrePile(-0.04, 0.20, 2, crystalMat);
         }
         break;
       }
@@ -5179,18 +6271,17 @@ export class GameLayout extends HTMLElement {
         const leafMat = new THREE.MeshStandardMaterial({ color: 0x236f3d, roughness: 0.68, metalness: 0.02 });
         const tipMat = new THREE.MeshStandardMaterial({ color: 0x55b56a, roughness: 0.66, metalness: 0.02 });
         const underbrushMat = new THREE.MeshStandardMaterial({ color: 0x164c2c, roughness: 0.78, metalness: 0.02 });
-        const treeCount = 4 + Math.floor(rand() * 4);
-        const trees = [];
-        for (let i = 0; i < treeCount; i++) {
-          const spot = this.#detailSpot(rand, 0.34);
-          trees.push({
+        const crowned = (tile.crowns || 0) > 0;
+        const treeCount = crowned ? 4 + Math.floor(rand() * 2) : 5 + Math.floor(rand() * 3);
+        const landmarkAvoidance = crowned ? [{ dx: -0.12, dz: 0.12, r: 0.25 }] : [];
+        const trees = this.#spacedDetailSpots(rand, treeCount, 0.34, 0.17, landmarkAvoidance)
+          .map((spot) => ({
             dx: spot.dx,
             dz: spot.dz,
             h: 0.13 + rand() * 0.08,
-            cr: 0.06 + rand() * 0.04,
-            ch: 0.12 + rand() * 0.08,
-          });
-        }
+            cr: 0.055 + rand() * 0.035,
+            ch: 0.12 + rand() * 0.07,
+          }));
         for (const t of trees) {
           const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, t.h, 7), trunkMat);
           trunk.position.set(x + t.dx, 0.22 + t.h / 2, y + t.dz);
@@ -5210,7 +6301,7 @@ export class GameLayout extends HTMLElement {
           }
         }
         if (rand() > 0.28) {
-          const spot = this.#detailSpot(rand, 0.28);
+          const spot = this.#spacedDetailSpots(rand, 1, 0.28, 0.16, [...landmarkAvoidance, ...trees.map((tree) => ({ dx: tree.dx, dz: tree.dz, r: 0.12 }))])[0];
           const nurseLog = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.24, 8), trunkMat);
           nurseLog.position.set(x + spot.dx, 0.25, y + spot.dz);
           nurseLog.rotation.z = Math.PI / 2;
@@ -5218,7 +6309,7 @@ export class GameLayout extends HTMLElement {
           this.#addTileObjects(nurseLog);
         }
         for (let i = 0; i < 2; i++) {
-          const spot = this.#detailSpot(rand, 0.34);
+          const spot = this.#spacedDetailSpots(rand, 1, 0.34, 0.12, landmarkAvoidance)[0];
           const brush = new THREE.Mesh(new THREE.SphereGeometry(0.035 + rand() * 0.018, 8, 6), underbrushMat);
           brush.scale.set(1.2 + rand() * 0.5, 0.45, 0.8 + rand() * 0.4);
           brush.position.set(x + spot.dx, 0.24, y + spot.dz);
@@ -5235,6 +6326,15 @@ export class GameLayout extends HTMLElement {
         const twineMat = new THREE.MeshStandardMaterial({ color: 0x7a4d24, roughness: 0.72, metalness: 0.02 });
         const baleMat = new THREE.MeshStandardMaterial({ color: 0xdfaa3d, roughness: 0.74, metalness: 0.03, emissive: 0x321a03, emissiveIntensity: 0.05 });
         const shadowMat = new THREE.MeshStandardMaterial({ color: 0xa76c25, roughness: 0.78, metalness: 0.02, transparent: true, opacity: 0.42 });
+        const scarecrowMat = new THREE.MeshStandardMaterial({ color: 0x8a4f24, roughness: 0.74, metalness: 0.02 });
+        const clothMat = new THREE.MeshStandardMaterial({ color: 0xb84a2f, roughness: 0.72, metalness: 0.02 });
+        const crowned = (tile.crowns || 0) > 0;
+        const avoidZones = crowned
+          ? [
+              { dx: -0.14, dz: 0.13, r: 0.31 },
+              { dx: 0.27, dz: -0.30, r: 0.19 },
+            ]
+          : [];
         const fieldStyle = Math.floor(rand() * 3);
         const rowAngle = -0.38 + rand() * 0.16;
         const rowCos = Math.cos(rowAngle);
@@ -5245,8 +6345,8 @@ export class GameLayout extends HTMLElement {
             ? [-0.28, -0.08, 0.12, 0.28]
             : [-0.25, -0.15, -0.02, 0.11, 0.24];
 
-        for (let i = 0; i < (fieldStyle === 1 ? 2 : 3); i++) {
-          const spot = this.#detailSpot(rand, 0.27);
+        const shadowSpots = this.#spacedDetailSpots(rand, fieldStyle === 1 ? 2 : 3, 0.27, 0.13, avoidZones);
+        for (const spot of shadowSpots) {
           const patch = new THREE.Mesh(new THREE.SphereGeometry(0.055 + rand() * 0.035, 10, 6), shadowMat);
           patch.scale.set(1.8 + rand() * 0.8, 0.08, 0.65 + rand() * 0.35);
           patch.position.set(x + spot.dx, 0.232, y + spot.dz);
@@ -5263,7 +6363,7 @@ export class GameLayout extends HTMLElement {
             const lateral = rowOffset + (-0.035 + rand() * 0.070);
             const dx = along * rowCos - lateral * rowSin;
             const dz = rowZ + along * rowSin + lateral * rowCos;
-            if (dx > 0.13 && dz < -0.13) continue;
+            if (avoidZones.some((zone) => Math.hypot(dx - zone.dx, dz - zone.dz) < zone.r * 0.76)) continue;
 
             const h = 0.12 + rand() * (fieldStyle === 2 ? 0.13 : 0.10);
             const lean = -0.26 + rand() * 0.52;
@@ -5294,7 +6394,7 @@ export class GameLayout extends HTMLElement {
         }
 
         if (rand() > 0.18) {
-          const spot = this.#detailSpot(rand, 0.24);
+          const spot = this.#spacedDetailSpots(rand, 1, 0.25, 0.15, avoidZones)[0];
           const baleStyle = Math.floor(rand() * 3);
           const bale = new THREE.Group();
           bale.position.set(x + spot.dx, 0.275, y + spot.dz);
@@ -5336,6 +6436,26 @@ export class GameLayout extends HTMLElement {
             }
           }
           this.#addTileObjects(bale);
+        }
+
+        if (rand() > (crowned ? 0.64 : 0.48)) {
+          const scareSpot = this.#spacedDetailSpots(rand, 1, 0.28, 0.18, avoidZones)[0];
+          const scarecrow = new THREE.Group();
+          scarecrow.position.set(x + scareSpot.dx, 0, y + scareSpot.dz);
+          scarecrow.rotation.y = rowAngle + 0.20 + rand() * 0.56;
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.011, 0.19, 6), scarecrowMat);
+          post.position.set(0, 0.315, 0);
+          scarecrow.add(post);
+          const arms = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.012, 0.010), scarecrowMat);
+          arms.position.set(0, 0.375, 0);
+          scarecrow.add(arms);
+          const tunic = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.018), clothMat);
+          tunic.position.set(0, 0.345, 0.006);
+          scarecrow.add(tunic);
+          const hat = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.038, 5), darkSeedMat);
+          hat.position.set(0, 0.430, 0);
+          scarecrow.add(hat);
+          this.#addTileObjects(scarecrow);
         }
         break;
       }
@@ -5413,9 +6533,16 @@ export class GameLayout extends HTMLElement {
         const woolMat = new THREE.MeshStandardMaterial({ color: 0xfffbe8, roughness: 0.82, metalness: 0.01 });
         const sheepHeadMat = new THREE.MeshStandardMaterial({ color: 0x3f352e, roughness: 0.78, metalness: 0.02 });
 
+        const crowned = (tile.crowns || 0) > 0;
+        const avoidZones = crowned
+          ? [
+              { dx: -0.14, dz: 0.13, r: 0.30 },
+              { dx: 0.27, dz: -0.30, r: 0.18 },
+            ]
+          : [];
         const tuftCount = 7 + Math.floor(rand() * 5);
-        for (let i = 0; i < tuftCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.34);
+        const tuftSpots = this.#spacedDetailSpots(rand, tuftCount, 0.34, 0.080, avoidZones);
+        for (const { dx, dz } of tuftSpots) {
           const bladeCount = 3 + Math.floor(rand() * 4);
           for (let b = 0; b < bladeCount; b++) {
             const h = 0.045 + rand() * 0.060;
@@ -5462,20 +6589,10 @@ export class GameLayout extends HTMLElement {
           }
         }
 
-        const sheepCount = 2 + Math.floor(rand() * 3);
-        const sheepSpots = [];
-        for (let i = 0; i < sheepCount; i++) {
-          let spot = this.#detailSpot(rand, 0.27);
-          for (let attempt = 0; attempt < 14; attempt++) {
-            const tooClose = sheepSpots.some((other) => {
-              const dx = other.dx - spot.dx;
-              const dz = other.dz - spot.dz;
-              return Math.hypot(dx, dz) < 0.145;
-            });
-            if (!tooClose) break;
-            spot = this.#detailSpot(rand, 0.30);
-          }
-          sheepSpots.push(spot);
+        const sheepCount = crowned ? 1 + Math.floor(rand() * 2) : 3 + Math.floor(rand() * 3);
+        const sheepSpots = this.#spacedDetailSpots(rand, sheepCount, crowned ? 0.31 : 0.30, 0.15, avoidZones);
+        for (let i = 0; i < sheepSpots.length; i++) {
+          const spot = sheepSpots[i];
           const scale = (i === 0 ? 1.02 : 0.78) + rand() * 0.22;
           this.#addPastureSheep(x, y, spot.dx, spot.dz, rand() * Math.PI * 2, scale, sheepMat, woolMat, sheepHeadMat);
         }
@@ -5492,9 +6609,17 @@ export class GameLayout extends HTMLElement {
         const fungusStemMat = new THREE.MeshStandardMaterial({ color: 0xd6caa2, roughness: 0.76, metalness: 0.02 });
         const fungusCapMat = new THREE.MeshStandardMaterial({ color: 0xb889c9, roughness: 0.64, metalness: 0.03, emissive: 0x2a123c, emissiveIntensity: 0.08 });
         const glowMat = new THREE.MeshBasicMaterial({ color: 0xe6df8d, transparent: true, opacity: 0.74 });
+        const plankMat = new THREE.MeshStandardMaterial({ color: 0x6b5332, roughness: 0.84, metalness: 0.03 });
+        const crowned = (tile.crowns || 0) > 0;
+        const avoidZones = crowned
+          ? [
+              { dx: -0.14, dz: 0.13, r: 0.32 },
+              { dx: 0.27, dz: -0.30, r: 0.18 },
+            ]
+          : [];
         const puddleCount = 3 + Math.floor(rand() * 3);
-        for (let i = 0; i < puddleCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.34);
+        const puddleSpots = this.#spacedDetailSpots(rand, puddleCount, 0.34, 0.13, avoidZones);
+        for (const { dx, dz } of puddleSpots) {
           const r = 0.056 + rand() * 0.056;
           const puddle = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 7), rand() > 0.34 ? poolMat : muckMat);
           puddle.scale.set(1.22 + rand() * 0.42, 0.08 + rand() * 0.07, 0.68 + rand() * 0.36);
@@ -5510,9 +6635,22 @@ export class GameLayout extends HTMLElement {
             this.#addTileObjects(moss);
           }
         }
+        if (rand() > 0.38) {
+          const plankSpot = this.#spacedDetailSpots(rand, 1, 0.30, 0.18, avoidZones)[0];
+          const boardwalk = new THREE.Group();
+          boardwalk.position.set(x + plankSpot.dx, 0.254, y + plankSpot.dz);
+          boardwalk.rotation.y = -0.60 + rand() * 1.20;
+          for (let i = 0; i < 3; i++) {
+            const plank = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.014, 0.043), plankMat);
+            plank.position.set(-0.065 + i * 0.065, 0, (i % 2) * 0.014);
+            plank.rotation.y = -0.08 + rand() * 0.16;
+            boardwalk.add(plank);
+          }
+          this.#addTileObjects(boardwalk);
+        }
         const reedCount = 5 + Math.floor(rand() * 5);
-        for (let i = 0; i < reedCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.33);
+        const reedSpots = this.#spacedDetailSpots(rand, reedCount, 0.33, 0.070, avoidZones);
+        for (const { dx, dz } of reedSpots) {
           const h = 0.13 + rand() * 0.12;
           const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, h, 6), reedMat);
           reed.position.set(x + dx, 0.24 + h / 2, y + dz);
@@ -5526,8 +6664,8 @@ export class GameLayout extends HTMLElement {
             this.#addTileObjects(cattail);
           }
         }
-        for (let i = 0; i < 2 + Math.floor(rand() * 2); i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.28);
+        const lilySpots = this.#spacedDetailSpots(rand, 2 + Math.floor(rand() * 2), 0.28, 0.12, avoidZones);
+        for (const { dx, dz } of lilySpots) {
           const pad = new THREE.Mesh(new THREE.SphereGeometry(0.036 + rand() * 0.026, 10, 6), lilyMat);
           pad.scale.set(1.34, 0.10, 0.80);
           pad.position.set(x + dx, 0.246, y + dz);
@@ -5536,8 +6674,8 @@ export class GameLayout extends HTMLElement {
         }
         if (rand() > 0.18) {
           const mushroomCount = 1 + Math.floor(rand() * 3);
-          for (let i = 0; i < mushroomCount; i++) {
-            const { dx, dz } = this.#detailSpot(rand, 0.27);
+          const mushroomSpots = this.#spacedDetailSpots(rand, mushroomCount, 0.27, 0.12, avoidZones);
+          for (const { dx, dz } of mushroomSpots) {
             const h = 0.040 + rand() * 0.032;
             const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.013, h, 7), fungusStemMat);
             stem.position.set(x + dx, 0.235 + h / 2, y + dz);
@@ -5553,8 +6691,8 @@ export class GameLayout extends HTMLElement {
         }
         if (rand() > 0.34) {
           const glowCount = 1 + Math.floor(rand() * 3);
-          for (let i = 0; i < glowCount; i++) {
-            const { dx, dz } = this.#detailSpot(rand, 0.25);
+          const glowSpots = this.#spacedDetailSpots(rand, glowCount, 0.25, 0.10, avoidZones);
+          for (const { dx, dz } of glowSpots) {
             const glow = new THREE.Mesh(new THREE.SphereGeometry(0.012 + rand() * 0.007, 8, 6), glowMat);
             glow.position.set(x + dx, 0.36 + rand() * 0.08, y + dz);
             this.#addTileObjects(glow);
@@ -5577,12 +6715,19 @@ export class GameLayout extends HTMLElement {
           roughness: 0.28,
           metalness: 0.26,
         });
+        const crowned = (tile.crowns || 0) > 0;
+        const avoidZones = crowned
+          ? [
+              { dx: -0.14, dz: 0.13, r: 0.34 },
+              { dx: 0.27, dz: -0.30, r: 0.18 },
+            ]
+          : [];
 
-        const ridgeCount = 3 + Math.floor(rand() * 2);
-        for (let i = 0; i < ridgeCount; i++) {
-          const { dx, dz } = this.#detailSpot(rand, 0.27);
-          const height = 0.18 + rand() * 0.19;
-          const radius = 0.086 + rand() * 0.060;
+        const ridgeCount = crowned ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+        const ridgeSpots = this.#spacedDetailSpots(rand, ridgeCount, crowned ? 0.26 : 0.28, 0.16, avoidZones);
+        for (const { dx, dz } of ridgeSpots) {
+          const height = crowned ? 0.13 + rand() * 0.11 : 0.16 + rand() * 0.16;
+          const radius = crowned ? 0.062 + rand() * 0.040 : 0.074 + rand() * 0.052;
           const sides = rand() > 0.50 ? 4 : 5;
           const ridge = new THREE.Mesh(
             new THREE.ConeGeometry(radius, height, sides),
@@ -5607,23 +6752,25 @@ export class GameLayout extends HTMLElement {
           }
         }
 
-        const caveSpot = this.#detailSpot(rand, 0.21);
-        const cave = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 7), caveMat);
-        cave.scale.set(1.44, 0.18, 0.88);
-        cave.position.set(x + caveSpot.dx, 0.242, y + caveSpot.dz);
-        cave.rotation.y = rand() * Math.PI * 2;
-        this.#addTileObjects(cave);
+        if (!crowned) {
+          const caveSpot = this.#spacedDetailSpots(rand, 1, 0.21, 0.18, avoidZones)[0];
+          const cave = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 7), caveMat);
+          cave.scale.set(1.44, 0.18, 0.88);
+          cave.position.set(x + caveSpot.dx, 0.242, y + caveSpot.dz);
+          cave.rotation.y = rand() * Math.PI * 2;
+          this.#addTileObjects(cave);
+        }
 
-        const rubbleCount = 3 + Math.floor(rand() * 4);
-        for (let i = 0; i < rubbleCount; i++) {
-          const spot = this.#detailSpot(rand, 0.34);
-          const size = 0.026 + rand() * 0.034;
+        const rubbleCount = crowned ? 2 + Math.floor(rand() * 2) : 3 + Math.floor(rand() * 3);
+        const rubbleSpots = this.#spacedDetailSpots(rand, rubbleCount, 0.34, 0.11, avoidZones);
+        for (const spot of rubbleSpots) {
+          const size = crowned ? 0.020 + rand() * 0.026 : 0.024 + rand() * 0.032;
           const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), rand() > 0.52 ? rockMat : darkRockMat);
           rock.position.set(x + spot.dx, 0.238 + size * 0.55, y + spot.dz);
           rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
           this.#addTileObjects(rock);
 
-          if (rand() > 0.70) {
+          if (rand() > (crowned ? 0.82 : 0.68)) {
             const ore = new THREE.Mesh(new THREE.OctahedronGeometry(size * 0.44, 0), rand() > 0.45 ? crystalMat : oreGoldMat);
             ore.position.set(x + spot.dx + rand() * 0.045 - 0.022, 0.275 + size * 0.65, y + spot.dz + rand() * 0.045 - 0.022);
             ore.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
@@ -5631,8 +6778,8 @@ export class GameLayout extends HTMLElement {
           }
         }
 
-        if (rand() > 0.16) {
-          const cartSpot = this.#detailSpot(rand, 0.20);
+        if (!crowned && rand() > 0.16) {
+          const cartSpot = this.#spacedDetailSpots(rand, 1, 0.22, 0.18, avoidZones)[0];
           this.#addMineCart(x, y, cartSpot.dx, cartSpot.dz, -0.45 + rand() * 0.9, railMat, cartMat, darkRockMat, oreGoldMat, rand);
         }
         break;
@@ -5644,94 +6791,158 @@ export class GameLayout extends HTMLElement {
     const growth = this.#castleGrowthState(board, boardManager);
     const tier = growth.tier;
     const playerColor = this.#playerColorHex(playerIndex);
+    const color = new THREE.Color(playerColor);
+    const palePlayerColor = color.clone().lerp(new THREE.Color(0xf4f7ff), 0.62);
+    const deepPlayerColor = color.clone().lerp(new THREE.Color(0x1b2230), 0.30);
 
-    const stone = new THREE.MeshStandardMaterial({
-      color: playerColor,
-      roughness: tier === 0 ? 0.62 : 0.52,
-      metalness: tier >= 2 ? 0.16 : 0.10,
-      emissive: playerColor,
-      emissiveIntensity: growth.perfectKingdom ? 0.24 : 0.12,
+    const baseStone = new THREE.MeshStandardMaterial({
+      color: palePlayerColor,
+      roughness: 0.66,
+      metalness: 0.08,
+      emissive: deepPlayerColor,
+      emissiveIntensity: growth.perfectKingdom ? 0.12 : 0.045,
     });
-    const trim = new THREE.MeshStandardMaterial({
-      color: 0xe9edf5,
+    const wallStone = new THREE.MeshStandardMaterial({
+      color: color.clone().lerp(new THREE.Color(0xdbe2ee), 0.46),
+      roughness: 0.58,
+      metalness: 0.10,
+      emissive: deepPlayerColor,
+      emissiveIntensity: growth.perfectKingdom ? 0.18 : 0.08,
+    });
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: 0xf2efe4,
       roughness: 0.48,
       metalness: 0.12,
+      emissive: deepPlayerColor,
+      emissiveIntensity: 0.04,
+    });
+    const roofMat = new THREE.MeshStandardMaterial({
+      color: playerColor,
+      roughness: 0.40,
+      metalness: 0.18,
       emissive: playerColor,
-      emissiveIntensity: 0.07,
+      emissiveIntensity: growth.perfectKingdom ? 0.18 : 0.09,
+    });
+    const darkMat = new THREE.MeshStandardMaterial({
+      color: 0x202431,
+      roughness: 0.78,
+      metalness: 0.04,
+    });
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xffd66d,
+      roughness: 0.30,
+      metalness: 0.58,
+      emissive: 0x7a4b08,
+      emissiveIntensity: growth.perfectKingdom ? 0.42 : 0.20,
     });
 
-    const keepScale = tier === 0 ? 0.80 : tier === 1 ? 0.95 : tier === 2 ? 1.10 : tier === 3 ? 1.22 : 1.30;
-    const keepHeight = 0.18 + keepScale * 0.20;
-    const keep = new THREE.Mesh(new THREE.BoxGeometry(0.42 * keepScale, keepHeight, 0.42 * keepScale), stone);
-    keep.position.set(x, 0.22 + keepHeight / 2, y);
-    this.#addTileObjects(keep);
+    const addBox = (w, h, d, mat, dx, cy, dz, ry = 0) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x + dx, cy, y + dz);
+      mesh.rotation.y = ry;
+      this.#addTileObjects(mesh);
+      return mesh;
+    };
+    const addCyl = (rt, rb, h, seg, mat, dx, cy, dz) => {
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+      mesh.position.set(x + dx, cy, y + dz);
+      this.#addTileObjects(mesh);
+      return mesh;
+    };
+    const addFlag = (dx, dz, height, side = 1) => {
+      const mastMat = new THREE.MeshStandardMaterial({ color: 0x5d4c3a, roughness: 0.74, metalness: 0.03 });
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.010, 0.26, 7), mastMat);
+      mast.position.set(x + dx, height, y + dz);
+      this.#addTileObjects(mast);
 
-    const towerCount = tier === 0 ? 2 : 4;
-    const towerGeom = new THREE.CylinderGeometry(0.07 + tier * 0.012, 0.08 + tier * 0.012, 0.18 + tier * 0.05, 12);
-    const towerOffsets = [
-      [-0.28, -0.28],
-      [0.28, -0.28],
-      [-0.28, 0.28],
-      [0.28, 0.28],
-    ];
-    for (let i = 0; i < towerCount; i++) {
-      const [dx, dz] = towerOffsets[i];
-      const tower = new THREE.Mesh(towerGeom, stone);
-      tower.position.set(x + dx, 0.25 + (0.18 + tier * 0.05) / 2, y + dz);
-      this.#addTileObjects(tower);
-    }
-
-    if (tier >= 1) {
-      const toothGeom = new THREE.BoxGeometry(0.08, 0.08, 0.08);
-      const teeth = [
-        [-0.16, -0.16], [0.00, -0.16], [0.16, -0.16],
-        [-0.16, 0.16], [0.00, 0.16], [0.16, 0.16],
-        [-0.16, 0.00], [0.16, 0.00],
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.085), roofMat);
+      banner.position.set(x + dx + 0.055 * side, height + 0.075, y + dz);
+      banner.rotation.y = Math.PI * 0.23 * side;
+      this.#addTileObjects(banner);
+    };
+    const addBattlements = (topY, scale) => {
+      const toothGeom = new THREE.BoxGeometry(0.052 * scale, 0.060, 0.052 * scale);
+      const positions = [
+        [-0.19, -0.19], [0.00, -0.19], [0.19, -0.19],
+        [-0.19, 0.19], [0.00, 0.19], [0.19, 0.19],
+        [-0.19, 0.00], [0.19, 0.00],
       ];
-      for (const [dx, dz] of teeth) {
-        const tooth = new THREE.Mesh(toothGeom, trim);
-        tooth.position.set(x + dx * keepScale, 0.44 + keepHeight * 0.35, y + dz * keepScale);
+      for (const [dx, dz] of positions) {
+        const tooth = new THREE.Mesh(toothGeom, trimMat);
+        tooth.position.set(x + dx * scale, topY, y + dz * scale);
         this.#addTileObjects(tooth);
       }
+    };
+
+    addBox(0.82, 0.060, 0.82, baseStone, 0, 0.250, 0);
+    addBox(0.66, 0.025, 0.66, trimMat, 0, 0.294, 0);
+
+    if (tier >= 1) {
+      addBox(0.62, 0.14, 0.070, wallStone, 0, 0.365, -0.32);
+      addBox(0.62, 0.14, 0.070, wallStone, 0, 0.365, 0.32);
+      addBox(0.070, 0.14, 0.62, wallStone, -0.32, 0.365, 0);
+      addBox(0.070, 0.14, 0.62, wallStone, 0.32, 0.365, 0);
+    } else {
+      addBox(0.52, 0.10, 0.060, wallStone, 0, 0.345, -0.28);
+      addBox(0.060, 0.10, 0.52, wallStone, -0.28, 0.345, 0);
+    }
+
+    const keepScale = tier === 0 ? 0.76 : tier === 1 ? 0.88 : tier === 2 ? 0.98 : tier === 3 ? 1.08 : 1.16;
+    const keepHeight = 0.26 + tier * 0.045;
+    addBox(0.34 * keepScale, keepHeight, 0.34 * keepScale, wallStone, 0, 0.30 + keepHeight / 2, 0);
+    addBox(0.12 * keepScale, 0.12, 0.020, darkMat, 0, 0.360, -0.174 * keepScale);
+    addBox(0.13 * keepScale, 0.13, 0.022, darkMat, 0, 0.365, 0.176 * keepScale);
+    addBox(0.022, 0.105, 0.10 * keepScale, darkMat, 0.176 * keepScale, 0.365, 0);
+    addBox(0.050, 0.060, 0.018, trimMat, -0.065 * keepScale, 0.475, -0.176 * keepScale);
+    addBox(0.050, 0.060, 0.018, trimMat, 0.065 * keepScale, 0.475, -0.176 * keepScale);
+    addBox(0.044, 0.052, 0.016, trimMat, -0.060 * keepScale, 0.480, 0.178 * keepScale);
+    addBox(0.044, 0.052, 0.016, trimMat, 0.060 * keepScale, 0.480, 0.178 * keepScale);
+    addBox(0.016, 0.052, 0.044, trimMat, 0.178 * keepScale, 0.480, -0.060 * keepScale);
+    addBox(0.016, 0.052, 0.044, trimMat, 0.178 * keepScale, 0.480, 0.060 * keepScale);
+    addBattlements(0.31 + keepHeight, keepScale);
+
+    const keepRoof = new THREE.Mesh(new THREE.ConeGeometry(0.18 * keepScale, 0.12 + tier * 0.012, 4), roofMat);
+    keepRoof.rotation.y = Math.PI * 0.25;
+    keepRoof.position.set(x, 0.322 + keepHeight + 0.055, y);
+    this.#addTileObjects(keepRoof);
+    const finial = new THREE.Mesh(new THREE.SphereGeometry(0.026, 9, 7), goldMat);
+    finial.position.set(x, 0.390 + keepHeight + 0.12, y);
+    this.#addTileObjects(finial);
+
+    const towerOffsets = tier === 0
+      ? [[-0.27, -0.27], [0.27, 0.27]]
+      : [[-0.30, -0.30], [0.30, -0.30], [-0.30, 0.30], [0.30, 0.30]];
+    const towerHeight = 0.22 + tier * 0.035;
+    for (const [dx, dz] of towerOffsets) {
+      addCyl(0.060 + tier * 0.006, 0.074 + tier * 0.006, towerHeight, 12, wallStone, dx, 0.29 + towerHeight / 2, dz);
+      const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(0.088 + tier * 0.006, tier >= 2 ? 0.115 : 0.086, 12), roofMat);
+      towerRoof.position.set(x + dx, 0.305 + towerHeight + (tier >= 2 ? 0.055 : 0.040), y + dz);
+      this.#addTileObjects(towerRoof);
     }
 
     if (tier >= 2) {
-      const roofMat = new THREE.MeshStandardMaterial({ color: playerColor, roughness: 0.42, metalness: 0.16, emissive: playerColor, emissiveIntensity: 0.08 });
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.20 * keepScale, 0.16, 4), roofMat);
-      roof.rotation.y = Math.PI * 0.25;
-      roof.position.set(x, 0.46 + keepHeight * 0.4, y);
-      this.#addTileObjects(roof);
+      addBox(0.35, 0.018, 0.060, goldMat, 0, 0.575, -0.315);
+    }
+
+    if (tier >= 1 && tier < 3) {
+      addFlag(0.06, 0.06, 0.650, 1);
     }
 
     if (tier >= 3) {
-      const bannerMat = new THREE.MeshStandardMaterial({ color: playerColor, roughness: 0.6, metalness: 0.08, side: THREE.DoubleSide, emissive: playerColor, emissiveIntensity: 0.10 });
-      const mastMat = new THREE.MeshStandardMaterial({ color: 0x5d4c3a, roughness: 0.75, metalness: 0.03 });
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 8), mastMat);
-      mast.position.set(x + 0.06, 0.62, y + 0.06);
-      this.#addTileObjects(mast);
-      const banner = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.09), bannerMat);
-      banner.position.set(x + 0.12, 0.66, y + 0.06);
-      banner.rotation.y = Math.PI * 0.20;
-      this.#addTileObjects(banner);
+      addFlag(0.08, 0.08, 0.675, 1);
+      addFlag(-0.24, -0.24, 0.570, -1);
     }
 
     if (growth.perfectKingdom) {
-      const crownMat = new THREE.MeshStandardMaterial({
-        color: 0xffd66d,
-        roughness: 0.28,
-        metalness: 0.55,
-        emissive: 0x7a4b08,
-        emissiveIntensity: 0.35,
-      });
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.018, 10, 26), crownMat);
-      ring.position.set(x, 0.84, y);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.018, 10, 26), goldMat);
+      ring.position.set(x, 0.86, y);
       ring.rotation.x = Math.PI / 2;
       this.#addTileObjects(ring);
 
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2;
-        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.08, 8), crownMat);
-        tip.position.set(x + Math.cos(a) * 0.18, 0.88, y + Math.sin(a) * 0.18);
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.08, 8), goldMat);
+        tip.position.set(x + Math.cos(a) * 0.18, 0.91, y + Math.sin(a) * 0.18);
         this.#addTileObjects(tip);
       }
     }
@@ -5833,9 +7044,8 @@ export class GameLayout extends HTMLElement {
     }
     if (!this.#controls || !this.#camera) return;
 
-    const activeIdx = this.#game.state === GameState.PLACE
-      ? this.#game.currentPlacingPlayerIndex
-      : this.#game.currentPickingPlayerIndex;
+    const activeIdx = this.#activePlayerIndex();
+    if (activeIdx == null) return;
 
     const bm = this.#game.players[activeIdx].board;
     const bs = bm.boardSize;
@@ -5872,11 +7082,11 @@ export class GameLayout extends HTMLElement {
     }
     const { baseX, baseZ } = placement;
     this.#frameToBoardSize({
-      xMin: baseX - 0.90,
-      xMax: baseX + 1.90,
-      yMin: baseZ - 0.94,
-      yMax: baseZ + 0.94,
-    }, 0.64, { x: 0, z: 0 }, animate);
+      xMin: baseX - 0.28,
+      xMax: baseX + 1.28,
+      yMin: baseZ - 0.54,
+      yMax: baseZ + 0.54,
+    }, 0.34, { x: 0, z: 0 }, animate, 2.55);
   }
 
   #ensureMiniMaps() {
@@ -5916,13 +7126,15 @@ export class GameLayout extends HTMLElement {
   #renderMiniMaps() {
     this.#ensureMiniMaps();
 
-    const activeIdx = this.#game.state === GameState.PLACE
-      ? this.#game.currentPlacingPlayerIndex
-      : this.#game.currentPickingPlayerIndex;
+    const activeIdx = this.#activePlayerIndex();
+    const pendingPlacers = this.#game.state === GameState.PLACE
+      ? new Set(this.#game.players.map((_, idx) => idx)
+        .filter((idx) => (this.#game.getCurrentPlacingChoicesForPlayer?.(idx) ?? []).length > 0))
+      : null;
 
     this.#miniMapCanvases.forEach((canvas, idx) => {
       canvas.classList.toggle('miniActive', idx === this.#focusedPlayerIndex);
-      canvas.parentElement?.classList.toggle('miniTurn', idx === activeIdx);
+      canvas.parentElement?.classList.toggle('miniTurn', pendingPlacers ? pendingPlacers.has(idx) : idx === activeIdx);
       const t = canvas.parentElement?.querySelector('.miniTitle');
       if (t) t.textContent = `${this.#playerNames[idx] ?? this.#game.players[idx].name} · ${this.#game.players[idx].board.score}`;
       this.#drawMiniBoard(canvas, this.#game.players[idx].board, idx);
@@ -6014,7 +7226,7 @@ export class GameLayout extends HTMLElement {
     const g = this.#game;
     if (!g || g.state !== GameState.PLACE) return null;
 
-    const activeIdx = g.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (activeIdx == null) return null;
 
     const playerBoard = g.players[activeIdx]?.board;
@@ -6053,7 +7265,7 @@ export class GameLayout extends HTMLElement {
     let firstVisible = null;
     for (const c of ordered) {
       if (!firstVisible && !board[keyOf(c.x, c.y)]) firstVisible = c;
-      const feedback = g.getPlacementFeedbackAt(c.x, c.y);
+      const feedback = g.getPlacementFeedbackAtForPlayer?.(activeIdx, c.x, c.y) ?? g.getPlacementFeedbackAt(c.x, c.y);
       if (feedback.ok) return c;
     }
 
@@ -6065,7 +7277,7 @@ export class GameLayout extends HTMLElement {
     const g = this.#game;
     if (!g || g.state !== GameState.PLACE) return [];
 
-    const activeIdx = g.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (activeIdx == null) return [];
 
     const playerBoard = g.players[activeIdx]?.board;
@@ -6110,10 +7322,10 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
-    const activeIdx = this.#game?.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const options = this.#uniqueVisiblePlacementOptions(this.#game.getCurrentPlacementOptions?.() ?? []);
+    const options = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions());
     if (!options.length) {
       const suggested = this.#findBestInitialHoverAnchor();
       if (suggested) {
@@ -6147,7 +7359,7 @@ export class GameLayout extends HTMLElement {
 
   #currentPlacementOptionIndex(options) {
     if (!this.#hoverAnchor) return -1;
-    const drafted = this.#game.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     if (!drafted) return -1;
 
     const exactIndex = options.findIndex((option) =>
@@ -6165,7 +7377,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #currentVisiblePlacementOptionKey() {
-    const drafted = this.#game.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     const anchor = this.#hoverAnchor;
     if (!drafted || !anchor) return null;
 
@@ -6183,7 +7395,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #visiblePlacementOptionKey(option) {
-    const choice = this.#game.getCurrentPlacingChoices?.()
+    const choice = this.#currentPlacementChoices()
       ?.find((c) => c.domino.number === option.dominoNumber);
     const domino = choice?.domino;
     if (!domino) {
@@ -6234,7 +7446,7 @@ export class GameLayout extends HTMLElement {
 
   #uniqueVisiblePlacementOptions(options, { preserveDomino = false } = {}) {
     if (!options.length) return [];
-    const currentDominoNumber = this.#game.currentPlacingDraftedTile?.domino.number;
+    const currentDominoNumber = this.#currentPlacementDraftedTile()?.domino.number;
     const byKey = new Map();
     for (const option of options) {
       const visibleKey = this.#visiblePlacementOptionKey(option);
@@ -6244,7 +7456,7 @@ export class GameLayout extends HTMLElement {
         byKey.set(key, option);
       }
     }
-    const playerIndex = this.#game.currentPlacingPlayerIndex;
+    const playerIndex = this.#placementPlayerIndex();
     const boardSize = playerIndex == null ? null : this.#game.players[playerIndex]?.board?.boardSize;
     const centerX = boardSize ? (boardSize.xMin + boardSize.xMax) / 2 : 0;
     const centerY = boardSize ? (boardSize.yMin + boardSize.yMax) / 2 : 0;
@@ -6271,28 +7483,29 @@ export class GameLayout extends HTMLElement {
     this.#hoverAnchorAuto = false;
     this.#placementHint = '';
 
-    this.#isApplyingPlacementOption = true;
-    try {
-      const drafted = this.#game.currentPlacingDraftedTile;
-      if (drafted?.domino.number !== option.dominoNumber) {
-        this.#mp?.sendAction('selectPlacementTile', { dominoNumber: option.dominoNumber });
+    const drafted = this.#currentPlacementDraftedTile();
+    if (
+      drafted?.domino.number !== option.dominoNumber
+      || drafted?.domino.orientation !== option.orientation
+    ) {
+      const payload = this.#placementActionPayload({
+        dominoNumber: option.dominoNumber,
+        orientation: option.orientation,
+      });
+      if (!this.#hotseat) payload.selectionId = ++this.#placementSelectionSequence;
+      if (!this.#hotseat) {
+        this.#latestLocalPlacementSelectionId = payload.selectionId;
+        this.#applyGameplayAction({ type: 'setPlacementSelection', payload });
       }
-
-      const selected = this.#game.currentPlacingDraftedTile;
-      let guard = 0;
-      while (selected && selected.domino.orientation !== option.orientation && guard < 4) {
-        this.#mp?.sendAction('rotate');
-        guard += 1;
-      }
-    } finally {
-      this.#isApplyingPlacementOption = false;
+      this.#mp?.sendAction('setPlacementSelection', payload);
     }
+    this.#sendPlacementPreview();
     this.#syncLocalPlacementDock();
   }
 
   #optionUsesGrid(option, grid) {
     if (!grid) return false;
-    const choice = this.#game.getCurrentPlacingChoices?.()
+    const choice = this.#currentPlacementChoices()
       ?.find((c) => c.domino.number === option.dominoNumber);
     const domino = choice?.domino;
     if (!domino) return option.x === grid.x && option.y === grid.y;
@@ -6325,7 +7538,7 @@ export class GameLayout extends HTMLElement {
     if (!grid) return [];
     const options = allValid
       ? this.#uniqueVisiblePlacementOptions(allValid, { preserveDomino })
-      : this.#uniqueVisiblePlacementOptions(this.#game?.getCurrentPlacementOptions?.() ?? [], { preserveDomino });
+      : this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions(), { preserveDomino });
     return this.#uniqueVisiblePlacementOptions(options.filter((option) => this.#optionUsesGrid(option, grid)), { preserveDomino });
   }
 
@@ -6335,7 +7548,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #placementDockOptions(allValid = null) {
-    const rawOptions = allValid ?? this.#game?.getCurrentPlacementOptions?.() ?? [];
+    const rawOptions = allValid ?? this.#currentPlacementOptions();
     const localValid = this.#localPlacementOptions(rawOptions);
     return localValid.length ? localValid : this.#uniqueVisiblePlacementOptions(rawOptions);
   }
@@ -6422,17 +7635,18 @@ export class GameLayout extends HTMLElement {
     const g = this.#game;
     if (!g || g.state !== GameState.PLACE) return;
 
-    const drafted = g.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     if (!drafted) return;
 
     if (this.#hoverAnchor && this.#placementFeedbackForAnchor(this.#hoverAnchor).ok) {
       this.#placementHint = '';
       this.#setCanvasNotice('');
+      this.#sendPlacementPreview();
       return;
     }
 
     const previous = this.#hoverAnchor;
-    const valid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? [])
+    const valid = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions())
       .filter((option) =>
         option.dominoNumber === drafted.domino.number
         && option.orientation === drafted.domino.orientation
@@ -6454,6 +7668,7 @@ export class GameLayout extends HTMLElement {
       this.#hoverAnchorAuto = false;
       this.#placementHint = '';
       this.#setCanvasNotice('');
+      this.#sendPlacementPreview();
       this.#syncLocalPlacementDock();
       return;
     }
@@ -6472,6 +7687,7 @@ export class GameLayout extends HTMLElement {
     this.#localPlacementFocus = null;
     this.#placementHint = '';
     this.#setCanvasNotice('');
+    this.#sendPlacementPreview();
   }
 
   #jumpToNextValidAnchor() {
@@ -6482,10 +7698,10 @@ export class GameLayout extends HTMLElement {
     const g = this.#game;
     if (!g || g.state !== GameState.PLACE) return;
 
-    const activeIdx = g.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (activeIdx != null) this.#focusedPlayerIndex = activeIdx;
 
-    const allValid = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []);
+    const allValid = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions());
     if (!allValid.length) {
       this.#setCanvasNotice('No valid placements. Use Skip if available.', 'info', 1300);
       return;
@@ -6512,7 +7728,7 @@ export class GameLayout extends HTMLElement {
     const g = this.#game;
     if (!g || g.state !== GameState.PLACE) return false;
 
-    const activeIdx = g.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (activeIdx == null) return false;
     const board = g.players[activeIdx]?.board?.board;
     if (!board) return false;
@@ -6524,26 +7740,156 @@ export class GameLayout extends HTMLElement {
     return !feedback.ok && feedback.reason === 'Space occupied.';
   }
 
-  #placementFeedbackForAnchor(anchor) {
+  #placementFeedbackForAnchor(anchor, playerIndex = this.#placementPlayerIndex()) {
     if (!anchor) return { ok: false, anchorEnd: DominoEnd.LEFT, reason: 'No placement selected.' };
+    if (playerIndex == null) return { ok: false, anchorEnd: DominoEnd.LEFT, reason: 'No active placing player.' };
     if (anchor.anchorEnd) {
-      const exact = this.#game.explainCurrentPlacementAt(anchor.x, anchor.y, anchor.anchorEnd);
+      const exact = this.#game.explainPlacementAtForPlayer?.(playerIndex, anchor.x, anchor.y, anchor.anchorEnd)
+        ?? this.#game.explainCurrentPlacementAt(anchor.x, anchor.y, anchor.anchorEnd);
       if (exact.ok) return { ok: true, anchorEnd: anchor.anchorEnd, reason: '' };
       return { ...exact, anchorEnd: anchor.anchorEnd };
     }
-    return this.#game.getPlacementFeedbackAt(anchor.x, anchor.y);
+    return this.#game.getPlacementFeedbackAtForPlayer?.(playerIndex, anchor.x, anchor.y)
+      ?? this.#game.getPlacementFeedbackAt(anchor.x, anchor.y);
   }
 
   #initialCurrentTilePlacementOption() {
     const g = this.#game;
-    const drafted = g?.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     if (!g || !drafted) return null;
 
-    const options = this.#uniqueVisiblePlacementOptions(g.getCurrentPlacementOptions?.() ?? []);
+    const options = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions());
     return options.find((option) =>
       option.dominoNumber === drafted.domino.number
       && option.orientation === drafted.domino.orientation
     ) ?? null;
+  }
+
+  #withTemporaryPlacementSelection(playerIndex, dominoNumber, orientation, callback) {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return null;
+    if (playerIndex == null) return null;
+
+    const choices = g.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? g.getCurrentPlacingChoices?.() ?? [];
+    const previousNumber = g.currentPlacingDraftedTileForPlayer?.(playerIndex)?.domino.number
+      ?? g.currentPlacingDraftedTile?.domino.number
+      ?? null;
+    const previousOrientations = choices.map((choice) => ({
+      choice,
+      orientation: choice.domino.orientation,
+    }));
+
+    try {
+      const result = g.setPlacementSelectionForPlayer?.(playerIndex, dominoNumber, orientation)
+        ?? g.setCurrentPlacementSelection(dominoNumber, orientation);
+      if (!result?.ok) return null;
+      const drafted = g.currentPlacingDraftedTileForPlayer?.(playerIndex) ?? g.currentPlacingDraftedTile;
+      return callback(drafted);
+    } finally {
+      if (previousNumber != null) {
+        if (typeof g.selectPlacementDominoForPlayer === 'function') {
+          g.selectPlacementDominoForPlayer(playerIndex, previousNumber);
+        } else {
+          g.selectCurrentPlacementDomino(previousNumber);
+        }
+      }
+      for (const previous of previousOrientations) {
+        let guard = 0;
+        while (previous.choice.domino.orientation !== previous.orientation && guard < 4) {
+          previous.choice.domino.rotate();
+          guard += 1;
+        }
+      }
+    }
+  }
+
+  #renderOpponentPlacementPreview() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return false;
+
+    let rendered = false;
+    for (const [playerIndex, preview] of this.#remotePlacementPreviews) {
+      if (playerIndex === this.#myPlayerIndex) continue;
+      const hasPendingPlacement = (g.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? []).length > 0;
+      if (!hasPendingPlacement) continue;
+      if (this.#renderPlacementPreviewForPlayer(playerIndex, preview)) rendered = true;
+    }
+    return rendered;
+  }
+
+  #renderPlacementPreviewForPlayer(playerIndex, preview) {
+    const g = this.#game;
+    const board = g?.players[playerIndex]?.board?.board;
+    if (!board || !preview) return false;
+
+    return Boolean(this.#withTemporaryPlacementSelection(
+      playerIndex,
+      preview.dominoNumber,
+      preview.orientation,
+      (drafted) => {
+        if (!drafted) return false;
+
+        const anchor = { x: preview.x, y: preview.y, anchorEnd: preview.anchorEnd };
+        const feedback = this.#placementFeedbackForAnchor(anchor, playerIndex);
+        if (!feedback.ok) return false;
+
+        const built = this.#buildProjectedBoard(board, drafted, anchor, feedback.anchorEnd);
+        const other = built.other;
+        const occupied = board[keyOf(anchor.x, anchor.y)] || board[keyOf(other.x, other.y)];
+        const borderColor = occupied ? 0xff6b6b : this.#playerColorHex(playerIndex);
+        const fillColor = this.#playerColorHex(playerIndex);
+        const remoteOrigin = this.#boardOriginForPlayer(playerIndex);
+        const remoteGroup = new THREE.Group();
+        remoteGroup.position.set(
+          remoteOrigin.x - this.#ghostGroup.position.x,
+          0,
+          remoteOrigin.z - this.#ghostGroup.position.z
+        );
+        this.#ghostGroup.add(remoteGroup);
+
+        const makeGhostCell = (x, y, landscape, crowns, endName) => {
+          const material = this.#getTileMaterial(landscape, crowns || 0, `remote|${drafted.domino.number}|${endName}`, true).clone();
+          material.opacity = 0.66;
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(0.98, 0.18, 0.98),
+            material
+          );
+          mesh.position.set(x, 0.10, y);
+          remoteGroup.add(mesh);
+
+          const wash = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.98, 0.98),
+            new THREE.MeshBasicMaterial({
+              color: fillColor,
+              transparent: true,
+              opacity: 0.14,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            })
+          );
+          wash.rotation.x = -Math.PI / 2;
+          wash.position.set(x, 0.202, y);
+          remoteGroup.add(wash);
+
+          const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.01, 0.22, 1.01));
+          const edgeMat = new THREE.LineBasicMaterial({ color: borderColor, transparent: true, opacity: 0.96 });
+          const edge = new THREE.LineSegments(edgeGeo, edgeMat);
+          edge.position.set(x, 0.11, y);
+          remoteGroup.add(edge);
+
+          if ((crowns || 0) > 0) {
+            this.#addCrownStars(x, y, crowns, { target: remoteGroup, ghost: true });
+          }
+        };
+
+        const leftCoord = feedback.anchorEnd === DominoEnd.LEFT ? anchor : other;
+        const rightCoord = feedback.anchorEnd === DominoEnd.RIGHT ? anchor : other;
+
+        makeGhostCell(leftCoord.x, leftCoord.y, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns, 'left');
+        makeGhostCell(rightCoord.x, rightCoord.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns, 'right');
+        return true;
+      }
+    ));
   }
 
   #renderGhost() {
@@ -6552,12 +7898,11 @@ export class GameLayout extends HTMLElement {
     if (this.#libraryOpen) return;
 
     const g = this.#game;
-    const activeIdx = g.currentPlacingPlayerIndex;
+    const activeIdx = this.#placementPlayerIndex();
     if (this.#isMyTurnToPlace() && activeIdx != null && this.#focusedPlayerIndex !== activeIdx) {
       this.#focusedPlayerIndex = activeIdx;
     }
 
-    const focusedBoard = g.players[this.#focusedPlayerIndex]?.board?.board || g.players[0].board.board;
     if (g.isGameOver) {
       this.#renderRegionScoring(null);
       this.#syncLocalPlacementDock();
@@ -6570,16 +7915,20 @@ export class GameLayout extends HTMLElement {
     }
     if (!this.#isMyTurnToPlace()) {
       this.#renderRegionScoring(null);
+      this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
       return;
     }
 
-    const drafted = g.currentPlacingDraftedTile;
+    const drafted = this.#currentPlacementDraftedTile();
     if (!drafted) {
       this.#renderRegionScoring(null);
+      this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
       return;
     }
+
+    const placementBoard = g.players[activeIdx]?.board?.board || g.players[0].board.board;
 
     // On entering placement phase, show the ghost immediately.
     // Prefer a legal/visible anchor so the ghost does not spawn hidden under tiles.
@@ -6591,21 +7940,26 @@ export class GameLayout extends HTMLElement {
       if (suggested) {
         this.#hoverAnchor = suggested;
         this.#hoverAnchorAuto = true;
+        this.#sendPlacementPreview();
       }
     }
 
-    this.#renderValidAnchorHighlights(
-      g.getCurrentPlacementOptions?.() ?? []
-    );
+    this.#renderValidAnchorHighlights(this.#currentPlacementOptions());
 
     const anchor = this.#hoverAnchor;
+    if (!anchor) {
+      this.#renderRegionScoring(null);
+      this.#renderOpponentPlacementPreview();
+      this.#syncLocalPlacementDock();
+      return;
+    }
     const feedback = this.#placementFeedbackForAnchor(anchor);
     const ghostAnchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
 
-    const built = this.#buildProjectedBoard(focusedBoard, drafted, anchor, ghostAnchorEnd);
+    const built = this.#buildProjectedBoard(placementBoard, drafted, anchor, ghostAnchorEnd);
     const other = built.other;
 
-    const board = g.players[activeIdx].board.board;
+    const board = placementBoard;
     const occupied = board[keyOf(anchor.x, anchor.y)] || board[keyOf(other.x, other.y)];
     const valid = feedback.ok;
 
@@ -6639,6 +7993,7 @@ export class GameLayout extends HTMLElement {
 
     if (this.#showPlacementScores && valid && !occupied) this.#renderRegionScoring(built.projected);
     else this.#renderRegionScoring(null);
+    this.#renderOpponentPlacementPreview();
     this.#syncLocalPlacementDock();
   }
 

@@ -142,6 +142,41 @@ export class WebGameManager {
     return this.#pickOrder[this.#pickCursor];
   }
 
+  get forcedDraftIndex() {
+    if (this.isGameOver || this.state !== GameState.DRAFT) return null;
+
+    const currentPlayerIndex = this.currentPickingPlayerIndex;
+    if (currentPlayerIndex == null) return null;
+
+    const available = this.currentDraft
+      .map((slot, index) => ({ slot, index }))
+      .filter(({ slot }) => slot.player == null);
+
+    if (available.length === 1) return available[0].index;
+    if (available.length !== 2 || this.players.length !== 2) return null;
+
+    const picksByPlayer = new Map(this.players.map((_, index) => [index, 0]));
+    for (const slot of this.currentDraft) {
+      if (slot.player != null) {
+        picksByPlayer.set(slot.player, (picksByPlayer.get(slot.player) ?? 0) + 1);
+      }
+    }
+
+    const picksPerPlayer = this.currentDraft.length / this.players.length;
+    const otherPlayerIndex = this.players.findIndex((_, index) => index !== currentPlayerIndex);
+    const otherPlayerIsDone = otherPlayerIndex >= 0
+      && (picksByPlayer.get(otherPlayerIndex) ?? 0) >= picksPerPlayer;
+    const remainingPickers = this.#pickOrder.slice(this.#pickCursor, this.#pickCursor + available.length);
+    const remainingPicksBelongToCurrentPlayer = remainingPickers.length === available.length
+      && remainingPickers.every((playerIndex) => playerIndex === currentPlayerIndex);
+
+    if (otherPlayerIsDone && remainingPicksBelongToCurrentPlayer) {
+      return available[0].index;
+    }
+
+    return null;
+  }
+
   get placeOrder() {
     return [...this.#placeOrder];
   }
@@ -152,9 +187,13 @@ export class WebGameManager {
 
   /** @returns {DraftedTile | null} */
   get currentPlacingDraftedTile() {
+    return this.currentPlacingDraftedTileForPlayer(this.currentPlacingPlayerIndex);
+  }
+
+  /** @returns {DraftedTile | null} */
+  currentPlacingDraftedTileForPlayer(playerIndex) {
     if (this.state !== GameState.PLACE) return null;
-    const playerIndex = this.currentPlacingPlayerIndex;
-    if (playerIndex == null) return null;
+    if (playerIndex == null || !this.players[playerIndex]) return null;
     const choices = this.#draftedTilesForPlayer(playerIndex);
     if (!choices.length) return null;
 
@@ -179,9 +218,12 @@ export class WebGameManager {
   }
 
   getCurrentPlacingChoices() {
+    return this.getCurrentPlacingChoicesForPlayer(this.currentPlacingPlayerIndex);
+  }
+
+  getCurrentPlacingChoicesForPlayer(playerIndex) {
     if (this.state !== GameState.PLACE) return [];
-    const playerIndex = this.currentPlacingPlayerIndex;
-    if (playerIndex == null) return [];
+    if (playerIndex == null || !this.players[playerIndex]) return [];
     return this.#draftedTilesForPlayer(playerIndex);
   }
 
@@ -247,9 +289,12 @@ export class WebGameManager {
   }
 
   getCurrentPlacementOptions() {
+    return this.getCurrentPlacementOptionsForPlayer(this.currentPlacingPlayerIndex);
+  }
+
+  getCurrentPlacementOptionsForPlayer(playerIndex) {
     if (this.state !== GameState.PLACE) return [];
-    const playerIndex = this.currentPlacingPlayerIndex;
-    if (playerIndex == null) return [];
+    if (playerIndex == null || !this.players[playerIndex]) return [];
 
     const boardManager = this.players[playerIndex].board;
     const candidates = this.#placementCandidateAnchors(boardManager.board, boardManager.boardSize);
@@ -266,7 +311,7 @@ export class WebGameManager {
         try {
           for (let rotationSteps = 0; rotationSteps < 4; rotationSteps++) {
             for (const c of candidates) {
-              const feedback = this.getPlacementFeedbackAt(c.x, c.y);
+              const feedback = this.getPlacementFeedbackAtForPlayer(playerIndex, c.x, c.y);
               if (!feedback.ok) continue;
               const key = WebGameManager.#placementOptionKey(choice.domino, c.x, c.y, feedback.anchorEnd);
               if (seen.has(key)) continue;
@@ -300,15 +345,47 @@ export class WebGameManager {
   }
 
   selectCurrentPlacementDomino(dominoNumber) {
+    return this.selectPlacementDominoForPlayer(this.currentPlacingPlayerIndex, dominoNumber);
+  }
+
+  selectPlacementDominoForPlayer(playerIndex, dominoNumber) {
     if (this.state !== GameState.PLACE) return { ok: false, reason: 'Not in placement phase.' };
-    const playerIndex = this.currentPlacingPlayerIndex;
-    if (playerIndex == null) return { ok: false, reason: 'No active placing player.' };
+    if (playerIndex == null || !this.players[playerIndex]) return { ok: false, reason: 'No active placing player.' };
 
     const selected = this.#draftedTilesForPlayer(playerIndex)
       .find((d) => d.domino.number === dominoNumber);
     if (!selected) return { ok: false, reason: 'That tile is not available to place.' };
 
     this.#preferredPlacementDominoByPlayer.set(playerIndex, dominoNumber);
+    return { ok: true, reason: '' };
+  }
+
+  setCurrentPlacementSelection(dominoNumber, orientation) {
+    return this.setPlacementSelectionForPlayer(this.currentPlacingPlayerIndex, dominoNumber, orientation);
+  }
+
+  setPlacementSelectionForPlayer(playerIndex, dominoNumber, orientation) {
+    const selection = this.selectPlacementDominoForPlayer(playerIndex, dominoNumber);
+    if (!selection.ok) return selection;
+
+    const drafted = this.currentPlacingDraftedTileForPlayer(playerIndex);
+    if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
+
+    const normalized = ((Number(orientation) % 360) + 360) % 360;
+    if (![0, 90, 180, 270].includes(normalized)) {
+      return { ok: false, reason: 'Invalid orientation.' };
+    }
+
+    let guard = 0;
+    while (drafted.domino.orientation !== normalized && guard < 4) {
+      drafted.domino.rotate();
+      guard += 1;
+    }
+
+    if (drafted.domino.orientation !== normalized) {
+      return { ok: false, reason: 'Invalid orientation.' };
+    }
+
     return { ok: true, reason: '' };
   }
 
@@ -367,6 +444,12 @@ export class WebGameManager {
     drafted.domino.rotate();
   }
 
+  rotatePlacementDominoForPlayer(playerIndex) {
+    const drafted = this.currentPlacingDraftedTileForPlayer(playerIndex);
+    if (!drafted) return;
+    drafted.domino.rotate();
+  }
+
   skipCurrentPlacement() {
     const drafted = this.currentPlacingDraftedTile;
     if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
@@ -376,6 +459,18 @@ export class WebGameManager {
     drafted.placed = true;
     this.#clearConsumedPlacementPreference(this.currentPlacingPlayerIndex, drafted.domino.number);
     this.#advancePlacement();
+    return { ok: true, reason: '' };
+  }
+
+  skipPlacementForPlayer(playerIndex) {
+    const drafted = this.currentPlacingDraftedTileForPlayer(playerIndex);
+    if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
+    if (!this.canSkipPlacementForPlayer(playerIndex)) {
+      return { ok: false, reason: 'A valid placement exists. You cannot skip this tile.' };
+    }
+    drafted.placed = true;
+    this.#clearConsumedPlacementPreference(playerIndex, drafted.domino.number);
+    this.#advancePlacementAfterPlayerAction();
     return { ok: true, reason: '' };
   }
 
@@ -393,6 +488,10 @@ export class WebGameManager {
     return this.state === GameState.PLACE && this.getCurrentPlacementOptions().length === 0;
   }
 
+  canSkipPlacementForPlayer(playerIndex) {
+    return this.state === GameState.PLACE && this.getCurrentPlacementOptionsForPlayer(playerIndex).length === 0;
+  }
+
   /**
    * Check whether the current domino could be placed at (x,y) with a chosen anchor end,
    * without mutating game state.
@@ -402,14 +501,22 @@ export class WebGameManager {
     return feedback.ok;
   }
 
+  canPlaceDominoAtForPlayer(playerIndex, x, y, anchorEnd = DominoEnd.LEFT) {
+    const feedback = this.explainPlacementAtForPlayer(playerIndex, x, y, anchorEnd);
+    return feedback.ok;
+  }
+
   /**
    * Explain whether a current placement is legal, with a reason when invalid.
    */
   explainCurrentPlacementAt(x, y, anchorEnd = DominoEnd.LEFT) {
-    const drafted = this.currentPlacingDraftedTile;
+    return this.explainPlacementAtForPlayer(this.currentPlacingPlayerIndex, x, y, anchorEnd);
+  }
+
+  explainPlacementAtForPlayer(playerIndex, x, y, anchorEnd = DominoEnd.LEFT) {
+    const drafted = this.currentPlacingDraftedTileForPlayer(playerIndex);
     if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
 
-    const playerIndex = this.currentPlacingPlayerIndex;
     const boardManager = this.players[playerIndex].board;
     const board = boardManager.board;
 
@@ -497,10 +604,14 @@ export class WebGameManager {
    * Try both anchor ends and return the best placement feedback.
    */
   getPlacementFeedbackAt(x, y) {
-    const left = this.explainCurrentPlacementAt(x, y, DominoEnd.LEFT);
+    return this.getPlacementFeedbackAtForPlayer(this.currentPlacingPlayerIndex, x, y);
+  }
+
+  getPlacementFeedbackAtForPlayer(playerIndex, x, y) {
+    const left = this.explainPlacementAtForPlayer(playerIndex, x, y, DominoEnd.LEFT);
     if (left.ok) return { ok: true, anchorEnd: DominoEnd.LEFT, reason: '' };
 
-    const right = this.explainCurrentPlacementAt(x, y, DominoEnd.RIGHT);
+    const right = this.explainPlacementAtForPlayer(playerIndex, x, y, DominoEnd.RIGHT);
     if (right.ok) return { ok: true, anchorEnd: DominoEnd.RIGHT, reason: '' };
 
     // Prefer concrete reason from left, fallback to right.
@@ -516,13 +627,20 @@ export class WebGameManager {
    * The opposite end coordinate is derived from the domino's current orientation.
    */
   tryPlaceCurrentDominoAt(x, y, anchorEnd = DominoEnd.LEFT) {
-    const drafted = this.currentPlacingDraftedTile;
+    return this.#tryPlaceDominoForPlayer(this.currentPlacingPlayerIndex, x, y, anchorEnd, true);
+  }
+
+  tryPlaceDominoAtForPlayer(playerIndex, x, y, anchorEnd = DominoEnd.LEFT) {
+    return this.#tryPlaceDominoForPlayer(playerIndex, x, y, anchorEnd, false);
+  }
+
+  #tryPlaceDominoForPlayer(playerIndex, x, y, anchorEnd, blocking) {
+    const drafted = this.currentPlacingDraftedTileForPlayer(playerIndex);
     if (!drafted) return { ok: false, reason: 'Not in placement phase.' };
 
-    const feedback = this.explainCurrentPlacementAt(x, y, anchorEnd);
+    const feedback = this.explainPlacementAtForPlayer(playerIndex, x, y, anchorEnd);
     if (!feedback.ok) return feedback;
 
-    const playerIndex = this.currentPlacingPlayerIndex;
     const boardManager = this.players[playerIndex].board;
 
     const anchorCoord = { x, y };
@@ -545,7 +663,8 @@ export class WebGameManager {
 
     drafted.placed = true;
     this.#clearConsumedPlacementPreference(playerIndex, drafted.domino.number);
-    this.#advancePlacement();
+    if (blocking) this.#advancePlacement();
+    else this.#advancePlacementAfterPlayerAction();
     return { ok: true, reason: '' };
   }
 
@@ -559,6 +678,20 @@ export class WebGameManager {
       }
       if (this.#draftedTileForPlayer(playerIndex)) break;
       this.#placeCursor += 1;
+    }
+
+    if (!this.currentDraft.every((d) => d.placed)) return;
+    this.#startNewRound();
+  }
+
+  #advancePlacementAfterPlayerAction() {
+    while (this.#placeCursor < this.#placeOrder.length) {
+      const playerIndex = this.#placeOrder[this.#placeCursor];
+      if (playerIndex == null || !this.#draftedTileForPlayer(playerIndex)) {
+        this.#placeCursor += 1;
+        continue;
+      }
+      break;
     }
 
     if (!this.currentDraft.every((d) => d.placed)) return;

@@ -35,6 +35,8 @@ export class Domino {
     this.leftEnd = dominoTileLeft;
     this.rightEnd = dominoTileRight;
     this.number = number;
+    dominoTileLeft.artSeed = `domino-${number}-left`;
+    dominoTileRight.artSeed = `domino-${number}-right`;
     dominoTileLeft.connectToEdge(dominoTileRight, Edges.RIGHT);
   }
 

@@ -60,6 +60,24 @@ function countPlacementOptionsByCell(game, options) {
   return byCell;
 }
 
+function placeFirstAvailableDomino(game) {
+  const options = game.getCurrentPlacementOptions();
+  if (!options.length) return game.skipCurrentPlacement();
+
+  const option = options[0];
+  game.setCurrentPlacementSelection(option.dominoNumber, option.orientation);
+  return game.tryPlaceCurrentDominoAt(option.x, option.y, option.anchorEnd);
+}
+
+function placeFirstAvailableDominoForPlayer(game, playerIndex) {
+  const options = game.getCurrentPlacementOptionsForPlayer(playerIndex);
+  if (!options.length) return game.skipPlacementForPlayer(playerIndex);
+
+  const option = options[0];
+  game.setPlacementSelectionForPlayer(playerIndex, option.dominoNumber, option.orientation);
+  return game.tryPlaceDominoAtForPlayer(playerIndex, option.x, option.y, option.anchorEnd);
+}
+
 (function() {
   it('should pad missing web player names to configured player count', () => {
     const game = new WebGameManager(new GameConfiguration(2), 123);
@@ -153,5 +171,104 @@ function countPlacementOptionsByCell(game, options) {
       assert(cellOptions.filter((option) => option.dominoNumber === 15).length === 4);
       assert(cellOptions.filter((option) => option.dominoNumber === 40).length === 4);
     }
+  });
+
+  it('should set placement selection by absolute domino and orientation', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    const options = game.getCurrentPlacementOptions();
+    const current = game.currentPlacingDraftedTile;
+    const rotated = options.find((option) =>
+      option.dominoNumber === current.domino.number
+      && option.orientation !== current.domino.orientation
+    ) ?? options.find((option) => option.orientation !== current.domino.orientation);
+
+    assert(rotated);
+
+    const first = game.setCurrentPlacementSelection(rotated.dominoNumber, rotated.orientation);
+    assert(first.ok);
+    assert(game.currentPlacingDraftedTile.domino.number === rotated.dominoNumber);
+    assert(game.currentPlacingDraftedTile.domino.orientation === rotated.orientation);
+
+    const second = game.setCurrentPlacementSelection(rotated.dominoNumber, rotated.orientation);
+    assert(second.ok);
+    assert(game.currentPlacingDraftedTile.domino.number === rotated.dominoNumber);
+    assert(game.currentPlacingDraftedTile.domino.orientation === rotated.orientation);
+
+    const other = options.find((option) =>
+      option.dominoNumber !== rotated.dominoNumber
+      && option.orientation !== rotated.orientation
+    ) ?? options.find((option) => option.dominoNumber !== rotated.dominoNumber);
+
+    assert(other);
+
+    const third = game.setCurrentPlacementSelection(other.dominoNumber, other.orientation);
+    assert(third.ok);
+    assert(game.currentPlacingDraftedTile.domino.number === other.dominoNumber);
+    assert(game.currentPlacingDraftedTile.domino.orientation === other.orientation);
+  });
+
+  it('should allow multiplayer players to place out of placement order', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    assert(game.state.description === 'place');
+    assert(game.currentPlacingPlayerIndex === 0);
+    assert(game.getCurrentPlacingChoicesForPlayer(0).length === 2);
+    assert(game.getCurrentPlacingChoicesForPlayer(1).length === 2);
+
+    const option = game.getCurrentPlacementOptionsForPlayer(1)[0];
+    assert(option);
+    game.setPlacementSelectionForPlayer(1, option.dominoNumber, option.orientation);
+    const result = game.tryPlaceDominoAtForPlayer(1, option.x, option.y, option.anchorEnd);
+
+    assert(result.ok);
+    assert(game.state.description === 'place');
+    assert(game.currentPlacingPlayerIndex === 0);
+    assert(game.getCurrentPlacingChoicesForPlayer(0).length === 2);
+    assert(game.getCurrentPlacingChoicesForPlayer(1).length === 1);
+  });
+
+  it('should start the next draft after all non-blocking placements finish', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    for (const playerIndex of [1, 0, 1, 0]) {
+      assert(game.state.description === 'place');
+      const result = placeFirstAvailableDominoForPlayer(game, playerIndex);
+      assert(result.ok);
+    }
+
+    assert(game.state.description === 'draft');
+    assert(game.round === 2);
+  });
+
+  it('should expose forced draft picks when the other two-player king has no choice left', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+
+    for (const index of [0, 2, 1, 3]) game.pickDraft(index);
+    while (game.state.description === 'place') {
+      const result = placeFirstAvailableDomino(game);
+      assert(result.ok);
+    }
+
+    assert(game.state.description === 'draft');
+    assert(game.pickOrder.join(',') === '0,0,1,1');
+    assert(game.forcedDraftIndex === null);
+
+    game.pickDraft(0);
+    assert(game.forcedDraftIndex === null);
+
+    game.pickDraft(1);
+    assert(game.currentPickingPlayerIndex === 1);
+    assert(game.forcedDraftIndex === 2);
+
+    game.pickDraft(game.forcedDraftIndex);
+    assert(game.forcedDraftIndex === 3);
   });
 })();

@@ -20,6 +20,11 @@ export class DominoTile {
    * tiles of the same landscape type
   */
   crowns;
+  /**
+   * Stable rendering seed for this physical domino half.
+   * @type {string}
+   */
+  artSeed = '';
   /** @type {DominoTile} */
   topEdge = null;
   /** @type {DominoTile} */

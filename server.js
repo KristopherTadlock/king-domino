@@ -7,7 +7,7 @@ import { WebSocketServer } from 'ws';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const ROOT = process.cwd();
 
-/** @type {Map<string, {seed:number, players:{token:string,name:string}[], sockets:Set<any>, actions:any[]}>} */
+/** @type {Map<string, {seed:number, players:({token:string,name:string} | null)[], sockets:Set<any>, actions:any[], previews:Map<number, any>}>} */
 const rooms = new Map();
 
 function randomToken() {
@@ -15,8 +15,40 @@ function randomToken() {
 }
 
 function playerNames(room) {
-  return room.players.map((p) => p.name);
+  return room.players.map((p) => p?.name || '');
 }
+
+function activePlayerCount(room) {
+  return room.players.filter(Boolean).length;
+}
+
+function assignedPlayerIsActive(room, assignedIndex, assignedToken) {
+  if (assignedIndex == null) return false;
+  return room.players[assignedIndex]?.token === assignedToken;
+}
+
+function vacatePlayerSlot(room, playerIndex, playerToken) {
+  if (playerIndex == null) return null;
+  const player = room.players[playerIndex];
+  if (!player || player.token !== playerToken) return null;
+
+  room.players[playerIndex] = null;
+  room.previews.delete(playerIndex);
+  return player.name;
+}
+
+const GAMEPLAY_ACTION_TYPES = new Set([
+  'pickDraft',
+  'rotate',
+  'skip',
+  'selectPlacementTile',
+  'setPlacementSelection',
+  'place',
+  'restart',
+  'requestUndo',
+  'approveUndo',
+  'denyUndo',
+]);
 
 function contentTypeFor(p) {
   if (p.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -119,7 +151,7 @@ wss.on('connection', (ws) => {
       let room = rooms.get(roomId);
       if (!room) {
         const seed = Number.isFinite(msg.proposedSeed) ? (msg.proposedSeed >>> 0) : ((Math.random() * 2 ** 32) >>> 0);
-        room = { seed, players: [], sockets: new Set(), actions: [] };
+        room = { seed, players: [], sockets: new Set(), actions: [], previews: new Map() };
         rooms.set(roomId, room);
       }
 
@@ -128,12 +160,16 @@ wss.on('connection', (ws) => {
 
       // Assign player slots (2 players for now). Reconnect uses stable playerToken.
       const token = playerToken || randomToken();
-      const existingIndex = room.players.findIndex((p) => p.token === token);
+      const existingIndex = room.players.findIndex((p) => p?.token === token);
       if (existingIndex !== -1) {
         assignedIndex = existingIndex;
         assignedToken = token;
         // Refresh name on reconnect.
-        if (name) room.players[existingIndex].name = name;
+        if (name && room.players[existingIndex]) room.players[existingIndex].name = name;
+      } else if (room.players.some((p) => p == null)) {
+        assignedIndex = room.players.findIndex((p) => p == null);
+        assignedToken = token;
+        room.players[assignedIndex] = { token, name: name || `Player ${assignedIndex + 1}` };
       } else if (room.players.length < 2) {
         assignedIndex = room.players.length;
         assignedToken = token;
@@ -151,9 +187,33 @@ wss.on('connection', (ws) => {
         playerToken: assignedToken,
         players: playerNames(room),
         actions: room.actions,
+        previews: [...room.previews.values()],
       });
 
       broadcast(room, { type: 'players', players: playerNames(room) });
+      return;
+    }
+
+    if (msg.type === 'leave') {
+      const roomId = String(msg.roomId || '').trim();
+      const room = rooms.get(roomId);
+      if (!room || joinedRoomId !== roomId) return;
+
+      const leftName = vacatePlayerSlot(room, assignedIndex, assignedToken);
+      if (leftName != null) {
+        const players = playerNames(room);
+        broadcast(room, {
+          type: 'placementPreview',
+          preview: { playerIndex: assignedIndex, clear: true },
+        });
+        broadcast(room, {
+          type: 'playerLeft',
+          playerIndex: assignedIndex,
+          name: leftName,
+          players,
+        });
+        broadcast(room, { type: 'players', players });
+      }
       return;
     }
 
@@ -166,12 +226,79 @@ wss.on('connection', (ws) => {
         send(ws, { type: 'error', message: 'Room not found' });
         return;
       }
+      if (joinedRoomId !== roomId) {
+        send(ws, { type: 'error', message: 'Join the room before playing.' });
+        return;
+      }
 
       // Basic validation: limit action size.
       const payload = action.payload && typeof action.payload === 'object' ? action.payload : {};
       const cleanAction = { type: action.type, payload };
+      if (GAMEPLAY_ACTION_TYPES.has(cleanAction.type)) {
+        if (assignedIndex == null) {
+          send(ws, { type: 'error', message: 'Room is full. Spectators cannot play.' });
+          return;
+        }
+        if (!assignedPlayerIsActive(room, assignedIndex, assignedToken)) {
+          send(ws, { type: 'error', message: 'That player slot is no longer active.' });
+          return;
+        }
+        if (activePlayerCount(room) < 2) {
+          send(ws, { type: 'error', message: 'Waiting for another player to join.' });
+          return;
+        }
+        if (Number.isInteger(payload.playerIndex) && payload.playerIndex !== assignedIndex) {
+          send(ws, { type: 'error', message: 'That action belongs to another player.' });
+          return;
+        }
+      }
       room.actions.push(cleanAction);
       broadcast(room, { type: 'action', action: cleanAction });
+      return;
+    }
+
+    if (msg.type === 'placementPreview') {
+      const roomId = String(msg.roomId || '').trim();
+      const room = rooms.get(roomId);
+      if (!room || !assignedPlayerIsActive(room, assignedIndex, assignedToken)) return;
+      if (joinedRoomId !== roomId) return;
+
+      const preview = msg.preview && typeof msg.preview === 'object' ? msg.preview : {};
+      const clear = Boolean(preview.clear);
+      if (clear) {
+        room.previews.delete(assignedIndex);
+        broadcast(room, {
+          type: 'placementPreview',
+          preview: { playerIndex: assignedIndex, clear: true },
+        });
+        return;
+      }
+
+      const x = Number(preview.x);
+      const y = Number(preview.y);
+      const dominoNumber = Number(preview.dominoNumber);
+      const orientation = Number(preview.orientation);
+      const anchorEnd = preview.anchorEnd === 'RIGHT' ? 'RIGHT' : 'LEFT';
+      if (
+        !Number.isInteger(x)
+        || !Number.isInteger(y)
+        || !Number.isInteger(dominoNumber)
+        || ![0, 90, 180, 270].includes(orientation)
+      ) {
+        return;
+      }
+
+      const cleanPreview = {
+        playerIndex: assignedIndex,
+        dominoNumber,
+        orientation,
+        x,
+        y,
+        anchorEnd,
+        t: Date.now(),
+      };
+      room.previews.set(assignedIndex, cleanPreview);
+      broadcast(room, { type: 'placementPreview', preview: cleanPreview });
       return;
     }
   });
@@ -181,6 +308,13 @@ wss.on('connection', (ws) => {
     const room = rooms.get(joinedRoomId);
     if (!room) return;
     room.sockets.delete(ws);
+    if (assignedIndex != null) {
+      room.previews.delete(assignedIndex);
+      broadcast(room, {
+        type: 'placementPreview',
+        preview: { playerIndex: assignedIndex, clear: true },
+      });
+    }
     if (room.sockets.size === 0) {
       // Clean up empty rooms.
       rooms.delete(joinedRoomId);

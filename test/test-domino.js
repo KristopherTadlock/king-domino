@@ -25,6 +25,10 @@ import { DominoEnd } from '../classes/enums/domino-end.js';
     it('should have number set', () => {
         assert(domino.number === 10); 
     });
+    it('should assign stable art seeds to each end', () => {
+        assert(domino.leftEnd.artSeed === 'domino-10-left');
+        assert(domino.rightEnd.artSeed === 'domino-10-right');
+    });
     it('should have tiles connected', () => {
         assert(domino.leftEnd.rightEdge === dominoTileRight);
         assert(domino.rightEnd.leftEdge === dominoTileLeft);
