@@ -1384,7 +1384,7 @@ export class GameLayout extends HTMLElement {
   /** @type {boolean} */
   #hoverAnchorAuto = false;
 
-  /** @type {{x:number,y:number,t:number} | null} */
+  /** @type {{x:number,y:number,t:number,maxDist2:number} | null} */
   #pointerDown = null;
 
   /** @type {number | null} */
@@ -6988,7 +6988,39 @@ export class GameLayout extends HTMLElement {
     }
   };
 
+  #startPointerTap(e) {
+    this.#pointerDown = {
+      x: e.clientX,
+      y: e.clientY,
+      t: performance.now(),
+      maxDist2: 0,
+    };
+  }
+
+  #trackPointerMovement(e) {
+    if (!this.#pointerDown) return;
+    const dx = e.clientX - this.#pointerDown.x;
+    const dy = e.clientY - this.#pointerDown.y;
+    this.#pointerDown.maxDist2 = Math.max(this.#pointerDown.maxDist2, dx * dx + dy * dy);
+  }
+
+  #isPointerTap(start, e) {
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    const dist2 = Math.max(start.maxDist2 ?? 0, dx * dx + dy * dy);
+    const maxDistance = e.pointerType === 'touch' ? 9 : 8;
+    if (dist2 > maxDistance * maxDistance) return false;
+
+    if (e.pointerType === 'touch') {
+      const dt = performance.now() - start.t;
+      return dt <= 350;
+    }
+
+    return true;
+  }
+
   #onPointerMove(e) {
+    this.#trackPointerMovement(e);
     if (this.#libraryOpen) return;
     if (this.#game?.state === GameState.DRAFT) return;
     if (!this.#isMyTurnToPlace()) {
@@ -7015,19 +7047,17 @@ export class GameLayout extends HTMLElement {
 
     if (this.#libraryOpen) {
       if (e.pointerType === 'touch') this.#activeTouchPointerId = e.pointerId;
-      this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
+      this.#startPointerTap(e);
       return;
     }
-
-    if (!this.#isMyTurnToPlace() && !this.#isMyTurnToPick()) return;
 
     if (e.pointerType === 'touch') {
       this.#activeTouchPointerId = e.pointerId;
-      this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
+      this.#startPointerTap(e);
       return;
     }
 
-    this.#pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() };
+    this.#startPointerTap(e);
   }
 
   #onPointerUp(e) {
@@ -7044,21 +7074,8 @@ export class GameLayout extends HTMLElement {
         return;
       }
 
-      const dx = e.clientX - start.x;
-      const dy = e.clientY - start.y;
-      const dist2 = dx * dx + dy * dy;
-      const dt = performance.now() - start.t;
-      const TAP_DIST2 = e.pointerType === 'touch' ? 9 * 9 : 20 * 20;
-      const TAP_MS = 350;
-      const isTap = e.pointerType === 'touch'
-        ? dist2 <= TAP_DIST2 && dt <= TAP_MS
-        : dist2 <= TAP_DIST2;
+      const isTap = this.#isPointerTap(start, e);
       if (isTap) this.#handleLibraryTap(e.clientX, e.clientY);
-      if (e.pointerType === 'touch') this.#resetTouchInteraction();
-      return;
-    }
-
-    if (!this.#isMyTurnToPlace() && !this.#isMyTurnToPick()) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
@@ -7075,37 +7092,62 @@ export class GameLayout extends HTMLElement {
     }
 
     // Treat as a tap if the pointer didn’t move much.
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-    const dist2 = dx * dx + dy * dy;
-    const dt = performance.now() - start.t;
-    const TAP_DIST2 = e.pointerType === 'touch' ? 9 * 9 : 20 * 20;
-    const TAP_MS = 350;
-    const isTap = e.pointerType === 'touch'
-      ? dist2 <= TAP_DIST2 && dt <= TAP_MS
-      : dist2 <= TAP_DIST2;
+    const isTap = this.#isPointerTap(start, e);
     if (!isTap) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
 
-    if (this.#game?.state === GameState.DRAFT) {
-      this.#handleCanvasDraftTap(e.clientX, e.clientY);
+    if (this.#game?.state === GameState.DRAFT && this.#isMyTurnToPick()) {
+      const draftHandled = this.#handleCanvasDraftTap(e.clientX, e.clientY);
+      if (draftHandled) {
+        if (e.pointerType === 'touch') this.#resetTouchInteraction();
+        return;
+      }
+    }
+
+    if (this.#game?.state === GameState.DRAFT && this.#handleCanvasMatFocusTap(e.clientX, e.clientY)) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
 
-    if (this.#game?.state === GameState.PLACE && this.#handleCanvasPlacementConfirmTap(e.clientX, e.clientY, e.pointerType)) {
-      if (e.pointerType === 'touch') this.#resetTouchInteraction();
-      return;
-    }
-
-    if (this.#game?.state === GameState.PLACE && this.#handleCanvasPlacementChoiceTap(e.clientX, e.clientY)) {
+    if (this.#game?.state === GameState.PLACE && this.#isMyTurnToPlace() && this.#handleCanvasPlacementConfirmTap(e.clientX, e.clientY, e.pointerType)) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
 
     const grid = this.#gridFromClient(e.clientX, e.clientY);
+
+    if (this.#game?.state === GameState.PLACE && this.#isMyTurnToPlace() && this.#handleCanvasPlacementChoiceTap(e.clientX, e.clientY)) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (this.#game?.state === GameState.PLACE && this.#isMyTurnToPlace() && grid) {
+      const placementHandled = this.#trySelectPlacementAnchor(grid, {
+        localize: true,
+        showError: false,
+        render: true,
+      });
+      if (placementHandled) {
+        if (e.pointerType === 'touch') {
+          this.#syncMobileActions();
+          this.#resetTouchInteraction();
+        }
+        return;
+      }
+    }
+
+    if (this.#handleCanvasMatFocusTap(e.clientX, e.clientY)) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (!this.#isMyTurnToPlace() && !this.#isMyTurnToPick()) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
     if (!grid) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
@@ -7196,6 +7238,30 @@ export class GameLayout extends HTMLElement {
       xMax: origin.x + mat.centerX + mat.width / 2 + pad,
       zMin: origin.z + mat.centerZ - mat.height / 2 - pad,
       zMax: origin.z + mat.centerZ + mat.height / 2 + pad,
+    };
+  }
+
+  #worldRectContains(rect, point) {
+    return Boolean(rect && point
+      && point.x >= rect.xMin
+      && point.x <= rect.xMax
+      && point.z >= rect.zMin
+      && point.z <= rect.zMax);
+  }
+
+  #canvasDraftWorldRect(pad = 0) {
+    if (!this.#canvasDraftEnabled()) return null;
+    const layout = this.#canvasDraftLayout();
+    if (!layout.rows.length) return null;
+    const minX = Math.min(...layout.rows.map((row) => row.xMin)) - 0.30;
+    const maxX = Math.max(...layout.rows.map((row) => row.xMax)) + 0.30;
+    const minZ = Math.min(...layout.rows.map((row) => row.zMin)) - 0.30;
+    const maxZ = Math.max(...layout.rows.map((row) => row.zMax)) + 0.30;
+    return {
+      xMin: minX - pad,
+      xMax: maxX + pad,
+      zMin: minZ - pad,
+      zMax: maxZ + pad,
     };
   }
 
@@ -7620,14 +7686,47 @@ export class GameLayout extends HTMLElement {
     let best = null;
     for (const row of layout.rows) {
       if (row.slot?.player != null) continue;
-      const xPad = 0.48;
-      const zPad = 0.28;
-      if (point.x < row.xMin - xPad || point.x > row.xMax + xPad) continue;
+      const xPad = 0.10;
+      const zPad = 0.10;
+      if (point.x < row.leftX - 0.56 - xPad || point.x > row.rightX + 0.56 + xPad) continue;
       const zDistance = Math.abs(point.z - row.z);
-      if (zDistance > (row.zMax - row.zMin) / 2 + zPad) continue;
+      if (zDistance > 0.56 + zPad) continue;
       if (!best || zDistance < best.zDistance) best = { row, zDistance };
     }
     return best?.row?.index ?? null;
+  }
+
+  #canvasDraftMatAtClient(clientX, clientY) {
+    if (!this.#canvasDraftEnabled()) return false;
+    const g = this.#game;
+    if (!g || (g.state !== GameState.DRAFT && g.state !== GameState.PLACE) || g.isGameOver) return false;
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    return this.#worldRectContains(this.#canvasDraftWorldRect(0), point);
+  }
+
+  #kingdomMatAtClient(clientX, clientY) {
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!point || !this.#game?.players?.length) return null;
+    let best = null;
+    for (let playerIndex = 0; playerIndex < this.#game.players.length; playerIndex++) {
+      const rect = this.#boardWorldBoundsForPlayer(playerIndex, 0);
+      if (!this.#worldRectContains(rect, point)) continue;
+      const centerX = (rect.xMin + rect.xMax) / 2;
+      const centerZ = (rect.zMin + rect.zMax) / 2;
+      const distance = (point.x - centerX) ** 2 + (point.z - centerZ) ** 2;
+      if (!best || distance < best.distance) best = { playerIndex, distance };
+    }
+    return best?.playerIndex ?? null;
+  }
+
+  #handleCanvasMatFocusTap(clientX, clientY) {
+    if (this.#canvasDraftMatAtClient(clientX, clientY)) {
+      return this.#centerOnDraftMat(true);
+    }
+
+    const playerIndex = this.#kingdomMatAtClient(clientX, clientY);
+    if (playerIndex == null) return false;
+    return this.#centerOnPlayerMat(playerIndex, true);
   }
 
   #canvasDraftAdvisorPosition(row) {
@@ -11761,6 +11860,36 @@ export class GameLayout extends HTMLElement {
       yMin: bounds.zMin,
       yMax: bounds.zMax,
     }, 0.60, { x: 0, z: 0 }, animate, this.#viewSizeForBoardSize(bs));
+  }
+
+  #centerOnPlayerMat(playerIndex, animate = true) {
+    if (!this.#game?.players?.[playerIndex]) return false;
+    const bounds = this.#boardWorldBoundsForPlayer(playerIndex, 0.18);
+    if (!bounds) return false;
+
+    this.#focusedPlayerIndex = playerIndex;
+    this.#syncBoardLayerPositions();
+    this.#renderMiniMaps();
+    this.#frameToBoardSize({
+      xMin: bounds.xMin,
+      xMax: bounds.xMax,
+      yMin: bounds.zMin,
+      yMax: bounds.zMax,
+    }, 0.44, { x: 0, z: 0 }, animate, GameLayout.#VIEW_SIZE_CLOSE);
+    return true;
+  }
+
+  #centerOnDraftMat(animate = true) {
+    const bounds = this.#canvasDraftWorldRect(0.12);
+    if (!bounds) return false;
+
+    this.#frameToBoardSize({
+      xMin: bounds.xMin,
+      xMax: bounds.xMax,
+      yMin: bounds.zMin,
+      yMax: bounds.zMax,
+    }, 0.44, { x: 0, z: 0 }, animate, GameLayout.#VIEW_SIZE_CLOSE);
+    return true;
   }
 
   #centerOnDominoLibrary(animate = false) {
