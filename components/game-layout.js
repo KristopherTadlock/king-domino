@@ -8,6 +8,7 @@ import { Edges, EdgeOffset } from '../classes/enums/edges.js';
 import { WebGameManager } from '../classes/web-game-manager.js';
 import { MultiplayerClient } from '../classes/multiplayer-client.js';
 import { DominoPoolManager } from '../classes/domino-pool-manager.js';
+import { GameAdvisor } from '../classes/game-advisor.js';
 import { randomSeed } from '../classes/utils/rng.js';
 
 const LANDSCAPE_COLORS = Object.freeze({
@@ -75,6 +76,7 @@ const LANDSCAPE_TEXTURES = Object.freeze({
 const ALL_EDGES = [Edges.TOP, Edges.BOTTOM, Edges.LEFT, Edges.RIGHT];
 const SCORE_HISTORY_STORAGE_KEY = 'kd.completedGames.v1';
 const SCORE_HISTORY_LIMIT = 50;
+const ADVISOR_VISIBILITY_STORAGE_KEY = 'kd.showAdvisor';
 
 const LANDSCAPE_COLOR_BY_KEY = Object.freeze(Object.fromEntries(
   Object.getOwnPropertySymbols(LANDSCAPE_COLORS)
@@ -166,6 +168,229 @@ function createTextSprite(text, options = {}) {
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(0.35, 0.35, 1);
+  return sprite;
+}
+
+function createPlayerMatLabel(name, score, options = {}) {
+  const {
+    playerColor = 'rgba(126, 192, 255, 0.95)',
+    playerGlow = 'rgba(126, 192, 255, 0.18)',
+  } = options;
+  const width = 512;
+  const height = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, 'rgba(21, 25, 31, 0.38)');
+  bg.addColorStop(1, 'rgba(7, 10, 13, 0.30)');
+  ctx.fillStyle = bg;
+  roundedRect(ctx, 20, 22, width - 40, height - 44, 26);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 3;
+  roundedRect(ctx, 20, 22, width - 40, height - 44, 26);
+  ctx.stroke();
+
+  ctx.shadowColor = playerGlow;
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = playerColor;
+  ctx.beginPath();
+  ctx.arc(58, height / 2, 13, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(243, 247, 251, 0.82)';
+  let nameFontSize = 36;
+  const maxNameWidth = 318;
+  do {
+    ctx.font = `900 ${nameFontSize}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial`;
+    if (ctx.measureText(name).width <= maxNameWidth || nameFontSize <= 26) break;
+    nameFontSize -= 2;
+  } while (true);
+  let label = name;
+  while (label.length > 1 && ctx.measureText(label).width > maxNameWidth) {
+    label = `${label.slice(0, -2)}…`;
+  }
+  ctx.textAlign = 'left';
+  ctx.fillText(label, 88, height / 2);
+
+  ctx.textAlign = 'right';
+  ctx.font = '950 40px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+  ctx.fillText(String(score), width - 48, height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, height / width), material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.renderOrder = -0.58;
+  return mesh;
+}
+
+function createDraftMatLabel(text = 'Draft') {
+  const width = 320;
+  const height = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, 'rgba(255, 246, 222, 0.14)');
+  bg.addColorStop(1, 'rgba(17, 15, 12, 0.20)');
+  ctx.fillStyle = bg;
+  roundedRect(ctx, 22, 24, width - 44, height - 48, 24);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255, 238, 198, 0.18)';
+  ctx.lineWidth = 2;
+  roundedRect(ctx, 22, 24, width - 44, height - 48, 24);
+  ctx.stroke();
+
+  ctx.shadowColor = 'rgba(255, 228, 170, 0.16)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(235, 220, 190, 0.72)';
+  ctx.font = '900 34px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, width / 2, height / 2 + 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.16, height / width * 1.16), material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.renderOrder = -0.58;
+  return mesh;
+}
+
+function createAdvisorSpeechSprite(text) {
+  const width = 384;
+  const height = 138;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.shadowColor = 'rgba(6, 8, 10, 0.34)';
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = 'rgba(28, 31, 35, 0.88)';
+  roundedRect(ctx, 22, 16, width - 44, height - 46, 28);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(74, height - 31);
+  ctx.lineTo(100, height - 12);
+  ctx.lineTo(114, height - 35);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = 'rgba(255, 218, 141, 0.28)';
+  ctx.lineWidth = 3;
+  roundedRect(ctx, 22, 16, width - 44, height - 46, 28);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255, 238, 198, 0.94)';
+  ctx.font = '900 42px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, width / 2, height / 2 - 6);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(1.22, 0.44, 1);
+  sprite.renderOrder = 86;
+  return sprite;
+}
+
+function createConfirmButtonSprite() {
+  const size = 160;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+
+  ctx.shadowColor = 'rgba(67, 255, 137, 0.55)';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = 'rgba(35, 131, 72, 0.96)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 48, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+  ctx.shadowBlur = 5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(241, 255, 246, 0.98)';
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.moveTo(55, 82);
+  ctx.lineTo(72, 98);
+  ctx.lineTo(106, 61);
+  ctx.stroke();
+
+  ctx.shadowColor = 'rgba(0, 0, 0, 0)';
+  ctx.strokeStyle = 'rgba(241, 255, 246, 0.84)';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 56, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(0.70, 0.70, 1);
+  sprite.renderOrder = 80;
   return sprite;
 }
 
@@ -879,6 +1104,8 @@ export class GameLayout extends HTMLElement {
   #btnCenter;
   #btnMore;
   #btnLibrary;
+  #btnToggleAdvisor;
+  #btnToggleMiniMap;
   #btnHighScores;
   #btnRestart;
   #btnEndGame;
@@ -890,6 +1117,7 @@ export class GameLayout extends HTMLElement {
   #btnMobilePlace;
   #localPlacementDock;
   #btnLocalClear;
+  #btnLocalAdvisor;
   #btnLocalPrev;
   #btnLocalNext;
   #btnLocalPlace;
@@ -900,6 +1128,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {WebGameManager} */
   #game;
+
+  /** @type {GameAdvisor} */
+  #advisor = new GameAdvisor();
 
   /** @type {MultiplayerClient | null} */
   #mp = null;
@@ -946,6 +1177,15 @@ export class GameLayout extends HTMLElement {
   /** @type {string | null} */
   #autoDraftInFlightKey = null;
 
+  /** @type {number} */
+  #autoDraftClaimHoldUntil = 0;
+
+  /** @type {{x:number,z:number} | null} */
+  #autoDraftClaimHoldOrigin = null;
+
+  /** @type {number | null} */
+  #autoDraftClaimHoldTimer = null;
+
   /** @type {string | null} */
   #lobbyNotice = null;
 
@@ -981,6 +1221,12 @@ export class GameLayout extends HTMLElement {
 
   /** @type {boolean} */
   #moreOpen = false;
+
+  /** @type {boolean} */
+  #showMiniMap = false;
+
+  /** @type {boolean} */
+  #showAdvisor = true;
 
   /** @type {boolean} */
   #libraryOpen = false;
@@ -1049,11 +1295,61 @@ export class GameLayout extends HTMLElement {
   #regionOverlayGroup;
   /** @type {THREE.Group} */
   #ghostGroup;
+  /** @type {THREE.Group} */
+  #scoreBurstGroup;
   /** @type {THREE.Group | null} */
   #currentTileRenderGroup = null;
 
-  /** @type {{object:THREE.Object3D,type:string,basePosition:THREE.Vector3,baseRotation:THREE.Euler,phase:number,speed:number,amplitude:number,travel:number,wander:number,tail?:THREE.Object3D,tailBaseRotation?:THREE.Euler,fin?:THREE.Object3D,finBaseRotation?:THREE.Euler,flippers?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],head?:THREE.Object3D,headBasePosition?:THREE.Vector3,headBaseRotation?:THREE.Euler,legs?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],material?:THREE.Material}[]} */
+  /** @type {{object:THREE.Object3D,type:string,basePosition:THREE.Vector3,baseRotation:THREE.Euler,baseScale:THREE.Vector3,phase:number,speed:number,amplitude:number,travel:number,wander:number,tail?:THREE.Object3D,tailBaseRotation?:THREE.Euler,fin?:THREE.Object3D,finBaseRotation?:THREE.Euler,flippers?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],head?:THREE.Object3D,headBasePosition?:THREE.Vector3,headBaseRotation?:THREE.Euler,legs?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],material?:THREE.Material,targetPosition?:THREE.Vector3,targetScale?:THREE.Vector3,targetRotationY?:number,startedAt?:number,duration?:number}[]} */
   #animatedObjects = [];
+
+  /** @type {{group:THREE.Group,startedAt:number,duration:number,baseY:number}[]} */
+  #scoreBursts = [];
+
+  /** @type {Map<string, number>} */
+  #draftClaimAnimationStartedAt = new Map();
+
+  /** @type {Map<string, {leftX:number,z:number,targetLeftX:number,targetZ:number,owner:number,rowIndex:number,dominoNumber:number}>} */
+  #draftClaimAnimationSourceByKey = new Map();
+
+  /** @type {Map<number, {centerX:number,centerZ:number,width:number,height:number}>} */
+  #kingdomMatBoundsByPlayer = new Map();
+
+  /** @type {{key:string,spacing:number,origins:{x:number,z:number}[]} | null} */
+  #tabletopLayoutCache = null;
+
+  /** @type {{x:number,z:number} | null} */
+  #lastCanvasDraftOrigin = null;
+
+  /** @type {{key:string,playerIndex:number,dominoNumber:number,startedAt:number,duration:number,sourceX:number,sourceZ:number,targetX:number,targetZ:number} | null} */
+  #placementGhostAnimation = null;
+
+  /** @type {Map<number, {key:string,playerIndex:number,dominoNumber:number,domino:import('../classes/domino.js').Domino,startedAt:number,duration:number,sourceWorldX:number,sourceWorldZ:number,targetWorldX:number,targetWorldZ:number,sourceRotationY:number}>} */
+  #placementReturnAnimations = new Map();
+
+  /** @type {Map<string, {key:string,playerIndex:number,dominoNumber:number,domino:import('../classes/domino.js').Domino,startedAt:number,duration:number,sourceWorldX:number,sourceWorldZ:number,targetWorldX:number,targetWorldZ:number,sourceRotationY:number}>} */
+  #placementSkipAnimations = new Map();
+
+  /** @type {{object:THREE.Object3D,radiusWorld:number} | null} */
+  #canvasPlacementConfirmTarget = null;
+
+  /** @type {{renderBoard:number,renderGhost:number,refreshHud:number}} */
+  #perfCounters = { renderBoard: 0, renderGhost: 0, refreshHud: 0 };
+
+  /** @type {Set<string> | null} */
+  #perfAnimationTypeFilter = null;
+
+  /** @type {string} */
+  #lastGridPresentationKey = '';
+
+  /** @type {number} */
+  #placementCacheVersion = 0;
+
+  /** @type {Map<number, {version:number, options:any[]}>} */
+  #placementOptionsCache = new Map();
+
+  /** @type {Map<number, {version:number, option:any | null}>} */
+  #advisorPlacementCache = new Map();
 
   /** @type {MediaQueryList | null} */
   #reducedMotionQuery = null;
@@ -1130,14 +1426,163 @@ export class GameLayout extends HTMLElement {
     return GameLayout.#VIEW_SIZE_FAR;
   }
 
+  #tabletopSpreadProgress() {
+    const g = this.#game;
+    if (!g?.players?.length) return 0;
+
+    const { round, total } = this.#roundProgress(g);
+    const roundProgress = total <= 1 ? 0 : (round - 1) / Math.max(1, total - 1);
+    const draftProgress = g.state === GameState.DRAFT
+      ? (g.pickCursor ?? 0) / Math.max(1, g.pickOrder?.length ?? g.currentDraft?.length ?? 1)
+      : 0.55;
+
+    let footprintProgress = 0;
+    for (const player of g.players) {
+      const boardSize = player.board?.boardSize;
+      const maxBoardSize = Math.max(1, player.board?.maxBoardSize ?? 7);
+      if (!boardSize) continue;
+      const width = (boardSize.xMax - boardSize.xMin) + 1;
+      const height = (boardSize.yMax - boardSize.yMin) + 1;
+      footprintProgress = Math.max(footprintProgress, Math.max(width, height) / maxBoardSize);
+    }
+
+    return Math.max(0, Math.min(1, Math.max(roundProgress + draftProgress * 0.16, footprintProgress * 0.72)));
+  }
+
+  #tabletopBoardSpacing() {
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    const progress = this.#tabletopSpreadProgress();
+    const vertical = count === 2 || this.#useVerticalTabletopLayout();
+    const base = vertical
+      ? count <= 2 ? 8.2 : 9.4
+      : count <= 2 ? 12.4 : 13.8;
+    const far = vertical
+      ? count <= 2 ? 14.2 : 15.4
+      : count <= 2 ? 18.0 : 18.8;
+    let spacing = base + (far - base) * progress;
+    const players = this.#game?.players ?? [];
+    if (players.length < 2) return spacing;
+
+    const matBounds = players.map((player, playerIndex) => {
+      const boardManager = player?.board;
+      if (!boardManager) return null;
+      return this.#preservedKingdomMatBounds(boardManager, playerIndex);
+    });
+
+    for (let guard = 0; guard < 32; guard++) {
+      let hasOverlap = false;
+      for (let i = 0; i < players.length; i++) {
+        const a = matBounds[i];
+        if (!a) continue;
+        const aOrigin = this.#boardOriginForPlayerAtSpacing(i, count, spacing);
+        const aRect = this.#matWorldRect(a, aOrigin, 0.18);
+        for (let j = i + 1; j < players.length; j++) {
+          const b = matBounds[j];
+          if (!b) continue;
+          const bOrigin = this.#boardOriginForPlayerAtSpacing(j, count, spacing);
+          const bRect = this.#matWorldRect(b, bOrigin, 0.18);
+          if (this.#rectOverlapArea(aRect, bRect) > 0.001) {
+            hasOverlap = true;
+            break;
+          }
+        }
+        if (hasOverlap) break;
+      }
+      if (!hasOverlap) return spacing;
+      spacing += 0.80;
+    }
+
+    return spacing;
+  }
+
+  #invalidateTabletopLayoutCache() {
+    this.#tabletopLayoutCache = null;
+  }
+
+  #tabletopLayoutCacheKey() {
+    const g = this.#game;
+    const players = g?.players ?? [];
+    const state = g?.state?.description ?? String(g?.state ?? '');
+    const viewport = typeof window === 'undefined'
+      ? 'server'
+      : `${window.innerWidth || 0}x${window.innerHeight || 0}`;
+    const boardKey = players.map((player, playerIndex) => {
+      const board = player?.board;
+      const size = board?.boardSize;
+      const preserved = this.#kingdomMatBoundsByPlayer.get(playerIndex);
+      return [
+        size?.xMin ?? 0,
+        size?.xMax ?? 0,
+        size?.yMin ?? 0,
+        size?.yMax ?? 0,
+        board?.maxBoardSize ?? 0,
+        preserved?.centerX?.toFixed?.(3) ?? '',
+        preserved?.centerZ?.toFixed?.(3) ?? '',
+        preserved?.width?.toFixed?.(3) ?? '',
+        preserved?.height?.toFixed?.(3) ?? '',
+      ].join(',');
+    }).join(';');
+    return [
+      players.length,
+      viewport,
+      this.#useVerticalTabletopLayout() ? 1 : 0,
+      state,
+      g?.round ?? 0,
+      g?.pickCursor ?? 0,
+      this.#placementPlayerIndex() ?? -1,
+      this.#placementCacheVersion,
+      boardKey,
+    ].join('|');
+  }
+
+  #currentTabletopLayout() {
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    const key = this.#tabletopLayoutCacheKey();
+    if (this.#tabletopLayoutCache?.key === key) return this.#tabletopLayoutCache;
+
+    const spacing = this.#tabletopBoardSpacing();
+    const origins = Array.from({ length: count }, (_, playerIndex) => (
+      this.#boardOriginForPlayerAtSpacing(playerIndex, count, spacing)
+    ));
+    this.#tabletopLayoutCache = { key, spacing, origins };
+    return this.#tabletopLayoutCache;
+  }
+
+  #useVerticalTabletopLayout() {
+    if (typeof window === 'undefined') return false;
+    const w = window.innerWidth || 0;
+    const h = window.innerHeight || 0;
+    return w <= 760 || h > w * 1.12;
+  }
+
+  #screenVerticalTabletopAxis() {
+    const unit = 1 / Math.sqrt(2);
+    return { x: unit, z: unit };
+  }
+
   #boardOriginForPlayer(playerIndex = 0) {
     const count = Math.max(1, this.#game?.players?.length ?? 2);
-    const spacing = 18;
+    const idx = Math.max(0, Math.min(playerIndex ?? 0, count - 1));
+    return this.#currentTabletopLayout().origins[idx] ?? { x: 0, z: 0 };
+  }
+
+  #boardOriginForPlayerAtSpacing(playerIndex = 0, count = Math.max(1, this.#game?.players?.length ?? 2), spacing = this.#tabletopBoardSpacing()) {
     const idx = Math.max(0, Math.min(playerIndex ?? 0, count - 1));
 
     if (count === 1) return { x: 0, z: 0 };
-    if (count === 2) return { x: idx === 0 ? -spacing / 2 : spacing / 2, z: 0 };
+    if (count === 2) {
+      const axis = this.#screenVerticalTabletopAxis();
+      const side = idx === 0 ? -1 : 1;
+      return { x: axis.x * side * spacing / 2, z: axis.z * side * spacing / 2 };
+    }
     if (count === 3) {
+      if (this.#useVerticalTabletopLayout()) {
+        return [
+          { x: 0, z: -spacing },
+          { x: 0, z: 0 },
+          { x: 0, z: spacing },
+        ][idx];
+      }
       return [
         { x: -spacing / 2, z: -spacing / 2 },
         { x: spacing / 2, z: -spacing / 2 },
@@ -1170,11 +1615,13 @@ export class GameLayout extends HTMLElement {
 
   #registerAnimatedObject(object, type, options = {}) {
     if (!object || this.#prefersReducedMotion()) return;
+    if (this.#perfAnimationTypeFilter && !this.#perfAnimationTypeFilter.has(type)) return;
     this.#animatedObjects.push({
       object,
       type,
       basePosition: object.position.clone(),
       baseRotation: object.rotation.clone(),
+      baseScale: object.scale.clone(),
       phase: options.phase ?? 0,
       speed: options.speed ?? 1,
       amplitude: options.amplitude ?? 1,
@@ -1196,6 +1643,43 @@ export class GameLayout extends HTMLElement {
         baseRotation: object.rotation.clone(),
       })),
       material: options.material,
+      targetPosition: options.targetPosition?.clone?.(),
+      targetScale: options.targetScale?.clone?.(),
+      targetRotationY: options.targetRotationY,
+      startedAt: options.startedAt,
+      duration: options.duration,
+    });
+  }
+
+  #prepareObjectMaterialsForOpacity(object) {
+    if (!object) return;
+    object.traverse((node) => {
+      if (!node.material) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      const cloned = materials.map((material) => {
+        const next = material.clone();
+        next.transparent = true;
+        next.depthWrite = false;
+        next.userData.baseOpacity = Number.isFinite(material.opacity) ? material.opacity : 1;
+        return next;
+      });
+      node.material = Array.isArray(node.material) ? cloned : cloned[0];
+    });
+  }
+
+  #setObjectOpacity(object, opacity) {
+    const nextOpacity = Math.max(0, Math.min(1, opacity));
+    object.traverse((node) => {
+      if (!node.material) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      for (const material of materials) {
+        const baseOpacity = Number.isFinite(material.userData?.baseOpacity)
+          ? material.userData.baseOpacity
+          : Number.isFinite(material.opacity)
+            ? material.opacity
+            : 1;
+        material.opacity = baseOpacity * nextOpacity;
+      }
     });
   }
 
@@ -1303,6 +1787,49 @@ export class GameLayout extends HTMLElement {
         const shimmer = Math.sin(t * 1.7 + item.phase) * 0.35;
         object.rotation.x = item.baseRotation.x + (gust * 0.055 + shimmer * 0.018) * item.amplitude;
         object.rotation.z = item.baseRotation.z + (gust * 0.095 + shimmer * 0.030) * item.amplitude;
+      } else if (item.type === 'advisor') {
+        object.position.y = item.basePosition.y + Math.sin(t) * 0.026 * item.amplitude;
+        object.rotation.y = item.baseRotation.y + Math.sin(t * 0.62) * 0.08 * item.amplitude;
+      } else if (item.type === 'draftClaim' && item.targetPosition && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 650)));
+        const eased = 1 - Math.pow(1 - progress, 3);
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+        object.rotation.y = item.baseRotation.y + Math.sin(progress * Math.PI) * 0.06;
+      } else if (item.type === 'draftTray' && item.targetPosition && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 560)));
+        const eased = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+      } else if (item.type === 'kingdomMat' && item.targetPosition && item.targetScale && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 520)));
+        const eased = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+        object.scale.lerpVectors(item.baseScale, item.targetScale, eased);
+      } else if (item.type === 'placementGhost' && item.targetPosition && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 360)));
+        const eased = 1 - Math.pow(1 - progress, 3);
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+        object.position.y = item.basePosition.y + Math.sin(progress * Math.PI) * 0.12;
+        object.rotation.y = item.baseRotation.y + Math.sin(progress * Math.PI) * 0.035;
+      } else if (item.type === 'placementReturn' && item.targetPosition && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 420)));
+        const eased = 1 - Math.pow(1 - progress, 3);
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+        object.position.y = item.basePosition.y + Math.sin(progress * Math.PI) * 0.16;
+        object.rotation.y = item.baseRotation.y + ((item.targetRotationY ?? 0) - item.baseRotation.y) * eased;
+      } else if (item.type === 'skipDiscard' && item.targetPosition && item.startedAt != null) {
+        const progress = Math.max(0, Math.min(1, (now - item.startedAt) / Math.max(1, item.duration ?? 560)));
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const fade = Math.max(0, 1 - eased);
+        object.position.lerpVectors(item.basePosition, item.targetPosition, eased);
+        object.position.y = item.basePosition.y + Math.sin(progress * Math.PI) * 0.34 + eased * 0.10;
+        object.rotation.y = item.baseRotation.y + ((item.targetRotationY ?? item.baseRotation.y + 0.42) - item.baseRotation.y) * eased;
+        const scale = Math.max(0.10, 1 - eased * 0.78);
+        object.scale.setScalar(scale);
+        this.#setObjectOpacity(object, fade);
       }
     }
   }
@@ -1398,6 +1925,7 @@ export class GameLayout extends HTMLElement {
     }
     insetBottom(this.#primaryControlsRow);
     insetBottom(this.#localPlacementDock);
+    if (this.#moreOpen) insetRight(this.#tertiaryControlsRow);
     if (this.#isStartAttractMode()) {
       const startCard = this.#startOverlay?.querySelector('.startCard');
       if (this.#isMobileViewport()) insetBottom(startCard);
@@ -1450,6 +1978,11 @@ export class GameLayout extends HTMLElement {
     this.#onResize();
   }
 
+  #cancelCameraTransition() {
+    this.#cameraTransition = null;
+    if (this.#controls) this.#controls.update();
+  }
+
   #updateCameraTransition() {
     if (!this.#cameraTransition || !this.#camera || !this.#controls) return;
 
@@ -1494,8 +2027,22 @@ export class GameLayout extends HTMLElement {
     this.#shadow = this.attachShadow({ mode: 'open' });
   }
 
+  async runPerformanceScenario(name = 'late-placement', options = {}) {
+    if (name === 'playthrough') {
+      return this.#runPlaythroughPerformanceScenario(options);
+    }
+    if (name === 'table-motion') {
+      return this.#runTableMotionPerformanceScenario(options);
+    }
+    if (name !== 'late-placement') {
+      throw new Error(`Unknown performance scenario: ${name}`);
+    }
+    return this.#runLatePlacementPerformanceScenario(options);
+  }
+
   connectedCallback() {
     this.#buildDom();
+    this.#showAdvisor = this.#loadAdvisorVisibility();
     const urlParams = new URL(location.href).searchParams;
     this.#libraryOpen = urlParams.get('library') === '1';
     const libraryFocus = Number(urlParams.get('focus'));
@@ -1680,6 +2227,21 @@ export class GameLayout extends HTMLElement {
         color: #ffd2d2;
         background: rgba(78, 31, 31, 0.82);
       }
+      .localPlacementDock .localAdvisor {
+        width: auto;
+        min-width: 62px;
+        padding: 0 9px;
+        border-color: rgba(255, 215, 106, 0.46);
+        background: rgba(74, 52, 16, 0.80);
+        color: #ffe59a;
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+      .localPlacementDock.isAdvisorPlacement {
+        border-color: rgba(255, 215, 106, 0.50);
+        box-shadow: 0 0 0 2px rgba(255, 215, 106, 0.08), 0 8px 28px rgba(0,0,0,0.34);
+      }
       .localPlacementLabel {
         min-width: 34px;
         text-align: center;
@@ -1740,14 +2302,14 @@ export class GameLayout extends HTMLElement {
         max-height: calc(100dvh - 168px);
       }
       .root.isLibraryMode .controlsTertiary {
-        top: 76px;
+        top: 58px;
         right: 12px;
         min-width: 160px;
       }
       .root.isLibraryMode .controlsSecondary {
-        top: 84px;
+        top: 12px;
         right: 12px;
-        min-width: 160px;
+        min-width: 92px;
       }
       .librarySummary {
         display: grid;
@@ -1843,8 +2405,8 @@ export class GameLayout extends HTMLElement {
         gap: 6px;
         flex-direction: column;
         align-items: stretch;
-        min-width: 104px;
-        padding: 8px;
+        min-width: 92px;
+        padding: 6px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.10);
         background: rgba(20,22,28,0.72);
@@ -1853,8 +2415,8 @@ export class GameLayout extends HTMLElement {
       }
       .controlsTertiary {
         position: absolute;
-        top: 12px;
-        right: 82px;
+        top: 58px;
+        right: 12px;
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -2008,6 +2570,7 @@ export class GameLayout extends HTMLElement {
       .draftItem {
         box-sizing: border-box;
         width: 100%;
+        position: relative;
         display: grid;
         grid-template-columns: 28px max-content 28px;
         justify-content: center;
@@ -2097,6 +2660,27 @@ export class GameLayout extends HTMLElement {
       }
       .draftItem.isCurrentPick.isMine {
         background: rgba(115, 232, 150, 0.08);
+      }
+      .draftItem.isAdvisorPick {
+        border-color: rgba(255, 215, 106, 0.64);
+        background: rgba(255, 215, 106, 0.07);
+        box-shadow: 0 0 0 2px rgba(255, 215, 106, 0.10), 0 8px 18px rgba(0,0,0,0.16);
+      }
+      .advisorBadge {
+        position: absolute;
+        top: 4px;
+        right: 5px;
+        padding: 2px 5px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 225, 138, 0.45);
+        background: rgba(74, 52, 16, 0.78);
+        color: #ffe59a;
+        font-size: 9px;
+        font-weight: 850;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        pointer-events: none;
+        text-transform: uppercase;
       }
       .dominoPreview {
         width: 150px;
@@ -2731,8 +3315,8 @@ export class GameLayout extends HTMLElement {
           padding: 6px;
         }
         .controlsTertiary {
-          top: 8px;
-          right: 58px;
+          top: 56px;
+          right: 8px;
         }
         .mobileActions {
           right: 8px;
@@ -2937,6 +3521,12 @@ export class GameLayout extends HTMLElement {
     this.#btnLocalClear.textContent = 'x';
     this.#btnLocalClear.title = 'Show all moves';
     this.#btnLocalClear.setAttribute('aria-label', 'Show all moves');
+    this.#btnLocalAdvisor = document.createElement('button');
+    this.#btnLocalAdvisor.type = 'button';
+    this.#btnLocalAdvisor.className = 'localAdvisor';
+    this.#btnLocalAdvisor.textContent = 'Advisor';
+    this.#btnLocalAdvisor.title = 'Show advisor placement';
+    this.#btnLocalAdvisor.setAttribute('aria-label', 'Show advisor placement');
     this.#btnLocalPrev = document.createElement('button');
     this.#btnLocalPrev.type = 'button';
     this.#btnLocalPrev.textContent = '‹';
@@ -2956,7 +3546,7 @@ export class GameLayout extends HTMLElement {
     this.#btnLocalPlace.textContent = '✓';
     this.#btnLocalPlace.title = 'Place here';
     this.#btnLocalPlace.setAttribute('aria-label', 'Place here');
-    this.#localPlacementDock.append(this.#btnLocalClear, this.#btnLocalPrev, this.#localPlacementLabel, this.#btnLocalNext, this.#btnLocalPlace);
+    this.#localPlacementDock.append(this.#btnLocalClear, this.#btnLocalAdvisor, this.#btnLocalPrev, this.#localPlacementLabel, this.#btnLocalNext, this.#btnLocalPlace);
 
     this.#hud = document.createElement('div');
     this.#hud.className = 'hud';
@@ -3002,11 +3592,17 @@ export class GameLayout extends HTMLElement {
     this.#btnCenter.textContent = 'Center';
     this.#btnCenter.className = 'secondaryAction iconAction';
     this.#btnMore = document.createElement('button');
-    this.#btnMore.textContent = 'More';
+    this.#btnMore.textContent = 'Menu';
     this.#btnMore.className = 'secondaryAction iconAction';
     this.#btnLibrary = document.createElement('button');
     this.#btnLibrary.textContent = 'Library';
     this.#btnLibrary.className = 'secondaryAction';
+    this.#btnToggleAdvisor = document.createElement('button');
+    this.#btnToggleAdvisor.textContent = 'Hide Advisor';
+    this.#btnToggleAdvisor.className = 'secondaryAction';
+    this.#btnToggleMiniMap = document.createElement('button');
+    this.#btnToggleMiniMap.textContent = 'Show Minimap';
+    this.#btnToggleMiniMap.className = 'secondaryAction';
     this.#btnHighScores = document.createElement('button');
     this.#btnHighScores.textContent = 'High Scores';
     this.#btnHighScores.className = 'secondaryAction';
@@ -3016,10 +3612,22 @@ export class GameLayout extends HTMLElement {
     this.#btnEndGame = document.createElement('button');
     this.#btnEndGame.textContent = 'End Game';
     this.#btnEndGame.className = 'secondaryAction destructiveAction';
-    this.#primaryControlsRow.append(this.#btnNextValid, this.#btnPlace);
-    this.#secondaryControlsRow.append(this.#btnRotate, this.#btnResetTile, this.#btnScores, this.#btnCenter, this.#btnSkip, this.#btnLibrary, this.#btnMore);
+    this.#primaryControlsRow.append(this.#btnSkip, this.#btnNextValid, this.#btnPlace);
+    this.#secondaryControlsRow.append(this.#btnMore);
     this.#tertiaryControlsRow.hidden = true;
-    this.#tertiaryControlsRow.append(this.#btnUndoRequest, this.#btnHighScores, this.#btnRestart, this.#btnEndGame);
+    this.#tertiaryControlsRow.append(
+      this.#btnCenter,
+      this.#btnLibrary,
+      this.#btnRotate,
+      this.#btnResetTile,
+      this.#btnScores,
+      this.#btnToggleAdvisor,
+      this.#btnToggleMiniMap,
+      this.#btnUndoRequest,
+      this.#btnHighScores,
+      this.#btnRestart,
+      this.#btnEndGame
+    );
 
     this.#hudHint = document.createElement('div');
     this.#hudHint.className = 'muted hudHint';
@@ -3095,6 +3703,7 @@ export class GameLayout extends HTMLElement {
     this.#root?.classList.toggle('players4', count === 4);
     const config = new GameConfiguration(count, false, this.#usesExpandedBoard(count));
     this.#game = new WebGameManager(config, seed);
+    this.#game.setGroupedPlacementTurns?.(this.#hotseat);
     const displayNames = Array.from({ length: count }, (_, index) => {
       const provided = typeof playerNames?.[index] === 'string' ? playerNames[index].trim() : '';
       return provided;
@@ -3103,7 +3712,18 @@ export class GameLayout extends HTMLElement {
     this.#playerNames = displayNames;
     this.#remotePlacementPreviews.clear();
     this.#lastSentPlacementPreviewKey = '';
+    this.#clearAutoDraftClaimHold();
+    this.#draftClaimAnimationStartedAt.clear();
+    this.#draftClaimAnimationSourceByKey.clear();
+    this.#kingdomMatBoundsByPlayer.clear();
+    this.#invalidateTabletopLayoutCache();
+    this.#lastCanvasDraftOrigin = null;
+    this.#placementGhostAnimation = null;
+    this.#placementReturnAnimations.clear();
+    this.#placementSkipAnimations.clear();
+    this.#clearScoreBursts();
     this.#recordedCompletedGameKey = null;
+    this.#invalidatePlacementCaches();
     this.#game.start(gameNames);
   }
 
@@ -3123,6 +3743,22 @@ export class GameLayout extends HTMLElement {
       // ignore
     }
     return clean;
+  }
+
+  #loadAdvisorVisibility() {
+    try {
+      return localStorage.getItem(ADVISOR_VISIBILITY_STORAGE_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  }
+
+  #saveAdvisorVisibility() {
+    try {
+      localStorage.setItem(ADVISOR_VISIBILITY_STORAGE_KEY, this.#showAdvisor ? '1' : '0');
+    } catch {
+      // ignore
+    }
   }
 
   #loadScoreHistory() {
@@ -3539,6 +4175,80 @@ export class GameLayout extends HTMLElement {
     return Boolean(this.#reducedMotionQuery?.matches);
   }
 
+  #clearAutoDraftClaimHold() {
+    if (this.#autoDraftClaimHoldTimer != null) {
+      globalThis.clearTimeout?.(this.#autoDraftClaimHoldTimer);
+    }
+    this.#autoDraftClaimHoldTimer = null;
+    this.#autoDraftClaimHoldUntil = 0;
+    this.#autoDraftClaimHoldOrigin = null;
+  }
+
+  #autoDraftClaimHoldActive(now = performance.now()) {
+    return this.#autoDraftClaimHoldUntil > now;
+  }
+
+  #autoDraftClaimHeldOrigin(now = performance.now()) {
+    if (!this.#autoDraftClaimHoldActive(now)) return null;
+    return this.#autoDraftClaimHoldOrigin;
+  }
+
+  #draftOriginSnapshotForAutoDraft(action, previousState) {
+    if (previousState !== GameState.DRAFT || action?.type !== 'pickDraft' || !action.payload?.auto) {
+      return null;
+    }
+    const origin = this.#lastCanvasDraftOrigin ?? this.#canvasDraftOrigin();
+    return origin ? { x: origin.x, z: origin.z } : null;
+  }
+
+  #startAutoDraftClaimHold(origin = null) {
+    if (this.#prefersReducedMotion()) {
+      this.#clearAutoDraftClaimHold();
+      return false;
+    }
+
+    const now = performance.now();
+    const duration = 860;
+    this.#autoDraftClaimHoldUntil = now + duration;
+    this.#autoDraftClaimHoldOrigin = origin
+      ? { x: origin.x, z: origin.z }
+      : this.#lastCanvasDraftOrigin
+        ? { x: this.#lastCanvasDraftOrigin.x, z: this.#lastCanvasDraftOrigin.z }
+        : null;
+
+    if (this.#autoDraftClaimHoldTimer != null) {
+      globalThis.clearTimeout?.(this.#autoDraftClaimHoldTimer);
+    }
+    this.#autoDraftClaimHoldTimer = globalThis.setTimeout?.(() => {
+      this.#autoDraftClaimHoldTimer = null;
+      if (this.#autoDraftClaimHoldActive()) return;
+      this.#autoDraftClaimHoldUntil = 0;
+      this.#autoDraftClaimHoldOrigin = null;
+      this.#refreshHud();
+      this.#renderBoard();
+      this.#renderGhost();
+      if (this.#game?.state === GameState.PLACE && !this.#game.isGameOver) {
+        this.#centerOnFocusedBoard(true);
+      }
+    }, duration + 40) ?? null;
+
+    return true;
+  }
+
+  #maybeStartAutoDraftClaimHold(action, previousState, phaseChanged, origin) {
+    if (
+      action?.type !== 'pickDraft'
+      || !action.payload?.auto
+      || previousState !== GameState.DRAFT
+      || !phaseChanged
+      || this.#game?.state !== GameState.PLACE
+    ) {
+      return false;
+    }
+
+    return this.#startAutoDraftClaimHold(origin);
+  }
+
   #startAttractSeedKey() {
     return [
       this.#roomId || this.#pendingInviteRoom || 'home',
@@ -3731,8 +4441,9 @@ export class GameLayout extends HTMLElement {
         this.#actionHistory = [];
         for (const a of (actions || [])) {
           this.#actionHistory.push(a);
-          this.#applyNetworkAction(a);
+          this.#applyNetworkAction(a, { effects: false });
         }
+        this.#settleCurrentDraftClaimAnimations();
         for (const preview of (previews || [])) {
           this.#handlePlacementPreview(preview, { render: false });
         }
@@ -3764,18 +4475,30 @@ export class GameLayout extends HTMLElement {
       },
       onAction: (action) => {
         const previousState = this.#game?.state;
+        const autoDraftOrigin = this.#draftOriginSnapshotForAutoDraft(action, previousState);
         this.#actionHistory.push(action);
         this.#applyNetworkAction(action);
         const focusChanged = this.#syncFocusedBoardToPhase();
         const phaseChanged = previousState != null && previousState !== this.#game?.state;
+        const autoDraftHoldStarted = this.#maybeStartAutoDraftClaimHold(action, previousState, phaseChanged, autoDraftOrigin);
+        const needsBoardRender = this.#actionNeedsBoardRender(action);
         this.#refreshHud();
-        this.#renderBoard();
+        if (needsBoardRender) {
+          this.#renderBoard();
+        } else {
+          this.#syncBoardLayerPositions();
+        }
         this.#renderGhost();
         if (action.type === 'rotate' || action.type === 'selectPlacementTile' || action.type === 'setPlacementSelection') {
           this.#sendPlacementPreview();
         }
-        if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
-          this.#centerOnFocusedBoard(focusChanged || phaseChanged);
+        const shouldCenter = action.type === 'place'
+          ? phaseChanged || (this.#hotseat && focusChanged)
+          : focusChanged || phaseChanged || action.type === 'pickDraft' || action.type === 'skip' || action.type === 'restart';
+        if (shouldCenter && !autoDraftHoldStarted) {
+          this.#centerOnFocusedBoard(focusChanged || phaseChanged || action.type === 'pickDraft');
+        } else if (action.type === 'place') {
+          this.#cancelCameraTransition();
         }
         this.#autoResolveForcedDraft();
       },
@@ -3899,20 +4622,38 @@ export class GameLayout extends HTMLElement {
     this.#myName = this.#playerNames[this.#myPlayerIndex] ?? this.#game.players[this.#myPlayerIndex]?.name ?? 'Hotseat';
   }
 
-  #applyLocalAction(action) {
+  #applyLocalAction(action, { render = true } = {}) {
     const previousState = this.#game?.state;
+    const autoDraftOrigin = this.#draftOriginSnapshotForAutoDraft(action, previousState);
     this.#actionHistory.push(action);
-    this.#applyNetworkAction(action);
+    this.#applyNetworkAction(action, { effects: render });
     this.#syncHotseatPlayerIndex();
     const focusChanged = this.#syncFocusedBoardToPhase();
     const phaseChanged = previousState != null && previousState !== this.#game?.state;
-    this.#refreshHud();
-    this.#renderBoard();
-    this.#renderGhost();
-    if (focusChanged || phaseChanged || action.type === 'place' || action.type === 'skip' || action.type === 'restart') {
-      this.#centerOnFocusedBoard(focusChanged || phaseChanged);
+    const autoDraftHoldStarted = this.#maybeStartAutoDraftClaimHold(action, previousState, phaseChanged, autoDraftOrigin);
+    const needsBoardRender = this.#actionNeedsBoardRender(action);
+
+    if (!render) {
+      this.#syncBoardLayerPositions();
+      this.#autoResolveForcedDraft();
+      return;
     }
-    this.#renderMiniMaps();
+
+    this.#refreshHud();
+    if (needsBoardRender) {
+      this.#renderBoard();
+    } else {
+      this.#syncBoardLayerPositions();
+    }
+    this.#renderGhost();
+    const shouldCenter = action.type === 'place'
+      ? phaseChanged || (this.#hotseat && focusChanged)
+      : focusChanged || phaseChanged || action.type === 'pickDraft' || action.type === 'skip' || action.type === 'restart';
+    if (shouldCenter && !autoDraftHoldStarted) {
+      this.#centerOnFocusedBoard(focusChanged || phaseChanged || action.type === 'pickDraft');
+    } else if (action.type === 'place') {
+      this.#cancelCameraTransition();
+    }
     this.#autoResolveForcedDraft();
   }
 
@@ -3954,6 +4695,614 @@ export class GameLayout extends HTMLElement {
       || type === 'restart';
   }
 
+  #actionNeedsBoardRender(action) {
+    return action?.type === 'pickDraft'
+      || action?.type === 'place'
+      || action?.type === 'skip'
+      || action?.type === 'restart'
+      || action?.type === 'approveUndo';
+  }
+
+  #resetPerfGame(seed, playerCount) {
+    const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
+    const names = Array.from({ length: count }, (_, index) => (
+      index === 0 ? 'Perf Blue' : index === 1 ? 'Perf Green' : `Perf ${index + 1}`
+    ));
+
+    this.#mp?.disconnect?.();
+    this.#homeMode = false;
+    this.#hotseat = true;
+    this.#roomId = null;
+    this.#myName = 'Perf';
+    this.#connStatus = { state: 'perf' };
+    this.#pendingUndoRequest = null;
+    this.#lobbyNotice = null;
+    this.#autoDraftInFlightKey = null;
+    this.#hoverAnchor = null;
+    this.#localPlacementFocus = null;
+    this.#hoverAnchorAuto = false;
+    this.#showPlacementScores = false;
+    this.#moreOpen = false;
+    this.#libraryOpen = false;
+    this.#libraryFilter = null;
+    this.#libraryFocusedDominoNumber = null;
+    this.#scoreHistoryOpen = false;
+    this.#scoreHistorySelectedId = null;
+    this.#actionHistory = [];
+    this.#remotePlacementPreviews.clear();
+    this.#lastSentPlacementPreviewKey = '';
+    this.#initGame(seed, names, count);
+    this.#syncHotseatPlayerIndex();
+    this.#mp = {
+      sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
+      disconnect: () => {},
+    };
+  }
+
+  #perfDraftUntilPlacement() {
+    let picks = 0;
+    let guard = 0;
+    while (this.#game?.state === GameState.DRAFT && !this.#game.isGameOver && guard < 8) {
+      guard += 1;
+      const forcedIndex = this.#game.forcedDraftIndex;
+      const index = forcedIndex ?? this.#game.currentDraft.findIndex((slot) => slot.player == null && !slot.placed);
+      if (index < 0) break;
+      this.#game.pickDraft(index);
+      picks += 1;
+    }
+    return picks;
+  }
+
+  #perfChoosePlacementOption(options, offset = 0) {
+    if (!options.length) return null;
+    return options[offset % options.length];
+  }
+
+  #perfAdvanceGame(targetPlacements = 24) {
+    const stats = {
+      draftPicks: 0,
+      placements: 0,
+      skips: 0,
+      failedPlacements: 0,
+      guards: 0,
+    };
+
+    while (!this.#game.isGameOver && stats.placements < targetPlacements && stats.guards < 1000) {
+      stats.guards += 1;
+
+      if (this.#game.state === GameState.DRAFT) {
+        stats.draftPicks += this.#perfDraftUntilPlacement();
+        continue;
+      }
+
+      if (this.#game.state !== GameState.PLACE) break;
+
+      const options = this.#game.getCurrentPlacementOptions();
+      if (!options.length) {
+        const skipped = this.#game.skipCurrentPlacement();
+        if (skipped?.ok) stats.skips += 1;
+        else break;
+        continue;
+      }
+
+      const option = this.#perfChoosePlacementOption(options, stats.placements);
+      this.#game.setCurrentPlacementSelection(option.dominoNumber, option.orientation);
+      const result = this.#game.tryPlaceCurrentDominoAt(option.x, option.y, option.anchorEnd);
+      if (result?.ok) {
+        stats.placements += 1;
+      } else {
+        stats.failedPlacements += 1;
+        const skipped = this.#game.skipCurrentPlacement();
+        if (skipped?.ok) stats.skips += 1;
+        else break;
+      }
+    }
+
+    return stats;
+  }
+
+  #perfEnsurePlacementPhase() {
+    let guard = 0;
+    let draftPicks = 0;
+    let skips = 0;
+    while (!this.#game.isGameOver && guard < 200) {
+      guard += 1;
+      if (this.#game.state === GameState.DRAFT) {
+        draftPicks += this.#perfDraftUntilPlacement();
+        continue;
+      }
+      if (this.#game.state !== GameState.PLACE) break;
+
+      const options = this.#game.getCurrentPlacementOptions();
+      if (options.length) return { options, draftPicks, skips };
+
+      const skipped = this.#game.skipCurrentPlacement();
+      if (skipped?.ok) skips += 1;
+      else break;
+    }
+    return { options: [], draftPicks, skips };
+  }
+
+  #perfCountersSnapshot() {
+    return { ...this.#perfCounters };
+  }
+
+  #perfObjectCount(object = this.#tilesGroup) {
+    if (!object) return 0;
+    let count = 0;
+    object.traverse(() => {
+      count += 1;
+    });
+    return count;
+  }
+
+  #perfAnimatedObjectCountsByType() {
+    const counts = {};
+    for (const item of this.#animatedObjects) {
+      counts[item.type] = (counts[item.type] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  #perfSummary(values) {
+    const clean = values
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    if (!clean.length) {
+      return { count: 0, avg: 0, min: 0, p50: 0, p95: 0, max: 0 };
+    }
+    const pick = (p) => clean[Math.min(clean.length - 1, Math.floor((clean.length - 1) * p))];
+    const sum = clean.reduce((total, value) => total + value, 0);
+    return {
+      count: clean.length,
+      avg: sum / clean.length,
+      min: clean[0],
+      p50: pick(0.50),
+      p95: pick(0.95),
+      max: clean[clean.length - 1],
+    };
+  }
+
+  #perfRoundMetric(metric) {
+    const rounded = {};
+    for (const [key, value] of Object.entries(metric)) {
+      rounded[key] = typeof value === 'number' ? Number(value.toFixed(2)) : value;
+    }
+    return rounded;
+  }
+
+  #perfMeasureSync(fn) {
+    const startedAt = performance.now();
+    fn();
+    return performance.now() - startedAt;
+  }
+
+  #perfNextFrame() {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(performance.now()));
+    });
+  }
+
+  async #perfMeasureAction(label, iterations, actionFn) {
+    const syncMs = [];
+    const nextFrameMs = [];
+    const renderBoardDeltas = [];
+    const renderGhostDeltas = [];
+
+    for (let i = 0; i < iterations; i++) {
+      const before = this.#perfCountersSnapshot();
+      const startedAt = performance.now();
+      actionFn(i);
+      const syncDoneAt = performance.now();
+      await this.#perfNextFrame();
+      const frameDoneAt = performance.now();
+      const after = this.#perfCountersSnapshot();
+
+      syncMs.push(syncDoneAt - startedAt);
+      nextFrameMs.push(frameDoneAt - startedAt);
+      renderBoardDeltas.push(after.renderBoard - before.renderBoard);
+      renderGhostDeltas.push(after.renderGhost - before.renderGhost);
+    }
+
+    return {
+      label,
+      syncMs: this.#perfRoundMetric(this.#perfSummary(syncMs)),
+      nextFrameMs: this.#perfRoundMetric(this.#perfSummary(nextFrameMs)),
+      renderBoardCalls: renderBoardDeltas.reduce((total, value) => total + value, 0),
+      renderGhostCalls: renderGhostDeltas.reduce((total, value) => total + value, 0),
+    };
+  }
+
+  async #perfMeasureStep(label, actionFn) {
+    const before = this.#perfCountersSnapshot();
+    const startedAt = performance.now();
+    actionFn();
+    const syncDoneAt = performance.now();
+    await this.#perfNextFrame();
+    const frameDoneAt = performance.now();
+    const after = this.#perfCountersSnapshot();
+
+    return {
+      label,
+      syncMs: syncDoneAt - startedAt,
+      nextFrameMs: frameDoneAt - startedAt,
+      renderBoardCalls: after.renderBoard - before.renderBoard,
+      renderGhostCalls: after.renderGhost - before.renderGhost,
+    };
+  }
+
+  #perfSummarizeSteps(steps) {
+    const byLabel = new Map();
+    for (const step of steps) {
+      if (!byLabel.has(step.label)) {
+        byLabel.set(step.label, {
+          syncMs: [],
+          nextFrameMs: [],
+          renderBoardCalls: 0,
+          renderGhostCalls: 0,
+        });
+      }
+      const bucket = byLabel.get(step.label);
+      bucket.syncMs.push(step.syncMs);
+      bucket.nextFrameMs.push(step.nextFrameMs);
+      bucket.renderBoardCalls += step.renderBoardCalls;
+      bucket.renderGhostCalls += step.renderGhostCalls;
+    }
+
+    const summary = {};
+    for (const [label, bucket] of byLabel.entries()) {
+      summary[label] = {
+        count: bucket.syncMs.length,
+        syncMs: this.#perfRoundMetric(this.#perfSummary(bucket.syncMs)),
+        nextFrameMs: this.#perfRoundMetric(this.#perfSummary(bucket.nextFrameMs)),
+        renderBoardCalls: bucket.renderBoardCalls,
+        renderGhostCalls: bucket.renderGhostCalls,
+      };
+    }
+    return summary;
+  }
+
+  #perfFirstAvailableDraftIndex() {
+    return this.#game?.currentDraft?.findIndex((slot) => slot?.player == null && !slot?.placed) ?? -1;
+  }
+
+  #perfPlacementOptionForTurn() {
+    const options = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions(), { preserveDomino: true });
+    if (!options.length) return null;
+    const advisor = this.#advisorPlacementOption();
+    if (advisor) {
+      return options.find((option) =>
+        option.dominoNumber === advisor.dominoNumber
+        && option.orientation === advisor.orientation
+        && option.x === advisor.x
+        && option.y === advisor.y
+        && option.anchorEnd === advisor.anchorEnd
+      ) ?? options[0];
+    }
+    return options[0];
+  }
+
+  async #perfMeasureFrames(frameCount = 60) {
+    const intervals = [];
+    let previous = await this.#perfNextFrame();
+    for (let i = 0; i < frameCount; i++) {
+      const next = await this.#perfNextFrame();
+      intervals.push(next - previous);
+      previous = next;
+    }
+    return this.#perfRoundMetric(this.#perfSummary(intervals));
+  }
+
+  async #runLatePlacementPerformanceScenario(options = {}) {
+    const seed = Number.isFinite(options.seed) ? options.seed >>> 0 : 123;
+    const playerCount = this.#normalizePlayerCount(options.playerCount ?? 2, 2);
+    const setupPlacements = Math.max(0, Math.min(40, Number.parseInt(options.setupPlacements ?? 28, 10)));
+    const iterations = Math.max(1, Math.min(80, Number.parseInt(options.iterations ?? 30, 10)));
+    const frameSamples = Math.max(1, Math.min(180, Number.parseInt(options.frameSamples ?? 60, 10)));
+
+    const setupStartedAt = performance.now();
+    this.#resetPerfGame(seed, playerCount);
+    const setupStats = this.#perfAdvanceGame(setupPlacements);
+    const placementSetup = this.#perfEnsurePlacementPhase();
+    const setupMs = performance.now() - setupStartedAt;
+
+    this.#syncHotseatPlayerIndex();
+    this.#syncFocusedBoardToPhase();
+    this.#refreshHud();
+    const initialRenderBoardMs = this.#perfMeasureSync(() => this.#renderBoard());
+    this.#centerOnFocusedBoard(true);
+    this.#renderGhost();
+    await this.#perfNextFrame();
+
+    const initialOptions = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions(), { preserveDomino: true });
+    if (initialOptions.length) {
+      this.#applyPlacementOption(initialOptions[0]);
+      this.#renderGhost();
+      this.#refreshHud();
+      await this.#perfNextFrame();
+    }
+
+    const interactionCountersBefore = this.#perfCountersSnapshot();
+    const cycle = await this.#perfMeasureAction('cycle-local-placement', iterations, () => {
+      this.#cycleLocalPlacement(1);
+    });
+    const rotate = await this.#perfMeasureAction('rotate-placement', iterations, () => {
+      this.#applyLocalAction({ type: 'rotate', payload: this.#placementActionPayload() });
+    });
+    const frame = await this.#perfMeasureFrames(frameSamples);
+    const interactionCountersAfter = this.#perfCountersSnapshot();
+
+    return {
+      scenario: 'late-placement',
+      seed,
+      playerCount,
+      setup: {
+        requestedPlacements: setupPlacements,
+        setupMs: Number(setupMs.toFixed(2)),
+        initialRenderBoardMs: Number(initialRenderBoardMs.toFixed(2)),
+        boardObjectCount: this.#perfObjectCount(),
+        animatedObjectCount: this.#animatedObjects.length,
+        optionsAvailable: placementSetup.options.length,
+        ...setupStats,
+        setupDraftPicks: setupStats.draftPicks + placementSetup.draftPicks,
+        setupSkips: setupStats.skips + placementSetup.skips,
+      },
+      actions: {
+        cycle,
+        rotate,
+      },
+      frame,
+      counters: {
+        beforeInteractions: interactionCountersBefore,
+        afterInteractions: interactionCountersAfter,
+        renderBoardDuringInteractions: interactionCountersAfter.renderBoard - interactionCountersBefore.renderBoard,
+        renderGhostDuringInteractions: interactionCountersAfter.renderGhost - interactionCountersBefore.renderGhost,
+      },
+    };
+  }
+
+  async #runPlaythroughPerformanceScenario(options = {}) {
+    const seed = Number.isFinite(options.seed) ? options.seed >>> 0 : 123;
+    const playerCount = this.#normalizePlayerCount(options.playerCount ?? 2, 2);
+    const maxActions = Math.max(1, Math.min(240, Number.parseInt(options.maxActions ?? 180, 10)));
+    const frameSamples = Math.max(1, Math.min(180, Number.parseInt(options.frameSamples ?? 60, 10)));
+
+    const setupStartedAt = performance.now();
+    this.#resetPerfGame(seed, playerCount);
+    this.#syncHotseatPlayerIndex();
+    this.#syncFocusedBoardToPhase();
+    this.#refreshHud();
+    const initialRenderBoardMs = this.#perfMeasureSync(() => this.#renderBoard());
+    this.#centerOnFocusedBoard(true);
+    this.#renderGhost();
+    await this.#perfNextFrame();
+    const initialObjectCount = this.#perfObjectCount();
+    const initialAnimatedObjectCount = this.#animatedObjects.length;
+    const setupMs = performance.now() - setupStartedAt;
+
+    const steps = [];
+    const countersBefore = this.#perfCountersSnapshot();
+    let draftPicks = 0;
+    let placements = 0;
+    let skips = 0;
+    let failedPlacements = 0;
+    let guards = 0;
+
+    while (!this.#game.isGameOver && guards < maxActions) {
+      guards += 1;
+      this.#syncHotseatPlayerIndex();
+
+      if (this.#game.state === GameState.DRAFT) {
+        const activeIdx = this.#game.currentPickingPlayerIndex;
+        const suggestion = this.#advisor.suggestDraftMove(this.#game, activeIdx);
+        const index = Number.isInteger(suggestion?.index) ? suggestion.index : this.#perfFirstAvailableDraftIndex();
+        if (index < 0) break;
+        steps.push(await this.#perfMeasureStep('draft-pick', () => {
+          this.#mp?.sendAction('pickDraft', { index, perf: true });
+        }));
+        draftPicks += 1;
+        continue;
+      }
+
+      if (this.#game.state === GameState.PLACE) {
+        const option = this.#perfPlacementOptionForTurn();
+        if (!option) {
+          steps.push(await this.#perfMeasureStep('skip-placement', () => {
+            this.#mp?.sendAction('skip', this.#placementActionPayload({ perf: true }));
+          }));
+          skips += 1;
+          continue;
+        }
+
+        steps.push(await this.#perfMeasureStep('select-placement', () => {
+          this.#applyPlacementOption(option);
+          this.#renderGhost();
+          this.#syncMobileActions();
+          this.#refreshHud();
+        }));
+
+        const beforePlacements = this.#game.players
+          .reduce((total, player) => total + Math.max(0, Object.keys(player.board.board).length - 1), 0);
+        steps.push(await this.#perfMeasureStep('confirm-placement', () => {
+          this.#tryPlaceAtHover();
+        }));
+        const afterPlacements = this.#game.players
+          .reduce((total, player) => total + Math.max(0, Object.keys(player.board.board).length - 1), 0);
+        if (afterPlacements > beforePlacements) placements += 1;
+        else failedPlacements += 1;
+        continue;
+      }
+
+      break;
+    }
+
+    const countersAfter = this.#perfCountersSnapshot();
+    const frame = await this.#perfMeasureFrames(frameSamples);
+
+    return {
+      scenario: 'playthrough',
+      seed,
+      playerCount,
+      setup: {
+        setupMs: Number(setupMs.toFixed(2)),
+        initialRenderBoardMs: Number(initialRenderBoardMs.toFixed(2)),
+        boardObjectCount: initialObjectCount,
+        animatedObjectCount: initialAnimatedObjectCount,
+      },
+      playthrough: {
+        completed: Boolean(this.#game.isGameOver),
+        guards,
+        draftPicks,
+        placements,
+        skips,
+        failedPlacements,
+        finalState: this.#game.state?.description ?? String(this.#game.state),
+        finalBoardObjectCount: this.#perfObjectCount(),
+        finalAnimatedObjectCount: this.#animatedObjects.length,
+        scores: this.#game.players.map((player, index) => ({
+          playerIndex: index,
+          name: player.name,
+          score: player.board.score,
+          tiles: Math.max(0, Object.keys(player.board.board).length - 1),
+        })),
+      },
+      actions: this.#perfSummarizeSteps(steps),
+      frame,
+      counters: {
+        beforeInteractions: countersBefore,
+        afterInteractions: countersAfter,
+        renderBoardDuringInteractions: countersAfter.renderBoard - countersBefore.renderBoard,
+        renderGhostDuringInteractions: countersAfter.renderGhost - countersBefore.renderGhost,
+      },
+    };
+  }
+
+  async #runTableMotionPerformanceScenario(options = {}) {
+    const seed = Number.isFinite(options.seed) ? options.seed >>> 0 : 123;
+    const playerCount = this.#normalizePlayerCount(options.playerCount ?? 2, 2);
+    const maxActions = Math.max(1, Math.min(240, Number.parseInt(options.maxActions ?? 120, 10)));
+    const frameSamples = Math.max(1, Math.min(180, Number.parseInt(options.frameSamples ?? 60, 10)));
+    const previousAnimationFilter = this.#perfAnimationTypeFilter;
+    this.#perfAnimationTypeFilter = new Set([
+      'draftClaim',
+      'draftTray',
+      'kingdomMat',
+      'placementGhost',
+      'placementReturn',
+      'skipDiscard',
+    ]);
+
+    try {
+      const setupStartedAt = performance.now();
+      this.#resetPerfGame(seed, playerCount);
+      this.#syncHotseatPlayerIndex();
+      this.#syncFocusedBoardToPhase();
+      this.#refreshHud();
+      const initialRenderBoardMs = this.#perfMeasureSync(() => this.#renderBoard());
+      this.#centerOnFocusedBoard(true);
+      this.#renderGhost();
+      await this.#perfNextFrame();
+      const initialObjectCount = this.#perfObjectCount();
+      const initialAnimatedObjectCount = this.#animatedObjects.length;
+      const initialAnimatedObjectTypes = this.#perfAnimatedObjectCountsByType();
+      const setupMs = performance.now() - setupStartedAt;
+
+      const steps = [];
+      const countersBefore = this.#perfCountersSnapshot();
+      let draftPicks = 0;
+      let placements = 0;
+      let skips = 0;
+      let failedPlacements = 0;
+      let guards = 0;
+
+      while (!this.#game.isGameOver && guards < maxActions) {
+        guards += 1;
+        this.#syncHotseatPlayerIndex();
+
+        if (this.#game.state === GameState.DRAFT) {
+          const activeIdx = this.#game.currentPickingPlayerIndex;
+          const suggestion = this.#advisor.suggestDraftMove(this.#game, activeIdx);
+          const index = Number.isInteger(suggestion?.index) ? suggestion.index : this.#perfFirstAvailableDraftIndex();
+          if (index < 0) break;
+          steps.push(await this.#perfMeasureStep('draft-pick', () => {
+            this.#mp?.sendAction('pickDraft', { index, perf: true });
+          }));
+          draftPicks += 1;
+          continue;
+        }
+
+        if (this.#game.state === GameState.PLACE) {
+          const option = this.#perfPlacementOptionForTurn();
+          if (!option) {
+            steps.push(await this.#perfMeasureStep('skip-placement', () => {
+              this.#mp?.sendAction('skip', this.#placementActionPayload({ perf: true }));
+            }));
+            skips += 1;
+            continue;
+          }
+
+          steps.push(await this.#perfMeasureStep('select-placement', () => {
+            this.#applyPlacementOption(option);
+            this.#renderGhost();
+            this.#syncMobileActions();
+            this.#refreshHud();
+          }));
+
+          const beforePlacements = this.#game.players
+            .reduce((total, player) => total + Math.max(0, Object.keys(player.board.board).length - 1), 0);
+          steps.push(await this.#perfMeasureStep('confirm-placement', () => {
+            this.#tryPlaceAtHover();
+          }));
+          const afterPlacements = this.#game.players
+            .reduce((total, player) => total + Math.max(0, Object.keys(player.board.board).length - 1), 0);
+          if (afterPlacements > beforePlacements) placements += 1;
+          else failedPlacements += 1;
+          continue;
+        }
+
+        break;
+      }
+
+      const countersAfter = this.#perfCountersSnapshot();
+      const frame = await this.#perfMeasureFrames(frameSamples);
+
+      return {
+        scenario: 'table-motion',
+        seed,
+        playerCount,
+        setup: {
+          setupMs: Number(setupMs.toFixed(2)),
+          initialRenderBoardMs: Number(initialRenderBoardMs.toFixed(2)),
+          boardObjectCount: initialObjectCount,
+          animatedObjectCount: initialAnimatedObjectCount,
+          animatedObjectTypes: initialAnimatedObjectTypes,
+        },
+        playthrough: {
+          completed: Boolean(this.#game.isGameOver),
+          guards,
+          draftPicks,
+          placements,
+          skips,
+          failedPlacements,
+          finalState: this.#game.state?.description ?? String(this.#game.state),
+          finalBoardObjectCount: this.#perfObjectCount(),
+          finalAnimatedObjectCount: this.#animatedObjects.length,
+          finalAnimatedObjectTypes: this.#perfAnimatedObjectCountsByType(),
+        },
+        actions: this.#perfSummarizeSteps(steps),
+        frame,
+        counters: {
+          beforeInteractions: countersBefore,
+          afterInteractions: countersAfter,
+          renderBoardDuringInteractions: countersAfter.renderBoard - countersBefore.renderBoard,
+          renderGhostDuringInteractions: countersAfter.renderGhost - countersBefore.renderGhost,
+        },
+      };
+    } finally {
+      this.#perfAnimationTypeFilter = previousAnimationFilter;
+    }
+  }
+
   #applyGameplayAction(action) {
     switch (action.type) {
       case 'pickDraft':
@@ -3961,12 +5310,14 @@ export class GameLayout extends HTMLElement {
         return;
       case 'rotate': {
         const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        this.#applyPayloadPlacementSelection(playerIndex, action.payload);
         if (playerIndex == null) this.#game.rotateCurrentDomino();
         else this.#game.rotatePlacementDominoForPlayer(playerIndex);
         return;
       }
       case 'skip': {
         const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        this.#applyPayloadPlacementSelection(playerIndex, action.payload);
         if (playerIndex == null) this.#game.skipCurrentPlacement();
         else this.#game.skipPlacementForPlayer(playerIndex);
         return;
@@ -3997,6 +5348,7 @@ export class GameLayout extends HTMLElement {
         // Network-safe payloads use string anchor ends.
         // Default to LEFT for backwards/defensive compatibility.
         const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        this.#applyPayloadPlacementSelection(playerIndex, action.payload);
         const anchorEnd = action.payload.anchorEnd === 'RIGHT' ? DominoEnd.RIGHT : DominoEnd.LEFT;
         if (playerIndex == null) {
           this.#game.tryPlaceCurrentDominoAt(action.payload.x, action.payload.y, anchorEnd);
@@ -4013,6 +5365,17 @@ export class GameLayout extends HTMLElement {
         return;
       }
     }
+  }
+
+  #applyPayloadPlacementSelection(playerIndex, payload = {}) {
+    const dominoNumber = Number(payload?.dominoNumber);
+    const orientation = Number(payload?.orientation);
+    if (!Number.isInteger(dominoNumber) || ![0, 90, 180, 270].includes(orientation)) return null;
+
+    if (playerIndex == null) {
+      return this.#game.setCurrentPlacementSelection?.(dominoNumber, orientation) ?? null;
+    }
+    return this.#game.setPlacementSelectionForPlayer?.(playerIndex, dominoNumber, orientation) ?? null;
   }
 
   #effectiveGameplayActionsFromHistory() {
@@ -4141,8 +5504,9 @@ export class GameLayout extends HTMLElement {
     });
   }
 
-  #applyNetworkAction(action) {
+  #applyNetworkAction(action, { effects = true } = {}) {
     if (this.#isGameplayActionType(action.type)) {
+      this.#invalidatePlacementCaches();
       if (
         action.type === 'setPlacementSelection'
         && !this.#hotseat
@@ -4152,27 +5516,45 @@ export class GameLayout extends HTMLElement {
       ) {
         return;
       }
-        this.#applyGameplayAction(action);
-        if ((action.type === 'rotate' || action.type === 'selectPlacementTile') && !this.#isApplyingPlacementOption) {
-          this.#repairSelectedPlacementAfterDominoChange();
-        } else if (action.type === 'pickDraft' || action.type === 'restart') {
-          this.#remotePlacementPreviews.clear();
+      if (action.type === 'pickDraft') {
+        this.#prepareDraftClaimAnimation(action.payload?.index);
+      } else if (action.type === 'skip') {
+        this.#preparePlacementSkipAnimation(action);
+      }
+      const scoreBurst = effects ? this.#placementScoreBurstSnapshot(action) : null;
+      this.#applyGameplayAction(action);
+      this.#startPlacementScoreBurst(scoreBurst);
+      if (
+        (action.type === 'rotate' || action.type === 'selectPlacementTile')
+        && !this.#isApplyingPlacementOption
+        && !action.payload?.rackOnly
+      ) {
+        this.#repairSelectedPlacementAfterDominoChange();
+      } else if (action.type === 'pickDraft' || action.type === 'restart') {
+        this.#remotePlacementPreviews.clear();
+        this.#placementReturnAnimations.clear();
+        if (action.type === 'restart') this.#placementSkipAnimations.clear();
+        this.#hoverAnchor = null;
+        this.#localPlacementFocus = null;
+        this.#hoverAnchorAuto = false;
+      } else if (action.type === 'place' || action.type === 'skip') {
+        const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
+        if (playerIndex == null) this.#remotePlacementPreviews.clear();
+        else this.#remotePlacementPreviews.delete(playerIndex);
+        for (const [dominoNumber, animation] of this.#placementReturnAnimations) {
+          if (playerIndex == null || animation.playerIndex === playerIndex) {
+            this.#placementReturnAnimations.delete(dominoNumber);
+          }
+        }
+
+        if (this.#hotseat || playerIndex == null || playerIndex === this.#myPlayerIndex) {
           this.#hoverAnchor = null;
           this.#localPlacementFocus = null;
           this.#hoverAnchorAuto = false;
-        } else if (action.type === 'place' || action.type === 'skip') {
-          const playerIndex = Number.isInteger(action.payload?.playerIndex) ? action.payload.playerIndex : null;
-          if (playerIndex == null) this.#remotePlacementPreviews.clear();
-          else this.#remotePlacementPreviews.delete(playerIndex);
-
-          if (this.#hotseat || playerIndex == null || playerIndex === this.#myPlayerIndex) {
-            this.#hoverAnchor = null;
-            this.#localPlacementFocus = null;
-            this.#hoverAnchorAuto = false;
-          }
         }
-        return;
       }
+      return;
+    }
 
     switch (action.type) {
       case 'placementPreview':
@@ -4310,8 +5692,14 @@ export class GameLayout extends HTMLElement {
   }
 
   #placementActionPayload(payload = {}) {
-    if (this.#hotseat || this.#myPlayerIndex == null) return payload;
-    return { ...payload, playerIndex: this.#myPlayerIndex };
+    const nextPayload = { ...payload };
+    const drafted = this.#currentPlacementDraftedTile();
+    if (this.#game?.state === GameState.PLACE && drafted) {
+      if (nextPayload.dominoNumber == null) nextPayload.dominoNumber = drafted.domino.number;
+      if (nextPayload.orientation == null) nextPayload.orientation = drafted.domino.orientation;
+    }
+    if (this.#hotseat || this.#myPlayerIndex == null) return nextPayload;
+    return { ...nextPayload, playerIndex: this.#myPlayerIndex };
   }
 
   #currentPlacementDraftedTile() {
@@ -4326,10 +5714,24 @@ export class GameLayout extends HTMLElement {
     return this.#game.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? this.#game.getCurrentPlacingChoices?.() ?? [];
   }
 
+  #invalidatePlacementCaches() {
+    this.#placementCacheVersion += 1;
+    this.#placementOptionsCache.clear();
+    this.#advisorPlacementCache.clear();
+    this.#invalidateTabletopLayoutCache();
+  }
+
   #currentPlacementOptions() {
     const playerIndex = this.#placementPlayerIndex();
     if (playerIndex == null) return [];
-    return this.#game.getCurrentPlacementOptionsForPlayer?.(playerIndex) ?? this.#game.getCurrentPlacementOptions?.() ?? [];
+    const cached = this.#placementOptionsCache.get(playerIndex);
+    if (cached?.version === this.#placementCacheVersion) return cached.options;
+    const options = this.#game.getCurrentPlacementOptionsForPlayer?.(playerIndex) ?? this.#game.getCurrentPlacementOptions?.() ?? [];
+    this.#placementOptionsCache.set(playerIndex, {
+      version: this.#placementCacheVersion,
+      options,
+    });
+    return options;
   }
 
   #canSkipPlacement() {
@@ -4735,6 +6137,96 @@ export class GameLayout extends HTMLElement {
     return regions;
   }
 
+  #regionsByKey(board) {
+    const regions = this.#collectLandscapeRegions(board);
+    const byKey = new Map();
+    regions.forEach((region, id) => {
+      region.id = id;
+      for (const key of region.keys) byKey.set(key, region);
+    });
+    return { regions, byKey };
+  }
+
+  #placementActionPlayerIndex(action) {
+    if (action?.type !== 'place' || !this.#game) return null;
+    if (Number.isInteger(action.payload?.playerIndex)) return action.payload.playerIndex;
+    return this.#game.currentPlacingPlayerIndex;
+  }
+
+  #placementScoreBurstSnapshot(action) {
+    if (action?.type !== 'place' || !this.#game || this.#game.state !== GameState.PLACE) return null;
+    const playerIndex = this.#placementActionPlayerIndex(action);
+    const boardManager = this.#game.players?.[playerIndex]?.board;
+    if (!boardManager) return null;
+    const board = boardManager.board;
+    return {
+      playerIndex,
+      beforeKeys: new Set(Object.keys(board)),
+      beforeRegionsByKey: this.#regionsByKey(board).byKey,
+    };
+  }
+
+  #placementScoreConnections(board, newKeys) {
+    const dirs = [
+      { dx: 1, dy: 0, axis: 'x' },
+      { dx: -1, dy: 0, axis: 'x' },
+      { dx: 0, dy: 1, axis: 'z' },
+      { dx: 0, dy: -1, axis: 'z' },
+    ];
+    const seen = new Set();
+    const connections = [];
+
+    for (const key of newKeys) {
+      const tile = board[key];
+      if (!tile || tile.landscape === Landscapes.CASTLE) continue;
+
+      for (const dir of dirs) {
+        const neighborKey = keyOf(tile.x + dir.dx, tile.y + dir.dy);
+        const neighbor = board[neighborKey];
+        if (!neighbor || neighbor.landscape !== tile.landscape) continue;
+
+        const connectionKey = [key, neighborKey].sort().join('|');
+        if (seen.has(connectionKey)) continue;
+        seen.add(connectionKey);
+
+        connections.push({
+          key,
+          neighborKey,
+          landscape: tile.landscape,
+          x: tile.x + dir.dx * 0.5,
+          y: tile.y + dir.dy * 0.5,
+          axis: dir.axis,
+        });
+      }
+    }
+
+    return connections;
+  }
+
+  #placementScoreBursts(snapshot, board, newKeys) {
+    const afterRegions = this.#regionsByKey(board).regions;
+    const bursts = [];
+
+    for (const region of afterRegions) {
+      const placedTiles = region.tiles.filter((tile) => newKeys.has(keyOf(tile.x, tile.y)));
+      if (!placedTiles.length) continue;
+
+      const beforeRegionIds = new Set();
+      let beforeScore = 0;
+      for (const key of region.keys) {
+        const beforeRegion = snapshot.beforeRegionsByKey.get(key);
+        if (!beforeRegion || beforeRegionIds.has(beforeRegion.id)) continue;
+        beforeRegionIds.add(beforeRegion.id);
+        beforeScore += beforeRegion.score;
+      }
+
+      const delta = Math.max(0, region.score - beforeScore);
+      bursts.push({ region, placedTiles, delta });
+    }
+
+    return bursts;
+  }
+
   #addRegionBoundariesAndScore(region) {
     const edge = 0.49;
     const y = 0.29;
@@ -4825,6 +6317,147 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #clearScoreBursts() {
+    this.#scoreBursts = [];
+    if (!this.#scoreBurstGroup) return;
+    while (this.#scoreBurstGroup.children.length) {
+      this.#scoreBurstGroup.remove(this.#scoreBurstGroup.children[0]);
+    }
+  }
+
+  #addScoreBurstTileGlow(group, origin, tile, color) {
+    const glowColor = new THREE.Color(color ?? 0xffd76a).offsetHSL(0, 0.04, 0.18);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.48, 0.62, 36),
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.40,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    ring.position.set(origin.x + tile.x, 0.335, origin.z + tile.y);
+    ring.rotation.x = -Math.PI / 2;
+    ring.renderOrder = 50;
+    group.add(ring);
+  }
+
+  #addScoreBurstEdgeGlow(group, origin, connection) {
+    const glowColor = new THREE.Color(LANDSCAPE_COLORS[connection.landscape] ?? 0xffd76a).offsetHSL(0, 0.10, 0.28);
+    const geometry = connection.axis === 'x'
+      ? new THREE.BoxGeometry(0.080, 0.035, 0.78)
+      : new THREE.BoxGeometry(0.78, 0.035, 0.080);
+    const edge = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: glowColor,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+      })
+    );
+    edge.position.set(origin.x + connection.x, 0.365, origin.z + connection.y);
+    edge.renderOrder = 55;
+    group.add(edge);
+  }
+
+  #addScoreBurstLabel(group, origin, placedTiles, delta) {
+    if (!delta || delta <= 0 || !placedTiles.length) return;
+    const x = placedTiles.reduce((sum, tile) => sum + tile.x, 0) / placedTiles.length;
+    const y = placedTiles.reduce((sum, tile) => sum + tile.y, 0) / placedTiles.length;
+    const label = createTextSprite(`+${delta}`, {
+      size: 180,
+      font: '950 80px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
+      fillStyle: '#fff7cf',
+      background: 'rgba(34, 28, 12, 0.84)',
+      border: 'rgba(255, 217, 111, 0.62)',
+      shadow: 'rgba(255, 217, 111, 0.44)',
+    });
+    label.scale.set(0.50, 0.34, 1);
+    label.userData.scoreBurstLabelBaseScale = label.scale.clone();
+    label.position.set(origin.x + x + 0.12, 0.84, origin.z + y - 0.18);
+    label.renderOrder = 96;
+    if (label.material) {
+      label.material.depthWrite = false;
+      label.material.depthTest = false;
+      label.material.userData.baseOpacity = 1;
+    }
+    group.add(label);
+  }
+
+  #startPlacementScoreBurst(snapshot) {
+    if (!snapshot || this.#prefersReducedMotion() || !this.#scoreBurstGroup) return;
+    const boardManager = this.#game?.players?.[snapshot.playerIndex]?.board;
+    if (!boardManager) return;
+    const board = boardManager.board;
+    const newKeys = new Set(Object.keys(board).filter((key) => !snapshot.beforeKeys.has(key)));
+    if (!newKeys.size) return;
+
+    const connections = this.#placementScoreConnections(board, newKeys);
+    const scoreBursts = this.#placementScoreBursts(snapshot, board, newKeys);
+    if (!connections.length && !scoreBursts.some((burst) => burst.delta > 0)) return;
+
+    const origin = this.#boardOriginForPlayer(snapshot.playerIndex);
+    const group = new THREE.Group();
+    group.userData.scoreBurst = true;
+    this.#scoreBurstGroup.add(group);
+
+    const glowKeys = new Set();
+    for (const connection of connections) {
+      glowKeys.add(connection.key);
+      if (newKeys.has(connection.neighborKey)) glowKeys.add(connection.neighborKey);
+      this.#addScoreBurstEdgeGlow(group, origin, connection);
+    }
+    for (const burst of scoreBursts) {
+      if (burst.delta > 0) {
+        for (const tile of burst.placedTiles) glowKeys.add(keyOf(tile.x, tile.y));
+      }
+    }
+    for (const key of glowKeys) {
+      const tile = board[key];
+      if (!tile) continue;
+      this.#addScoreBurstTileGlow(group, origin, tile, LANDSCAPE_COLORS[tile.landscape] ?? 0xffd76a);
+    }
+    for (const burst of scoreBursts) {
+      this.#addScoreBurstLabel(group, origin, burst.placedTiles, burst.delta);
+    }
+
+    this.#prepareObjectMaterialsForOpacity(group);
+    this.#scoreBursts.push({
+      group,
+      startedAt: performance.now(),
+      duration: 1120,
+      baseY: group.position.y,
+    });
+  }
+
+  #updateScoreBurstAnimations(now = performance.now()) {
+    if (!this.#scoreBursts.length) return;
+    for (let i = this.#scoreBursts.length - 1; i >= 0; i--) {
+      const burst = this.#scoreBursts[i];
+      const progress = Math.max(0, Math.min(1, (now - burst.startedAt) / burst.duration));
+      if (progress >= 1 || !burst.group.parent) {
+        burst.group.parent?.remove(burst.group);
+        this.#scoreBursts.splice(i, 1);
+        continue;
+      }
+
+      const rise = 1 - Math.pow(1 - progress, 2);
+      const fade = progress < 0.18
+        ? progress / 0.18
+        : 1 - Math.max(0, progress - 0.64) / 0.36;
+      const pop = 1 + Math.sin(Math.min(1, progress / 0.24) * Math.PI) * 0.10;
+      burst.group.position.y = burst.baseY + rise * 0.30;
+      burst.group.traverse((object) => {
+        const baseScale = object.userData?.scoreBurstLabelBaseScale;
+        if (!baseScale) return;
+        object.scale.copy(baseScale).multiplyScalar(pop);
+      });
+      this.#setObjectOpacity(burst.group, Math.max(0, Math.min(1, fade)));
+    }
+  }
+
   #buildProjectedBoard(board, drafted, anchor, anchorEnd) {
     const connectedEdge = drafted.domino.getConnectedEdge(anchorEnd);
     const off = EdgeOffset.MAP_EDGE_TO_OFFSET(connectedEdge);
@@ -4910,6 +6543,21 @@ export class GameLayout extends HTMLElement {
       occupiedCells.set(keyOf(cell.x, cell.y), cell);
     }
     return { cells: occupiedCells.values(), dense };
+  }
+
+  #placementFootprintCells(options) {
+    const cells = new Map();
+    for (const option of options) {
+      for (const cell of this.#placementOptionCells(option)) {
+        cells.set(keyOf(cell.x, cell.y), cell);
+      }
+    }
+    for (const cell of this.#orderedPlacementCandidateAnchors()) {
+      if (this.#placementOptionsForGrid(cell, options).length) {
+        cells.set(keyOf(cell.x, cell.y), cell);
+      }
+    }
+    return cells.values();
   }
 
   #renderValidAnchorHighlights(options) {
@@ -5041,7 +6689,7 @@ export class GameLayout extends HTMLElement {
     // Shared tabletop sized to hold both kingdoms with room for the camera pan.
     const bambooFrontTex = createSceneBackgroundTexture(debug, 1024, 'front');
     this.#bambooMatFront = new THREE.Mesh(
-      new THREE.PlaneGeometry(42, 24),
+      new THREE.PlaneGeometry(72, 48),
       new THREE.MeshBasicMaterial({
         map: bambooFrontTex,
         side: THREE.DoubleSide,
@@ -5089,7 +6737,7 @@ export class GameLayout extends HTMLElement {
       this.#scene.add(plane);
     }
 
-    const planeGeo = new THREE.PlaneGeometry(54, 34);
+    const planeGeo = new THREE.PlaneGeometry(72, 48);
     const planeMat = new THREE.MeshBasicMaterial({ visible: false });
     this.#boardPlane = new THREE.Mesh(planeGeo, planeMat);
     this.#boardPlane.rotateX(-Math.PI / 2);
@@ -5101,6 +6749,8 @@ export class GameLayout extends HTMLElement {
     this.#scene.add(this.#regionOverlayGroup);
     this.#ghostGroup = new THREE.Group();
     this.#scene.add(this.#ghostGroup);
+    this.#scoreBurstGroup = new THREE.Group();
+    this.#scene.add(this.#scoreBurstGroup);
 
     this.#controls = new OrbitControls(this.#camera, this.#renderer.domElement);
     this.#controls.enableDamping = true;
@@ -5205,6 +6855,19 @@ export class GameLayout extends HTMLElement {
       this.#refreshHud();
     });
 
+    this.#btnToggleMiniMap.addEventListener('click', () => {
+      this.#showMiniMap = !this.#showMiniMap;
+      this.#refreshHud();
+    });
+
+    this.#btnToggleAdvisor.addEventListener('click', () => {
+      this.#showAdvisor = !this.#showAdvisor;
+      this.#saveAdvisorVisibility();
+      this.#invalidatePlacementCaches();
+      this.#refreshHud();
+      this.#renderBoard();
+    });
+
     this.#btnHighScores.addEventListener('click', () => {
       this.#openScoreHistory();
     });
@@ -5274,6 +6937,9 @@ export class GameLayout extends HTMLElement {
     this.#btnLocalClear.addEventListener('click', () => {
       this.#clearPlacementSpotFocus();
     });
+    this.#btnLocalAdvisor.addEventListener('click', () => {
+      this.#jumpToAdvisorPlacement();
+    });
     this.#scoreHistoryOverlay.addEventListener('click', (event) => {
       if (event.target === this.#scoreHistoryOverlay) this.#closeScoreHistory();
     });
@@ -5289,6 +6955,7 @@ export class GameLayout extends HTMLElement {
 
   #onResize = () => {
     if (!this.#renderer || !this.#camera) return;
+    this.#invalidateTabletopLayoutCache();
 
     const rect = this.#canvasHost.getBoundingClientRect();
     const w = Math.max(1, rect.width);
@@ -5323,6 +6990,7 @@ export class GameLayout extends HTMLElement {
 
   #onPointerMove(e) {
     if (this.#libraryOpen) return;
+    if (this.#game?.state === GameState.DRAFT) return;
     if (!this.#isMyTurnToPlace()) {
       if (this.#hoverAnchor) {
         this.#hoverAnchor = null;
@@ -5351,7 +7019,7 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
-    if (!this.#isMyTurnToPlace()) return;
+    if (!this.#isMyTurnToPlace() && !this.#isMyTurnToPick()) return;
 
     if (e.pointerType === 'touch') {
       this.#activeTouchPointerId = e.pointerId;
@@ -5390,7 +7058,7 @@ export class GameLayout extends HTMLElement {
       return;
     }
 
-    if (!this.#isMyTurnToPlace()) {
+    if (!this.#isMyTurnToPlace() && !this.#isMyTurnToPick()) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
@@ -5417,6 +7085,22 @@ export class GameLayout extends HTMLElement {
       ? dist2 <= TAP_DIST2 && dt <= TAP_MS
       : dist2 <= TAP_DIST2;
     if (!isTap) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (this.#game?.state === GameState.DRAFT) {
+      this.#handleCanvasDraftTap(e.clientX, e.clientY);
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (this.#game?.state === GameState.PLACE && this.#handleCanvasPlacementConfirmTap(e.clientX, e.clientY, e.pointerType)) {
+      if (e.pointerType === 'touch') this.#resetTouchInteraction();
+      return;
+    }
+
+    if (this.#game?.state === GameState.PLACE && this.#handleCanvasPlacementChoiceTap(e.clientX, e.clientY)) {
       if (e.pointerType === 'touch') this.#resetTouchInteraction();
       return;
     }
@@ -5471,6 +7155,781 @@ export class GameLayout extends HTMLElement {
     const hits = this.#raycaster.intersectObject(this.#boardPlane);
     if (!hits.length) return null;
     return hits[0].point;
+  }
+
+  #screenPointForObject(object) {
+    if (!object || !object.parent || !this.#renderer || !this.#camera) return null;
+    const rect = this.#renderer.domElement.getBoundingClientRect();
+    object.updateWorldMatrix(true, false);
+
+    const projected = new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+    projected.project(this.#camera);
+    if (
+      !Number.isFinite(projected.x)
+      || !Number.isFinite(projected.y)
+      || !Number.isFinite(projected.z)
+    ) {
+      return null;
+    }
+
+    return {
+      x: rect.left + (projected.x + 1) * 0.5 * rect.width,
+      y: rect.top + (1 - projected.y) * 0.5 * rect.height,
+      rect,
+    };
+  }
+
+  #canvasDraftEnabled() {
+    return this.#threeOk;
+  }
+
+  #rectOverlapArea(a, b) {
+    if (!a || !b) return 0;
+    const xOverlap = Math.max(0, Math.min(a.xMax, b.xMax) - Math.max(a.xMin, b.xMin));
+    const zOverlap = Math.max(0, Math.min(a.zMax, b.zMax) - Math.max(a.zMin, b.zMin));
+    return xOverlap * zOverlap;
+  }
+
+  #matWorldRect(mat, origin = { x: 0, z: 0 }, pad = 0) {
+    return {
+      xMin: origin.x + mat.centerX - mat.width / 2 - pad,
+      xMax: origin.x + mat.centerX + mat.width / 2 + pad,
+      zMin: origin.z + mat.centerZ - mat.height / 2 - pad,
+      zMax: origin.z + mat.centerZ + mat.height / 2 + pad,
+    };
+  }
+
+  #boardWorldBoundsForPlayer(playerIndex, pad = 0) {
+    const boardManager = this.#game?.players?.[playerIndex]?.board;
+    const boardSize = boardManager?.boardSize;
+    if (!boardSize || !boardManager) return null;
+    const origin = this.#boardOriginForPlayer(playerIndex);
+    const mat = this.#preservedKingdomMatBounds(boardManager, playerIndex);
+    return this.#matWorldRect(mat, origin, pad);
+  }
+
+  #boardWorldBounds(pad = 0) {
+    const players = this.#game?.players ?? [];
+    return players
+      .map((_, playerIndex) => this.#boardWorldBoundsForPlayer(playerIndex, pad))
+      .filter(Boolean);
+  }
+
+  #canvasDraftBoundsForOrigin(origin, rowCount, pad = 0) {
+    const rows = Math.max(1, rowCount ?? 0);
+    const rowGap = 1.18;
+    const startZ = origin.z - ((rows - 1) * rowGap) / 2;
+    const baseX = origin.x - 1.90;
+    return {
+      xMin: baseX - 0.34 - pad,
+      xMax: baseX + 4.10 + pad,
+      zMin: startZ - 0.55 - pad,
+      zMax: startZ + (rows - 1) * rowGap + 0.55 + pad,
+    };
+  }
+
+  #candidateAxisForCanvasDraft() {
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    if (count === 2) return this.#screenVerticalTabletopAxis();
+    if (this.#useVerticalTabletopLayout()) return { x: 0, z: 1 };
+    return { x: 1, z: 0 };
+  }
+
+  #canvasDraftOrigin() {
+    const heldOrigin = this.#autoDraftClaimHeldOrigin();
+    if (heldOrigin) return { x: heldOrigin.x, z: heldOrigin.z };
+
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    const base = this.#canvasDraftHomeOrigin(count);
+    const rowCount = this.#game?.currentDraft?.length ?? 0;
+    if (!rowCount) return base;
+
+    const axis = this.#candidateAxisForCanvasDraft();
+    const perp = { x: -axis.z, z: axis.x };
+    const boards = this.#boardWorldBounds(0.55);
+    const isReferenceTray = this.#game?.state === GameState.PLACE;
+    const reservedRects = this.#canvasReserveTargetRects(0.22);
+    if (!boards.length) return base;
+
+    let preferred = base;
+    const activePicker = this.#game?.state === GameState.DRAFT
+      ? this.#game.currentPickingPlayerIndex
+      : null;
+    if (activePicker != null && this.#game?.players?.[activePicker]) {
+      const activeOrigin = this.#boardOriginForPlayer(activePicker);
+      const toBaseX = base.x - activeOrigin.x;
+      const toBaseZ = base.z - activeOrigin.z;
+      const distanceToBase = Math.hypot(toBaseX, toBaseZ);
+      if (distanceToBase > 0.001) {
+        const nx = toBaseX / distanceToBase;
+        const nz = toBaseZ / distanceToBase;
+        const travel = Math.min(distanceToBase * 0.72, count === 2 ? 5.10 : 5.60);
+        preferred = {
+          x: activeOrigin.x + nx * travel,
+          z: activeOrigin.z + nz * travel,
+        };
+      }
+    } else if (isReferenceTray) {
+      const referenceShift = count === 2 ? 1.95 : 2.75;
+      preferred = {
+        x: base.x + perp.x * referenceShift,
+        z: base.z + perp.z * referenceShift,
+      };
+    }
+
+    const candidates = [];
+    const addCandidate = (perpOffset, axisOffset, bias = 0) => {
+      candidates.push({
+        x: preferred.x + perp.x * perpOffset + axis.x * axisOffset,
+        z: preferred.z + perp.z * perpOffset + axis.z * axisOffset,
+        bias,
+      });
+    };
+    const perpOffsets = [0];
+    const axisOffsets = [0];
+    for (let step = 1; step <= 8; step++) {
+      perpOffsets.push(step * 1.8, -step * 1.8);
+    }
+    for (let step = 1; step <= 6; step++) {
+      axisOffsets.push(step * 1.35, -step * 1.35);
+    }
+    for (const perpOffset of perpOffsets) {
+      for (const axisOffset of axisOffsets) {
+        addCandidate(perpOffset, axisOffset, Math.abs(perpOffset) * 0.55 + Math.abs(axisOffset) * 0.45);
+      }
+    }
+    candidates.push({ x: base.x, z: base.z, bias: isReferenceTray ? 6.2 : activePicker == null ? 0.4 : 5.8 });
+
+    let best = candidates[0];
+    let bestScore = Infinity;
+    for (const candidate of candidates) {
+      const draftBounds = this.#canvasDraftBoundsForOrigin(candidate, rowCount, 0.34);
+      const boardOverlap = boards.reduce((total, rect) => total + this.#rectOverlapArea(draftBounds, rect), 0);
+      const reserveOverlap = reservedRects.reduce((total, rect) => total + this.#rectOverlapArea(draftBounds, rect), 0);
+      const distance = Math.hypot(candidate.x - preferred.x, candidate.z - preferred.z);
+      const score = boardOverlap * 100000 + reserveOverlap * 80000 + distance * 2.5 + candidate.bias;
+      if (score < bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+    return { x: best.x, z: best.z };
+  }
+
+  #canvasDraftHomeOrigin(count = Math.max(1, this.#game?.players?.length ?? 2)) {
+    if (count === 2) return { x: 0, z: 0 };
+    return this.#useVerticalTabletopLayout()
+      ? { x: 3.0, z: 0 }
+      : { x: 0, z: 0 };
+  }
+
+  #playerReserveAnchorDirection(owner) {
+    const ownerOrigin = this.#boardOriginForPlayer(owner);
+    const home = this.#canvasDraftHomeOrigin();
+    let directionX = home.x - ownerOrigin.x;
+    let directionZ = home.z - ownerOrigin.z;
+    let distance = Math.hypot(directionX, directionZ);
+
+    if (distance < 0.001) {
+      if (this.#useVerticalTabletopLayout()) {
+        directionX = 1;
+        directionZ = 0;
+      } else {
+        directionX = owner % 2 === 0 ? 1 : -1;
+        directionZ = owner < 2 ? 1 : -1;
+      }
+      distance = Math.hypot(directionX, directionZ);
+    }
+
+    return {
+      nx: directionX / distance,
+      nz: directionZ / distance,
+      distance,
+    };
+  }
+
+  #canvasDraftLayout() {
+    const g = this.#game;
+    const rows = g?.currentDraft?.length ?? 0;
+    const activeIdx = g?.currentPickingPlayerIndex ?? this.#focusedPlayerIndex ?? 0;
+    const origin = this.#canvasDraftOrigin();
+    const rowGap = 1.18;
+    const startZ = origin.z - ((Math.max(1, rows) - 1) * rowGap) / 2;
+    const baseX = origin.x - 1.90;
+
+    return {
+      activeIdx,
+      origin,
+      rowGap,
+      rows: (g?.currentDraft ?? []).map((slot, index) => {
+        const z = startZ + index * rowGap;
+        return {
+          slot,
+          index,
+          z,
+          xMin: baseX - 0.34,
+          xMax: baseX + 4.10,
+          zMin: z - 0.55,
+          zMax: z + 0.55,
+          turnX: baseX + 0.12,
+          leftX: baseX + 0.98,
+          rightX: baseX + 1.98,
+          claimX: baseX + 3.42,
+        };
+      }),
+    };
+  }
+
+  #claimTargetRect(leftX, z, pad = 0.10) {
+    return {
+      xMin: leftX - 0.34 - pad,
+      xMax: leftX + 2.08 + pad,
+      zMin: z - 0.62 - pad,
+      zMax: z + 0.62 + pad,
+    };
+  }
+
+  #placementHighlightAvoidRects() {
+    if (!this.#game || this.#game.state !== GameState.PLACE || this.#game.isGameOver) return [];
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return [];
+
+    const options = this.#currentPlacementOptions();
+    if (!options.length) return [];
+
+    const origin = this.#boardOriginForPlayer(playerIndex);
+    const highlights = this.#placementHighlightCells(options);
+    return [...highlights.cells].map((cell) => ({
+      xMin: origin.x + cell.x - 0.52,
+      xMax: origin.x + cell.x + 0.52,
+      zMin: origin.z + cell.y - 0.52,
+      zMax: origin.z + cell.y + 0.52,
+    }));
+  }
+
+  #draftClaimAnimationKey(round, dominoNumber, owner) {
+    return `${round}|${dominoNumber}|${owner}`;
+  }
+
+  #candidateCanvasDraftClaimTarget(row, owner, reservedAvoidRects = []) {
+    const ownerOrigin = this.#boardOriginForPlayer(owner);
+    const { nx, nz, distance: zoneDistance } = this.#playerReserveAnchorDirection(owner);
+    const count = Math.max(1, this.#game?.players?.length ?? 2);
+    const ownerRows = (this.#game?.currentDraft ?? [])
+      .map((slot, index) => ({ slot, index }))
+      .filter((candidate) => candidate.slot?.player === owner && !candidate.slot?.placed);
+    const ownerOrdinal = Math.max(0, ownerRows.findIndex((candidate) => candidate.index === row.index));
+    const ownerCount = Math.max(1, ownerRows.length);
+    const stackOffset = (ownerOrdinal - (ownerCount - 1) / 2) * (count === 2 ? 2.28 : 1.78);
+    let claimDistance = count === 2
+      ? Math.max(2.10, Math.min(3.20, zoneDistance * 0.44))
+      : Math.max(2.55, Math.min(4.25, zoneDistance * 0.46));
+
+    const boardManager = this.#game?.players?.[owner]?.board;
+    if (boardManager) {
+      const mat = this.#preservedKingdomMatBounds(boardManager, owner);
+      const matEdge = mat.centerX * nx + mat.centerZ * nz
+        + Math.abs(nx) * mat.width / 2
+        + Math.abs(nz) * mat.height / 2;
+      const pieceExtent = Math.abs(nx) * 1.04 + Math.abs(nz) * 0.62;
+      claimDistance = Math.max(claimDistance, matEdge + pieceExtent + (count === 2 ? 0.22 : 0.30));
+    }
+
+    const avoidRects = [
+      ...this.#boardWorldBounds(0.58).map((rect) => ({ rect, weight: 1300 })),
+      ...this.#placementHighlightAvoidRects().map((rect) => ({ rect, weight: 900 })),
+      ...reservedAvoidRects.map((rect) => ({ rect, weight: 2400 })),
+    ];
+    const makeCandidate = (distanceOffset, sideOffset, bias = 0) => {
+      const side = stackOffset + sideOffset;
+      const distance = Math.max(1.2, claimDistance + distanceOffset);
+      const leftX = ownerOrigin.x + nx * distance - 0.50 + (-nz * side);
+      const z = ownerOrigin.z + nz * distance + (nx * side);
+      const rect = this.#claimTargetRect(leftX, z);
+      const overlapPenalty = avoidRects.reduce((total, item) => {
+        const overlap = this.#rectOverlapArea(rect, item.rect);
+        return total + overlap * item.weight;
+      }, 0);
+      const driftPenalty = Math.abs(distanceOffset) * 4.2 + Math.abs(sideOffset) * 2.4 + bias;
+      return { leftX, z, score: overlapPenalty + driftPenalty };
+    };
+
+    const distanceOffsets = [0, 0.85, 1.70, 2.60, 3.60, -0.55];
+    const sideOffsets = [0, 1.30, -1.30, 2.55, -2.55, 3.75, -3.75];
+    let best = makeCandidate(0, 0);
+    for (const distanceOffset of distanceOffsets) {
+      for (const sideOffset of sideOffsets) {
+        const candidate = makeCandidate(distanceOffset, sideOffset);
+        if (candidate.score < best.score) best = candidate;
+      }
+    }
+    return { leftX: best.leftX, z: best.z };
+  }
+
+  #canvasDraftClaimTargets() {
+    const targets = new Map();
+    const g = this.#game;
+    if (!g) return targets;
+
+    const reservedAvoidRects = [];
+    const rows = this.#canvasDraftLayout().rows
+      .filter((row) => row.slot?.player != null && !row.slot?.placed)
+      .sort((a, b) => {
+        const ownerDelta = (a.slot.player ?? 0) - (b.slot.player ?? 0);
+        return ownerDelta || a.index - b.index;
+      });
+
+    for (const row of rows) {
+      const owner = row.slot.player;
+      const dominoNumber = row.slot?.domino?.number;
+      if (!Number.isInteger(dominoNumber)) continue;
+      const key = this.#draftClaimAnimationKey(g.round ?? 0, dominoNumber, owner);
+      const target = this.#candidateCanvasDraftClaimTarget(row, owner, reservedAvoidRects);
+      targets.set(key, target);
+      reservedAvoidRects.push(this.#claimTargetRect(target.leftX, target.z, 0.16));
+    }
+
+    return targets;
+  }
+
+  #canvasReserveTargetRects(pad = 0.16) {
+    const g = this.#game;
+    if (!g?.currentDraft?.length) return [];
+
+    const rects = [];
+    const reservedAvoidRects = [];
+    const rows = g.currentDraft
+      .map((slot, index) => ({ slot, index }))
+      .filter((row) => row.slot?.player != null && !row.slot?.placed)
+      .sort((a, b) => {
+        const ownerDelta = (a.slot.player ?? 0) - (b.slot.player ?? 0);
+        return ownerDelta || a.index - b.index;
+      });
+
+    for (const row of rows) {
+      const owner = row.slot.player;
+      const dominoNumber = row.slot?.domino?.number;
+      if (!Number.isInteger(dominoNumber)) continue;
+      const target = this.#candidateCanvasDraftClaimTarget(row, owner, reservedAvoidRects);
+      rects.push(this.#claimTargetRect(target.leftX, target.z, pad));
+      reservedAvoidRects.push(this.#claimTargetRect(target.leftX, target.z, 0.16));
+    }
+
+    return rects;
+  }
+
+  #canvasDraftClaimTarget(row, owner) {
+    const dominoNumber = row?.slot?.domino?.number;
+    if (!Number.isInteger(dominoNumber)) return this.#candidateCanvasDraftClaimTarget(row, owner);
+    const key = this.#draftClaimAnimationKey(this.#game?.round ?? 0, dominoNumber, owner);
+    return this.#canvasDraftClaimTargets().get(key) ?? this.#candidateCanvasDraftClaimTarget(row, owner);
+  }
+
+  #draftClaimCurrentPosition(meta, key, duration = 720) {
+    const startedAt = this.#draftClaimAnimationStartedAt.get(key);
+    if (startedAt == null || this.#prefersReducedMotion()) {
+      return { leftX: meta.targetLeftX, z: meta.targetZ };
+    }
+
+    const progress = Math.max(0, Math.min(1, (performance.now() - startedAt) / Math.max(1, duration)));
+    if (progress >= 1) return { leftX: meta.targetLeftX, z: meta.targetZ };
+
+    const eased = 1 - Math.pow(1 - progress, 3);
+    return {
+      leftX: meta.leftX + (meta.targetLeftX - meta.leftX) * eased,
+      z: meta.z + (meta.targetZ - meta.z) * eased,
+    };
+  }
+
+  #draftClaimMetaFor(row, owner, { create = false } = {}) {
+    if (!row || owner == null) return null;
+    const dominoNumber = row.slot?.domino?.number;
+    if (!Number.isInteger(dominoNumber)) return null;
+
+    const key = this.#draftClaimAnimationKey(this.#game?.round ?? 0, dominoNumber, owner);
+    const target = this.#canvasDraftClaimTarget(row, owner);
+    const existing = this.#draftClaimAnimationSourceByKey.get(key);
+    if (existing) {
+      const targetChanged = Math.hypot(
+        existing.targetLeftX - target.leftX,
+        existing.targetZ - target.z
+      ) > 0.04;
+      if (targetChanged) {
+        const current = this.#draftClaimCurrentPosition(existing, key);
+        existing.leftX = current.leftX;
+        existing.z = current.z;
+        existing.targetLeftX = target.leftX;
+        existing.targetZ = target.z;
+        this.#draftClaimAnimationStartedAt.set(key, performance.now());
+      } else {
+        existing.targetLeftX = target.leftX;
+        existing.targetZ = target.z;
+      }
+      return { key, ...existing };
+    }
+
+    const meta = {
+      leftX: row.leftX,
+      z: row.z,
+      targetLeftX: target.leftX,
+      targetZ: target.z,
+      owner,
+      rowIndex: row.index,
+      dominoNumber,
+    };
+    if (create) this.#draftClaimAnimationSourceByKey.set(key, meta);
+    return { key, ...meta };
+  }
+
+  #prepareDraftClaimAnimation(index) {
+    const g = this.#game;
+    if (!g || g.state !== GameState.DRAFT) return;
+    const draftIndex = Number(index);
+    if (!Number.isInteger(draftIndex)) return;
+
+    const slot = g.currentDraft?.[draftIndex];
+    const owner = g.currentPickingPlayerIndex;
+    if (!slot || slot.player != null || owner == null) return;
+
+    const row = this.#canvasDraftLayout().rows.find((candidate) => candidate.index === draftIndex);
+    const meta = this.#draftClaimMetaFor(row, owner, { create: true });
+    if (!meta) return;
+    if (!this.#draftClaimAnimationStartedAt.has(meta.key)) {
+      this.#draftClaimAnimationStartedAt.set(meta.key, performance.now());
+    }
+  }
+
+  #settleCurrentDraftClaimAnimations() {
+    const g = this.#game;
+    if (!g?.currentDraft?.length) return;
+    const settledAt = performance.now() - 1200;
+    const layout = this.#canvasDraftLayout();
+    for (const row of layout.rows) {
+      const owner = row.slot?.player;
+      if (owner == null || row.slot?.placed) continue;
+      const meta = this.#draftClaimMetaFor(row, owner, { create: true });
+      if (meta) this.#draftClaimAnimationStartedAt.set(meta.key, settledAt);
+    }
+  }
+
+  #canvasDraftIndexAtClient(clientX, clientY) {
+    if (!this.#canvasDraftEnabled()) return null;
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!point) return null;
+    const layout = this.#canvasDraftLayout();
+    let best = null;
+    for (const row of layout.rows) {
+      if (row.slot?.player != null) continue;
+      const xPad = 0.48;
+      const zPad = 0.28;
+      if (point.x < row.xMin - xPad || point.x > row.xMax + xPad) continue;
+      const zDistance = Math.abs(point.z - row.z);
+      if (zDistance > (row.zMax - row.zMin) / 2 + zPad) continue;
+      if (!best || zDistance < best.zDistance) best = { row, zDistance };
+    }
+    return best?.row?.index ?? null;
+  }
+
+  #canvasDraftAdvisorPosition(row) {
+    return {
+      x: row.xMax + 0.44,
+      z: row.z - 0.12,
+    };
+  }
+
+  #canvasDraftAdvisorAtClient(clientX, clientY) {
+    if (!this.#canvasDraftEnabled()) return null;
+    if (!this.#showAdvisor) return null;
+    const g = this.#game;
+    if (!g || g.state !== GameState.DRAFT || g.isGameOver) return null;
+    const suggestion = this.#advisor.suggestDraftMove(g, g.currentPickingPlayerIndex);
+    if (!suggestion) return null;
+
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!point) return null;
+    const row = this.#canvasDraftLayout().rows.find((candidate) => candidate.index === suggestion.index);
+    if (!row || row.slot?.player != null) return null;
+    const xMin = row.xMax - 0.22;
+    const xMax = row.xMax + 1.20;
+    const zMin = row.zMin - 0.32;
+    const zMax = row.zMax + 0.28;
+    if (point.x < xMin || point.x > xMax || point.z < zMin || point.z > zMax) return null;
+    return suggestion;
+  }
+
+  #showDraftAdvisorDetail(suggestion) {
+    const message = suggestion?.explanation || suggestion?.summary || 'This looks like the strongest draft option.';
+    this.#setCanvasNotice(message, 'info', 3800);
+  }
+
+  #handleCanvasDraftTap(clientX, clientY) {
+    if (!this.#isMyTurnToPick()) return false;
+    if (this.#isGameplayPausedForUndo()) return false;
+
+    const advisor = this.#canvasDraftAdvisorAtClient(clientX, clientY);
+    if (advisor) {
+      this.#showDraftAdvisorDetail(advisor);
+      return true;
+    }
+
+    const index = this.#canvasDraftIndexAtClient(clientX, clientY);
+    if (index == null) return false;
+
+    const slot = this.#game?.currentDraft?.[index];
+    if (!slot || slot.player != null) {
+      this.#setCanvasNotice('That tile has already been claimed.', 'info', 1000);
+      return false;
+    }
+
+    this.#mp?.sendAction('pickDraft', { index });
+    return true;
+  }
+
+  #canvasPlacementChoiceAtClient(clientX, clientY) {
+    if (!this.#canvasDraftEnabled()) return null;
+    if (!this.#isMyTurnToPlace()) return null;
+    const point = this.#boardPlanePointFromClient(clientX, clientY);
+    if (!point) return null;
+
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return null;
+    const choices = this.#currentPlacementChoices();
+    if (!choices.length) return null;
+
+    const layout = this.#canvasDraftLayout();
+    let best = null;
+    for (const choice of choices) {
+      const row = layout.rows.find((candidate) =>
+        candidate.slot?.player === playerIndex
+        && !candidate.slot?.placed
+        && candidate.slot?.domino?.number === choice.domino.number
+      );
+      const meta = this.#draftClaimMetaFor(row, playerIndex, { create: true });
+      if (!meta) continue;
+
+      const inX = point.x >= meta.targetLeftX - 0.74 && point.x <= meta.targetLeftX + 1.74;
+      const inZ = point.z >= meta.targetZ - 0.72 && point.z <= meta.targetZ + 0.72;
+      if (!inX || !inZ) continue;
+      const dx = point.x - (meta.targetLeftX + 0.5);
+      const dz = point.z - meta.targetZ;
+      const distance = dx * dx + dz * dz;
+      if (!best || distance < best.distance) best = { choice, distance };
+    }
+    return best?.choice ?? null;
+  }
+
+  #canvasPlacementChoiceTargetsForPlayer(playerIndex) {
+    if (playerIndex == null) return [];
+    const layout = this.#canvasDraftLayout();
+    return layout.rows
+      .filter((row) => row.slot?.player === playerIndex && !row.slot?.placed)
+      .map((row) => {
+        const meta = this.#draftClaimMetaFor(row, playerIndex, { create: true });
+        return meta ? { leftX: meta.targetLeftX, z: meta.targetZ, dominoNumber: meta.dominoNumber } : null;
+      })
+      .filter(Boolean);
+  }
+
+  #canvasPlacementChoiceTargetForDomino(playerIndex, dominoNumber) {
+    return this.#canvasPlacementChoiceTargetsForPlayer(playerIndex)
+      .find((target) => target.dominoNumber === dominoNumber) ?? null;
+  }
+
+  #isPlacementDominoReturning(dominoNumber) {
+    return Number.isInteger(dominoNumber) && this.#placementReturnAnimations.has(dominoNumber);
+  }
+
+  #rotationYForRightOffset(offset) {
+    if (!offset) return 0;
+    return -Math.atan2(offset.y, offset.x);
+  }
+
+  #placementSkipAnimationSource(playerIndex, drafted) {
+    const boardOrigin = this.#boardOriginForPlayer(playerIndex);
+    const currentDrafted = this.#currentPlacementDraftedTile();
+    if (this.#hoverAnchor && currentDrafted?.domino?.number === drafted?.domino?.number) {
+      const feedback = this.#placementFeedbackForAnchor(this.#hoverAnchor);
+      const anchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
+      const board = this.#game?.players?.[playerIndex]?.board?.board;
+      if (board) {
+        const built = this.#buildProjectedBoard(board, drafted, this.#hoverAnchor, anchorEnd);
+        const other = built.other;
+        const leftCoord = anchorEnd === DominoEnd.LEFT ? this.#hoverAnchor : other;
+        const rightCoord = anchorEnd === DominoEnd.RIGHT ? this.#hoverAnchor : other;
+        const current = this.#placementGhostAnimationCurrentPosition(this.#placementGhostAnimation)
+          ?? { x: leftCoord.x, z: leftCoord.y };
+        return {
+          leftX: boardOrigin.x + current.x,
+          z: boardOrigin.z + current.z,
+          rotationY: this.#rotationYForRightOffset({
+            x: rightCoord.x - leftCoord.x,
+            y: rightCoord.y - leftCoord.y,
+          }),
+        };
+      }
+    }
+
+    const rackTarget = this.#canvasPlacementChoiceTargetForDomino(playerIndex, drafted.domino.number);
+    if (rackTarget) {
+      return { leftX: rackTarget.leftX, z: rackTarget.z, rotationY: 0 };
+    }
+
+    const row = this.#canvasDraftLayout().rows.find((candidate) =>
+      candidate.slot?.player === playerIndex
+      && !candidate.slot?.placed
+      && candidate.slot?.domino?.number === drafted.domino.number
+    );
+    const meta = this.#draftClaimMetaFor(row, playerIndex, { create: true });
+    if (meta) return { leftX: meta.targetLeftX, z: meta.targetZ, rotationY: 0 };
+
+    return { leftX: boardOrigin.x - 0.5, z: boardOrigin.z, rotationY: 0 };
+  }
+
+  #preparePlacementSkipAnimation(action) {
+    if (!this.#canvasDraftEnabled() || this.#prefersReducedMotion()) return;
+    if (!this.#game || this.#game.state !== GameState.PLACE) return;
+
+    const payload = action?.payload ?? {};
+    const playerIndex = Number.isInteger(payload.playerIndex) ? payload.playerIndex : this.#placementPlayerIndex();
+    if (playerIndex == null) return;
+    const canSkip = this.#game.canSkipPlacementForPlayer?.(playerIndex)
+      ?? this.#game.canSkipCurrentPlacement?.()
+      ?? false;
+    if (!canSkip) return;
+
+    const requestedNumber = Number(payload.dominoNumber);
+    const choices = this.#game.getCurrentPlacingChoicesForPlayer?.(playerIndex)
+      ?? this.#game.getCurrentPlacingChoices?.()
+      ?? [];
+    const drafted = Number.isInteger(requestedNumber)
+      ? choices.find((choice) => choice.domino?.number === requestedNumber)
+      : (this.#game.currentPlacingDraftedTileForPlayer?.(playerIndex) ?? this.#game.currentPlacingDraftedTile);
+    if (!drafted?.domino) return;
+
+    const source = this.#placementSkipAnimationSource(playerIndex, drafted);
+    const { nx, nz } = this.#playerReserveAnchorDirection(playerIndex);
+    const startedAt = performance.now();
+    const duration = 620;
+    const key = `skip|${playerIndex}|${drafted.domino.number}|${startedAt}`;
+    this.#placementSkipAnimations.set(key, {
+      key,
+      playerIndex,
+      dominoNumber: drafted.domino.number,
+      domino: drafted.domino,
+      startedAt,
+      duration,
+      sourceWorldX: source.leftX,
+      sourceWorldZ: source.z,
+      targetWorldX: source.leftX + nx * 0.34,
+      targetWorldZ: source.z + nz * 0.34,
+      sourceRotationY: source.rotationY,
+    });
+    this.#draftClaimAnimationStartedAt.set(key, startedAt);
+
+    window.setTimeout(() => {
+      this.#placementSkipAnimations.delete(key);
+      this.#draftClaimAnimationStartedAt.delete(key);
+      this.#renderGhost();
+    }, duration + 140);
+  }
+
+  #startPlacementReturnAnimation() {
+    if (this.#prefersReducedMotion()) return;
+    if (!this.#hoverAnchor || !this.#isMyTurnToPlace()) return;
+    const g = this.#game;
+    const playerIndex = this.#placementPlayerIndex();
+    const drafted = this.#currentPlacementDraftedTile();
+    if (!g || playerIndex == null || !drafted) return;
+
+    const rackTarget = this.#canvasPlacementChoiceTargetForDomino(playerIndex, drafted.domino.number);
+    if (!rackTarget) return;
+
+    const feedback = this.#placementFeedbackForAnchor(this.#hoverAnchor);
+    const anchorEnd = feedback.ok ? feedback.anchorEnd : DominoEnd.LEFT;
+    const board = g.players[playerIndex]?.board?.board;
+    if (!board) return;
+
+    const built = this.#buildProjectedBoard(board, drafted, this.#hoverAnchor, anchorEnd);
+    const other = built.other;
+    const leftCoord = anchorEnd === DominoEnd.LEFT ? this.#hoverAnchor : other;
+    const rightCoord = anchorEnd === DominoEnd.RIGHT ? this.#hoverAnchor : other;
+    const rightOffset = {
+      x: rightCoord.x - leftCoord.x,
+      y: rightCoord.y - leftCoord.y,
+    };
+    const current = this.#placementGhostAnimationCurrentPosition(this.#placementGhostAnimation)
+      ?? { x: leftCoord.x, z: leftCoord.y };
+    const boardOrigin = this.#boardOriginForPlayer(playerIndex);
+    const duration = 980;
+    const key = `return|${playerIndex}|${drafted.domino.number}|${performance.now()}`;
+    const startedAt = performance.now();
+
+    this.#placementReturnAnimations.set(drafted.domino.number, {
+      key,
+      playerIndex,
+      dominoNumber: drafted.domino.number,
+      domino: drafted.domino,
+      startedAt,
+      duration,
+      sourceWorldX: boardOrigin.x + current.x,
+      sourceWorldZ: boardOrigin.z + current.z,
+      targetWorldX: rackTarget.leftX,
+      targetWorldZ: rackTarget.z,
+      sourceRotationY: this.#rotationYForRightOffset(rightOffset),
+    });
+    this.#draftClaimAnimationStartedAt.set(key, startedAt);
+
+    window.setTimeout(() => {
+      const currentReturn = this.#placementReturnAnimations.get(drafted.domino.number);
+      if (!currentReturn || currentReturn.key !== key) return;
+      this.#placementReturnAnimations.delete(drafted.domino.number);
+      this.#draftClaimAnimationStartedAt.delete(key);
+      this.#renderBoard();
+      this.#renderGhost();
+    }, duration + 120);
+  }
+
+  #handleCanvasPlacementChoiceTap(clientX, clientY) {
+    const choice = this.#canvasPlacementChoiceAtClient(clientX, clientY);
+    if (!choice) return false;
+    if (choice.domino.number === this.#currentPlacementDraftedTile()?.domino.number) {
+      return !this.#hoverAnchor;
+    }
+    this.#startPlacementReturnAnimation();
+    this.#hoverAnchor = null;
+    this.#localPlacementFocus = null;
+    this.#hoverAnchorAuto = false;
+    this.#placementGhostAnimation = null;
+    this.#setCanvasNotice('');
+    this.#sendPlacementPreview(true);
+    this.#mp?.sendAction('selectPlacementTile', this.#placementActionPayload({
+      dominoNumber: choice.domino.number,
+      rackOnly: true,
+    }));
+    return true;
+  }
+
+  #handleCanvasPlacementConfirmTap(clientX, clientY, pointerType = 'mouse') {
+    const target = this.#canvasPlacementConfirmTarget;
+    if (!target) return false;
+    if (!this.#isMyTurnToPlace() || !this.#hoverAnchor) return false;
+
+    const point = this.#screenPointForObject(target.object);
+    if (!point) return false;
+
+    const viewHeight = Math.max(0.001, (this.#camera?.top ?? 1) - (this.#camera?.bottom ?? -1));
+    const radiusFromWorld = (target.radiusWorld / viewHeight) * (point.rect.height || 1);
+    const minRadius = pointerType === 'touch' ? 32 : 24;
+    const maxRadius = pointerType === 'touch' ? 56 : 46;
+    const radius = Math.max(minRadius, Math.min(maxRadius, radiusFromWorld));
+    const dx = clientX - point.x;
+    const dy = clientY - point.y;
+    if ((dx * dx + dy * dy) > radius * radius) {
+      return false;
+    }
+
+    this.#tryPlaceAtHover();
+    return true;
   }
 
   #trySelectPlacementAnchor(grid, { localize = false, showError = false, render = false, auto = false } = {}) {
@@ -6030,6 +8489,7 @@ export class GameLayout extends HTMLElement {
   }
 
   #refreshHud() {
+    this.#perfCounters.refreshHud += 1;
     const g = this.#game;
     this.#root?.classList.toggle('isLibraryMode', this.#libraryOpen);
     this.#renderScoreHistoryOverlay();
@@ -6047,16 +8507,20 @@ export class GameLayout extends HTMLElement {
       if (this.#localPlacementDock) this.#localPlacementDock.hidden = true;
       this.#primaryControlsRow.hidden = true;
       this.#secondaryControlsRow.hidden = false;
-      this.#tertiaryControlsRow.hidden = true;
+      this.#tertiaryControlsRow.hidden = !this.#moreOpen;
       this.#btnRotate.hidden = true;
       this.#btnResetTile.hidden = true;
       this.#btnScores.hidden = true;
       this.#btnSkip.hidden = true;
       this.#btnUndoRequest.hidden = true;
+      this.#btnToggleAdvisor.hidden = true;
+      this.#btnToggleMiniMap.hidden = true;
       this.#btnHighScores.hidden = true;
       this.#btnRestart.hidden = true;
       this.#btnEndGame.hidden = true;
-      this.#btnMore.hidden = true;
+      this.#btnMore.hidden = false;
+      this.#btnMore.classList.toggle('active', this.#moreOpen);
+      this.#btnMore.textContent = this.#moreOpen ? 'Close' : 'Menu';
       this.#btnCenter.hidden = false;
       this.#btnCenter.disabled = false;
       this.#btnLibrary.hidden = false;
@@ -6125,11 +8589,13 @@ export class GameLayout extends HTMLElement {
       this.#hudBody.append(summary);
       return;
     }
-    if (this.#miniMapDock) this.#miniMapDock.hidden = false;
+    if (this.#miniMapDock) this.#miniMapDock.hidden = !this.#showMiniMap;
     this.#btnMore.hidden = false;
     this.#btnLibrary.hidden = false;
     this.#btnLibrary.disabled = false;
     this.#btnLibrary.textContent = 'Library';
+    this.#btnCenter.hidden = false;
+    this.#btnCenter.disabled = false;
 
     const standings = g.players
       .map((p, i) => ({
@@ -6154,6 +8620,7 @@ export class GameLayout extends HTMLElement {
     const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
     const canSkip = canPlaceUi && this.#canSkipPlacement();
     const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
+    const useCanvasWorldUi = this.#canvasDraftEnabled();
     this.#primaryControlsRow.hidden = !canSkip;
     this.#primaryControlsRow.classList.toggle('skipOnly', canSkip);
     this.#secondaryControlsRow.hidden = false;
@@ -6165,6 +8632,14 @@ export class GameLayout extends HTMLElement {
     this.#btnSkip.hidden = !canSkip;
     this.#btnUndoRequest.disabled = !canRequestUndo;
     this.#btnUndoRequest.hidden = !canRequestUndo;
+    this.#btnToggleMiniMap.hidden = false;
+    this.#btnToggleMiniMap.classList.toggle('active', this.#showMiniMap);
+    this.#btnToggleMiniMap.textContent = this.#showMiniMap ? 'Hide Minimap' : 'Show Minimap';
+    this.#btnToggleMiniMap.setAttribute('aria-pressed', this.#showMiniMap ? 'true' : 'false');
+    this.#btnToggleAdvisor.hidden = false;
+    this.#btnToggleAdvisor.classList.toggle('active', this.#showAdvisor);
+    this.#btnToggleAdvisor.textContent = this.#showAdvisor ? 'Hide Advisor' : 'Show Advisor';
+    this.#btnToggleAdvisor.setAttribute('aria-pressed', this.#showAdvisor ? 'true' : 'false');
     this.#btnHighScores.hidden = false;
     this.#btnRestart.hidden = false;
     this.#btnEndGame.hidden = false;
@@ -6173,12 +8648,7 @@ export class GameLayout extends HTMLElement {
     this.#btnScores.classList.toggle('active', this.#showPlacementScores);
     this.#btnScores.textContent = this.#showPlacementScores ? 'Preview On' : 'Score Preview';
     this.#btnMore.classList.toggle('active', this.#moreOpen);
-    this.#btnMore.textContent = this.#moreOpen ? 'Close' : 'More';
-    if (canSkip && this.#btnSkip.parentElement !== this.#primaryControlsRow) {
-      this.#primaryControlsRow.prepend(this.#btnSkip);
-    } else if (!canSkip && this.#btnSkip.parentElement !== this.#secondaryControlsRow) {
-      this.#secondaryControlsRow.insertBefore(this.#btnSkip, this.#btnMore);
-    }
+    this.#btnMore.textContent = this.#moreOpen ? 'Close' : 'Menu';
     this.#btnNextValid.hidden = true;
     this.#btnPlace.hidden = true;
     this.#btnNextValid.disabled = !canPlaceUi || !hasPlacementOptions;
@@ -6325,7 +8795,7 @@ export class GameLayout extends HTMLElement {
         this.#endOverlay.append(card);
       }
 
-      this.#renderMiniMaps();
+      if (this.#showMiniMap) this.#renderMiniMaps();
       this.#syncMobileActions();
       this.#syncMobilePlacementStack();
       return;
@@ -6367,104 +8837,123 @@ export class GameLayout extends HTMLElement {
       this.#hoverAnchor = null;
       this.#hoverAnchorAuto = false;
       this.#setCanvasNotice('');
-      const nextOrderByNumber = [...g.currentDraft]
-        .sort((a, b) => a.domino.number - b.domino.number);
-      const nextSlotByDominoNumber = new Map(
-        nextOrderByNumber.map((slot, i) => [slot.domino.number, i + 1])
-      );
-      const pickOrder = g.pickOrder ?? [];
-      const pickedCount = g.pickCursor ?? g.currentDraft.filter((slot) => slot.player != null).length;
-      const draftActiveIdx = g.currentPickingPlayerIndex;
-      const draftActiveName = this.#playerNames[draftActiveIdx] ?? g.players[draftActiveIdx]?.name ?? `Player ${draftActiveIdx + 1}`;
-      const draftIsMine = !this.#hotseat && isMine;
-      const turnMeta = this.#draftTurnMeta(pickOrder, pickedCount, draftActiveIdx);
-
-      const summary = document.createElement('div');
-      summary.className = 'phaseSummary';
-      summary.append(this.#createRoundProgress(g));
-
-      const turn = document.createElement('div');
-      turn.className = 'draftTurnBanner';
-      turn.classList.toggle('isMine', draftIsMine);
-      turn.classList.toggle('isBackToBack', turnMeta.backToBack);
-
-      const turnTitle = document.createElement('strong');
-      turnTitle.textContent = draftIsMine ? 'Your pick' : `${draftActiveName} picking`;
-      const turnDetail = document.createElement('span');
-      turnDetail.className = 'draftTurnMeta';
-      const pickCountText = turnMeta.totalPicks > 1
-        ? `Pick ${Math.max(1, turnMeta.pickNumber)} of ${turnMeta.totalPicks}.`
-        : 'Pick one tile.';
-      const backToBackText = turnMeta.backToBack
-        ? (draftIsMine ? 'You pick again next.' : `${draftActiveName} picks again next.`)
-        : null;
-      turnDetail.textContent = [pickCountText, backToBackText].filter(Boolean).join(' ');
-      turn.append(turnTitle, turnDetail);
-      summary.append(turn);
-      this.#hudBody.append(summary);
-
-      const list = document.createElement('div');
-      list.className = 'draftList';
-      g.currentDraft.forEach((slot, idx) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'draftItem';
-        item.classList.toggle('isPicked', slot.player != null);
-        item.classList.toggle('isCurrentPick', idx === pickedCount && slot.player == null);
-        item.classList.toggle('isMine', idx === pickedCount && slot.player == null && draftIsMine);
-
-        const nextSlot = nextSlotByDominoNumber.get(slot.domino.number) ?? '?';
-        const ownerName = slot.player == null
-          ? null
-          : this.#playerNames[slot.player] ?? g.players[slot.player].name;
-        const queuedPlayerIndex = idx >= pickedCount ? pickOrder[idx] : null;
-        const queuedPlayerName = queuedPlayerIndex == null
-          ? null
-          : this.#playerNames[queuedPlayerIndex] ?? g.players[queuedPlayerIndex].name;
-
-        const turnSlot = document.createElement('div');
-        turnSlot.className = 'draftTurnSlot';
-        turnSlot.classList.toggle('isEmpty', queuedPlayerIndex == null);
-        if (queuedPlayerIndex != null) {
-          turnSlot.append(this.#createDraftPlayerToken(queuedPlayerIndex, idx === pickedCount));
-        }
-
-        const preview = this.#createDominoPreview(slot.domino);
-        const statusLabel = ownerName ? `picked by ${ownerName}` : `available as next order ${nextSlot}`;
-        item.setAttribute(
-          'aria-label',
-          `Domino ${slot.domino.number}, ${statusLabel}. ${landscapeLabel(slot.domino.leftEnd.landscape)} with ${slot.domino.leftEnd.crowns || 0} crowns and ${landscapeLabel(slot.domino.rightEnd.landscape)} with ${slot.domino.rightEnd.crowns || 0} crowns.`
+      if (!useCanvasWorldUi) {
+        const nextOrderByNumber = [...g.currentDraft]
+          .sort((a, b) => a.domino.number - b.domino.number);
+        const nextSlotByDominoNumber = new Map(
+          nextOrderByNumber.map((slot, i) => [slot.domino.number, i + 1])
         );
+        const pickOrder = g.pickOrder ?? [];
+        const pickedCount = g.pickCursor ?? g.currentDraft.filter((slot) => slot.player != null).length;
+        const draftActiveIdx = g.currentPickingPlayerIndex;
+        const draftActiveName = this.#playerNames[draftActiveIdx] ?? g.players[draftActiveIdx]?.name ?? `Player ${draftActiveIdx + 1}`;
+        const draftIsMine = !this.#hotseat && isMine;
+        const turnMeta = this.#draftTurnMeta(pickOrder, pickedCount, draftActiveIdx);
+        const draftSuggestion = this.#showAdvisor ? this.#advisor.suggestDraftMove(g, draftActiveIdx) : null;
 
-        const claimSlot = document.createElement('div');
-        claimSlot.className = 'draftClaimSlot';
-        claimSlot.classList.toggle('isEmpty', slot.player == null);
-        if (ownerName) {
-          claimSlot.append(this.#createDraftPlayerToken(slot.player));
-        }
-        item.title = queuedPlayerName
-          ? `${queuedPlayerName} is in this pick-order position.`
-          : ownerName
-            ? `${ownerName} claimed this tile.`
+        const summary = document.createElement('div');
+        summary.className = 'phaseSummary';
+        summary.append(this.#createRoundProgress(g));
+
+        const turn = document.createElement('div');
+        turn.className = 'draftTurnBanner';
+        turn.classList.toggle('isMine', draftIsMine);
+        turn.classList.toggle('isBackToBack', turnMeta.backToBack);
+
+        const turnTitle = document.createElement('strong');
+        turnTitle.textContent = draftIsMine ? 'Your pick' : `${draftActiveName} picking`;
+        const turnDetail = document.createElement('span');
+        turnDetail.className = 'draftTurnMeta';
+        const pickCountText = turnMeta.totalPicks > 1
+          ? `Pick ${Math.max(1, turnMeta.pickNumber)} of ${turnMeta.totalPicks}.`
+          : 'Pick one tile.';
+        const backToBackText = turnMeta.backToBack
+          ? (draftIsMine ? 'You pick again next.' : `${draftActiveName} picks again next.`)
+          : null;
+        turnDetail.textContent = [pickCountText, backToBackText].filter(Boolean).join(' ');
+        turn.append(turnTitle, turnDetail);
+        summary.append(turn);
+        this.#hudBody.append(summary);
+
+        const list = document.createElement('div');
+        list.className = 'draftList';
+        g.currentDraft.forEach((slot, idx) => {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'draftItem';
+          item.classList.toggle('isPicked', slot.player != null);
+          item.classList.toggle('isCurrentPick', idx === pickedCount && slot.player == null);
+          item.classList.toggle('isMine', idx === pickedCount && slot.player == null && draftIsMine);
+          const isAdvisorPick = draftSuggestion?.index === idx && slot.player == null;
+          item.classList.toggle('isAdvisorPick', isAdvisorPick);
+
+          const nextSlot = nextSlotByDominoNumber.get(slot.domino.number) ?? '?';
+          const ownerName = slot.player == null
+            ? null
+            : this.#playerNames[slot.player] ?? g.players[slot.player].name;
+          const queuedPlayerIndex = idx >= pickedCount ? pickOrder[idx] : null;
+          const queuedPlayerName = queuedPlayerIndex == null
+            ? null
+            : this.#playerNames[queuedPlayerIndex] ?? g.players[queuedPlayerIndex].name;
+
+          const turnSlot = document.createElement('div');
+          turnSlot.className = 'draftTurnSlot';
+          turnSlot.classList.toggle('isEmpty', queuedPlayerIndex == null);
+          if (queuedPlayerIndex != null) {
+            turnSlot.append(this.#createDraftPlayerToken(queuedPlayerIndex, idx === pickedCount));
+          }
+
+          const preview = this.#createDominoPreview(slot.domino);
+          const statusLabel = ownerName ? `picked by ${ownerName}` : `available as next order ${nextSlot}`;
+          const advisorLabel = isAdvisorPick
+            ? ` Advisor says ${draftSuggestion.phrase || 'try this'}: ${draftSuggestion.summary || draftSuggestion.focus}.`
             : '';
+          item.setAttribute(
+            'aria-label',
+            `Domino ${slot.domino.number}, ${statusLabel}. ${landscapeLabel(slot.domino.leftEnd.landscape)} with ${slot.domino.leftEnd.crowns || 0} crowns and ${landscapeLabel(slot.domino.rightEnd.landscape)} with ${slot.domino.rightEnd.crowns || 0} crowns.${advisorLabel}`
+          );
 
-        item.append(turnSlot, preview, claimSlot);
+          const claimSlot = document.createElement('div');
+          claimSlot.className = 'draftClaimSlot';
+          claimSlot.classList.toggle('isEmpty', slot.player == null);
+          if (ownerName) {
+            claimSlot.append(this.#createDraftPlayerToken(slot.player));
+          }
+          item.title = queuedPlayerName
+            ? `${queuedPlayerName} is in this pick-order position.`
+            : ownerName
+              ? `${ownerName} claimed this tile.`
+              : '';
+          if (isAdvisorPick) {
+            item.title = [item.title, `Advisor: ${draftSuggestion.summary || draftSuggestion.focus}`]
+              .filter(Boolean)
+              .join('\n');
+          }
 
-        item.disabled = slot.player != null || !this.#isMyTurnToPick() || this.#isGameplayPausedForUndo();
-        item.addEventListener('click', () => {
-          if (!this.#isMyTurnToPick()) return;
-          if (this.#isGameplayPausedForUndo()) return;
-          this.#mp?.sendAction('pickDraft', { index: idx });
+          item.append(turnSlot, preview, claimSlot);
+          if (isAdvisorPick) {
+            const badge = document.createElement('span');
+            badge.className = 'advisorBadge';
+            badge.textContent = draftSuggestion.phrase || 'Advisor';
+            item.append(badge);
+          }
+
+          item.disabled = slot.player != null || !this.#isMyTurnToPick() || this.#isGameplayPausedForUndo();
+          item.addEventListener('click', () => {
+            if (!this.#isMyTurnToPick()) return;
+            if (this.#isGameplayPausedForUndo()) return;
+            this.#mp?.sendAction('pickDraft', { index: idx });
+          });
+
+          list.append(item);
         });
-
-        list.append(item);
-      });
-      this.#hudBody.append(list);
+        this.#hudBody.append(list);
+      }
     } else {
       const drafted = this.#currentPlacementDraftedTile();
       if (drafted) {
         const choices = this.#currentPlacementChoices();
-        if (choices.length > 0) {
+        if (choices.length > 0 && !useCanvasWorldUi) {
           const chooser = document.createElement('div');
           chooser.className = 'placementChoices';
           const placementPlayerIndex = this.#placementPlayerIndex();
@@ -6516,12 +9005,18 @@ export class GameLayout extends HTMLElement {
       }
     }
 
-    this.#renderMiniMaps();
+    if (this.#hud && !g.isGameOver) {
+      const hasHudContent = this.#hudBody.childElementCount > 0 || Boolean(this.#hudBody.textContent.trim());
+      this.#hud.hidden = !hasHudContent;
+    }
+
+    if (this.#showMiniMap) this.#renderMiniMaps();
     this.#syncMobileActions();
     this.#syncMobilePlacementStack();
   }
 
   #renderBoard() {
+    this.#perfCounters.renderBoard += 1;
     this.#animatedObjects = [];
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
     if (this.#isStartAttractMode() && !this.#libraryOpen) {
@@ -6548,7 +9043,8 @@ export class GameLayout extends HTMLElement {
       boardGroup.userData.playerIndex = playerIndex;
       this.#tilesGroup.add(boardGroup);
       this.#currentTileRenderGroup = boardGroup;
-      this.#addPlayerPlayArea();
+      this.#addPlayerPlayArea(playerIndex, boardManager);
+      this.#addPlayerScorePlaque(playerIndex, boardManager);
 
       for (const k of Object.keys(board)) {
         const tile = board[k];
@@ -6586,8 +9082,548 @@ export class GameLayout extends HTMLElement {
     }
     this.#currentTileRenderGroup = previousGroup;
 
+    if (this.#game?.state === GameState.DRAFT && !this.#game.isGameOver) {
+      this.#renderCanvasDraft();
+    } else if (this.#game?.state === GameState.PLACE && !this.#game.isGameOver) {
+      if (this.#autoDraftClaimHoldActive()) {
+        this.#renderCanvasDraft({ claimHold: true });
+      } else {
+        this.#renderCanvasDraft({ referenceOnly: true });
+      }
+      this.#renderCanvasPlacementChoices();
+    }
+
     this.#syncBoardLayerPositions();
     this.#renderRegionScoring(null);
+  }
+
+  #renderCanvasDraft({ referenceOnly = false, claimHold = false } = {}) {
+    if (!this.#canvasDraftEnabled()) return;
+    const g = this.#game;
+    if (!g || (g.state !== GameState.DRAFT && !((referenceOnly || claimHold) && g.state === GameState.PLACE))) return;
+
+    const layout = this.#canvasDraftLayout();
+    const pickOrder = g.pickOrder ?? [];
+    const pickedCount = g.pickCursor ?? g.currentDraft.filter((slot) => slot.player != null).length;
+    const passive = referenceOnly || claimHold;
+    const activeIdx = passive ? null : g.currentPickingPlayerIndex;
+    const suggestion = passive || !this.#showAdvisor ? null : this.#advisor.suggestDraftMove(g, activeIdx);
+    const previousGroup = this.#currentTileRenderGroup;
+    const draftGroup = new THREE.Group();
+    draftGroup.userData.canvasDraft = true;
+    this.#tilesGroup.add(draftGroup);
+    const reserveGroup = new THREE.Group();
+    reserveGroup.userData.canvasDraftReserve = true;
+    this.#tilesGroup.add(reserveGroup);
+    this.#currentTileRenderGroup = draftGroup;
+    const previousOrigin = this.#lastCanvasDraftOrigin;
+    if (
+      previousOrigin
+      && !this.#prefersReducedMotion()
+      && Math.hypot(previousOrigin.x - layout.origin.x, previousOrigin.z - layout.origin.z) > 0.08
+    ) {
+      draftGroup.position.set(previousOrigin.x - layout.origin.x, 0, previousOrigin.z - layout.origin.z);
+      this.#registerAnimatedObject(draftGroup, 'draftTray', {
+        targetPosition: new THREE.Vector3(0, 0, 0),
+        startedAt: performance.now(),
+        duration: 620,
+      });
+    }
+    this.#lastCanvasDraftOrigin = { x: layout.origin.x, z: layout.origin.z };
+
+    this.#addCanvasDraftTray(layout);
+
+    for (const row of layout.rows) {
+      const slot = row.slot;
+      const owner = slot.player;
+      const queuedPlayerIndex = row.index >= pickedCount ? pickOrder[row.index] : null;
+      const isCurrentPick = !passive && row.index === pickedCount && owner == null;
+      const isAdvisorPick = suggestion?.index === row.index && owner == null;
+      const rowColor = 0x28313b;
+      const rowOpacity = 0.10;
+
+      const base = new THREE.Mesh(
+        new THREE.PlaneGeometry(row.xMax - row.xMin, row.zMax - row.zMin),
+        new THREE.MeshBasicMaterial({
+          color: rowColor,
+          transparent: true,
+          opacity: rowOpacity,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+      );
+      base.position.set((row.xMin + row.xMax) / 2, 0.010, row.z);
+      base.rotation.x = -Math.PI / 2;
+      base.renderOrder = -0.25;
+      this.#addTileObjects(base);
+
+      this.#addCanvasDraftToken(passive ? null : queuedPlayerIndex, row.turnX, row.z, {
+        current: isCurrentPick,
+        empty: passive || queuedPlayerIndex == null,
+      });
+      const claimTarget = owner == null ? null : this.#canvasDraftClaimTarget(row, owner);
+      const claimMeta = owner == null ? null : this.#draftClaimMetaFor(row, owner);
+      if (owner != null) {
+        this.#addCanvasDraftPlaceholder(row.leftX, row.z);
+      }
+      if (!passive && owner != null) {
+        this.#currentTileRenderGroup = reserveGroup;
+        this.#addCanvasDraftDomino(slot.domino, row.leftX, row.z, {
+          dim: false,
+          advisor: false,
+          claimed: true,
+          sourceLeftX: claimMeta?.leftX,
+          sourceZ: claimMeta?.z,
+          targetLeftX: claimMeta?.targetLeftX ?? claimTarget?.leftX,
+          targetZ: claimMeta?.targetZ ?? claimTarget?.z,
+          animationKey: claimMeta?.key,
+          playerIndex: owner,
+        });
+        this.#currentTileRenderGroup = draftGroup;
+      } else if (!passive && !slot.placed) {
+        this.#addCanvasDraftDomino(slot.domino, row.leftX, row.z, {
+          dim: false,
+          advisor: isAdvisorPick,
+          claimed: false,
+        });
+      } else if (passive && owner == null) {
+        this.#addCanvasDraftPlaceholder(row.leftX, row.z);
+      }
+      this.#addCanvasDraftToken(owner, row.claimX, row.z, {
+        current: false,
+        empty: owner == null,
+        outline: owner == null,
+      });
+
+      if (isAdvisorPick) this.#addCanvasDraftAdvisor(row, suggestion);
+    }
+
+    this.#currentTileRenderGroup = previousGroup;
+  }
+
+  #addCanvasDraftAdvisor(row, suggestion) {
+    if (!row || !suggestion) return;
+    const position = this.#canvasDraftAdvisorPosition(row);
+    const group = new THREE.Group();
+    group.position.set(position.x, 0, position.z);
+    group.userData.draftAdvisor = true;
+
+    const robeMaterial = new THREE.MeshStandardMaterial({
+      color: 0xb98f4a,
+      roughness: 0.56,
+      metalness: 0.06,
+      emissive: 0x2b1b08,
+      emissiveIntensity: 0.10,
+    });
+    const trimMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffd76a,
+      roughness: 0.48,
+      metalness: 0.10,
+      emissive: 0x4c3310,
+      emissiveIntensity: 0.16,
+    });
+    const skinMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf3cf9c,
+      roughness: 0.64,
+      metalness: 0.02,
+    });
+
+    const shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.32, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0x05070a,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    shadow.position.set(0, 0.018, 0);
+    shadow.rotation.x = -Math.PI / 2;
+    group.add(shadow);
+
+    const figure = new THREE.Group();
+    group.add(figure);
+
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 0.34, 12), robeMaterial);
+    body.position.set(0, 0.30, 0);
+    figure.add(body);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.115, 14, 10), skinMaterial);
+    head.position.set(0, 0.54, 0);
+    figure.add(head);
+
+    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.22, 12), trimMaterial);
+    hat.position.set(0, 0.72, 0);
+    hat.rotation.z = -0.10;
+    figure.add(hat);
+
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.035, 18), trimMaterial);
+    brim.position.set(0, 0.62, 0);
+    figure.add(brim);
+
+    const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.58, 8), trimMaterial);
+    staff.position.set(0.20, 0.37, 0.02);
+    staff.rotation.z = -0.18;
+    figure.add(staff);
+
+    const marker = new THREE.Mesh(
+      new THREE.RingGeometry(0.34, 0.42, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd76a,
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    marker.position.set(0, 0.026, 0);
+    marker.rotation.x = -Math.PI / 2;
+    group.add(marker);
+
+    const bubble = createAdvisorSpeechSprite(suggestion.phrase || 'Try this');
+    bubble.position.set(-0.82, 1.04, -0.20);
+    group.add(bubble);
+
+    this.#addTileObjects(group);
+    this.#registerAnimatedObject(figure, 'advisor', {
+      phase: (suggestion.dominoNumber ?? 0) * 0.37,
+      speed: 1.45,
+      amplitude: 1,
+    });
+  }
+
+  #addCanvasDraftTray(layout) {
+    if (!layout?.rows?.length) return;
+    const minX = Math.min(...layout.rows.map((row) => row.xMin)) - 0.30;
+    const maxX = Math.max(...layout.rows.map((row) => row.xMax)) + 0.30;
+    const minZ = Math.min(...layout.rows.map((row) => row.zMin)) - 0.30;
+    const maxZ = Math.max(...layout.rows.map((row) => row.zMax)) + 0.30;
+    const cx = (minX + maxX) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const width = maxX - minX;
+    const height = maxZ - minZ;
+    const accentColor = 0xd8c7a4;
+
+    const shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(width + 0.26, height + 0.26),
+      new THREE.MeshBasicMaterial({
+        color: 0x05070a,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    shadow.position.set(cx + 0.10, 0.002, cz + 0.10);
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.renderOrder = -0.72;
+    this.#addTileObjects(shadow);
+
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(width, 0.06, height),
+      new THREE.MeshStandardMaterial({
+        color: 0x2c2923,
+        roughness: 0.74,
+        metalness: 0.06,
+        emissive: 0x100d09,
+        emissiveIntensity: 0.10,
+      })
+    );
+    floor.position.set(cx, -0.030, cz);
+    floor.renderOrder = -0.71;
+    this.#addTileObjects(floor);
+
+    const tray = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({
+        color: 0x393327,
+        transparent: false,
+        opacity: 1,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+      })
+    );
+    tray.position.set(cx, 0.004, cz);
+    tray.rotation.x = -Math.PI / 2;
+    tray.renderOrder = -0.70;
+    this.#addTileObjects(tray);
+
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(width + 0.10, height + 0.10),
+      new THREE.MeshBasicMaterial({
+        color: accentColor,
+        transparent: true,
+        opacity: 0.055,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    glow.position.set(cx, 0.006, cz);
+    glow.rotation.x = -Math.PI / 2;
+    glow.renderOrder = -0.69;
+    this.#addTileObjects(glow);
+
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(width, height)),
+      new THREE.LineBasicMaterial({
+        color: accentColor,
+        transparent: true,
+        opacity: 0.38,
+      })
+    );
+    edge.position.set(cx, 0.012, cz);
+    edge.rotation.x = -Math.PI / 2;
+    edge.renderOrder = -0.64;
+    this.#addTileObjects(edge);
+
+    const label = createDraftMatLabel('Draft');
+    label.position.set(minX + 0.78, 0.020, minZ + 0.18);
+    this.#addTileObjects(label);
+  }
+
+  #renderCanvasPlacementChoices() {
+    if (!this.#canvasDraftEnabled()) return;
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE) return;
+
+    const placementPlayerIndex = this.#placementPlayerIndex();
+    const selected = this.#currentPlacementDraftedTile();
+    const ghostDominoNumber = this.#hoverAnchor ? selected?.domino?.number : null;
+    const previousGroup = this.#currentTileRenderGroup;
+    const choiceGroup = new THREE.Group();
+    choiceGroup.userData.canvasPlacementChoices = true;
+    this.#tilesGroup.add(choiceGroup);
+    this.#currentTileRenderGroup = choiceGroup;
+
+    const layout = this.#canvasDraftLayout();
+    for (const row of layout.rows) {
+      const slot = row.slot;
+      const owner = slot.player;
+      if (owner == null || slot.placed) continue;
+
+      const claimMeta = this.#draftClaimMetaFor(row, owner, { create: true });
+      if (!claimMeta) continue;
+      const isSelected = owner === placementPlayerIndex && selected?.domino?.number === slot.domino.number;
+      const isMine = owner === placementPlayerIndex && this.#isMyTurnToPlace();
+      const remotePreview = this.#remotePlacementPreviews.get(owner);
+      const isRemotePreviewed = remotePreview?.dominoNumber === slot.domino.number;
+      const isReturning = this.#isPlacementDominoReturning(slot.domino.number);
+      const isInGhost = (isSelected && ghostDominoNumber === slot.domino.number) || isRemotePreviewed || isReturning;
+
+      if (isInGhost) {
+        this.#addCanvasDraftPlaceholder(claimMeta.targetLeftX, claimMeta.targetZ);
+      } else {
+        this.#addCanvasDraftDomino(slot.domino, claimMeta.targetLeftX, claimMeta.targetZ, {
+          claimed: true,
+          sourceLeftX: claimMeta.leftX,
+          sourceZ: claimMeta.z,
+          targetLeftX: claimMeta.targetLeftX,
+          targetZ: claimMeta.targetZ,
+          animationKey: claimMeta.key,
+          selected: isSelected,
+          dim: owner !== placementPlayerIndex && this.#hotseat,
+          playerIndex: owner,
+        });
+      }
+
+      if (isSelected && isMine && !isInGhost) {
+        const selectionRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.58, 0.66, 32),
+          new THREE.MeshBasicMaterial({
+            color: this.#playerColorHex(owner),
+            transparent: true,
+            opacity: 0.50,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          })
+        );
+        selectionRing.position.set(claimMeta.targetLeftX + 0.5, 0.032, claimMeta.targetZ);
+        selectionRing.rotation.x = -Math.PI / 2;
+        selectionRing.renderOrder = 0.24;
+        this.#addTileObjects(selectionRing);
+      }
+    }
+
+    this.#currentTileRenderGroup = previousGroup;
+  }
+
+  #clearCanvasPlacementChoices() {
+    if (!this.#tilesGroup) return;
+    for (let i = this.#tilesGroup.children.length - 1; i >= 0; i--) {
+      const child = this.#tilesGroup.children[i];
+      if (child?.userData?.canvasPlacementChoices) this.#tilesGroup.remove(child);
+    }
+  }
+
+  #refreshCanvasPlacementChoices() {
+    if (!this.#canvasDraftEnabled()) return;
+    if (this.#game?.state !== GameState.PLACE || this.#game?.isGameOver) return;
+    this.#clearCanvasPlacementChoices();
+    this.#renderCanvasPlacementChoices();
+  }
+
+  #addCanvasDraftPlaceholder(leftX, z) {
+    const holder = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.06, 1.00),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.045,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    holder.position.set(leftX + 0.5, 0.014, z);
+    holder.rotation.x = -Math.PI / 2;
+    holder.renderOrder = -0.1;
+    this.#addTileObjects(holder);
+  }
+
+  #addCanvasDraftDomino(domino, leftX, z, {
+    dim = false,
+    advisor = false,
+    claimed = false,
+    selected = false,
+    playerIndex = null,
+    sourceLeftX = null,
+    sourceZ = null,
+    targetLeftX = null,
+    targetZ = null,
+    animationKey = null,
+    animationType = 'draftClaim',
+    animationDuration = 720,
+    rotationY = 0,
+    targetRotationY = null,
+  } = {}) {
+    const group = new THREE.Group();
+    const hasTarget = claimed && Number.isFinite(targetLeftX) && Number.isFinite(targetZ);
+    const startedAt = animationKey
+      ? (this.#draftClaimAnimationStartedAt.get(animationKey) ?? performance.now())
+      : null;
+    if (animationKey && !this.#draftClaimAnimationStartedAt.has(animationKey)) {
+      this.#draftClaimAnimationStartedAt.set(animationKey, startedAt);
+    }
+    const targetPosition = hasTarget ? new THREE.Vector3(targetLeftX, 0, targetZ) : null;
+    const shouldAnimate = hasTarget
+      && !this.#prefersReducedMotion()
+      && startedAt != null
+      && performance.now() - startedAt < animationDuration + 160;
+    const startX = Number.isFinite(sourceLeftX) ? sourceLeftX : leftX;
+    const startZ = Number.isFinite(sourceZ) ? sourceZ : z;
+    group.position.set(shouldAnimate ? startX : (targetLeftX ?? leftX), 0, shouldAnimate ? startZ : (targetZ ?? z));
+    group.rotation.y = shouldAnimate ? rotationY : (targetRotationY ?? rotationY);
+    group.userData.draftDominoNumber = domino.number;
+    this.#addTileObjects(group);
+
+    const previousGroup = this.#currentTileRenderGroup;
+    this.#currentTileRenderGroup = group;
+
+    const ends = [
+      { name: 'left', x: 0, tile: domino.leftEnd },
+      { name: 'right', x: 1, tile: domino.rightEnd },
+    ];
+
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.16, 1.10),
+      new THREE.MeshBasicMaterial({
+        color: selected && playerIndex != null ? this.#playerColorHex(playerIndex) : advisor ? 0xffd76a : 0xffffff,
+        transparent: true,
+        opacity: selected ? 0.20 : advisor ? 0.13 : 0.045,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    glow.position.set(0.5, 0.012, 0);
+    glow.rotation.x = -Math.PI / 2;
+    glow.renderOrder = -0.15;
+    this.#addTileObjects(glow);
+
+    for (const end of ends) {
+      const tile = {
+        x: end.x,
+        y: 0,
+        landscape: end.tile.landscape,
+        crowns: end.tile.crowns,
+        artSeed: end.tile.artSeed,
+      };
+      let material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, this.#tileArtSeedKey(end.tile, `canvas-draft|${domino.number}|${end.name}`), false);
+      if (dim) {
+        material = material.clone();
+        material.transparent = true;
+        material.opacity = 0.64;
+        material.color = new THREE.Color(0xa7adb7);
+      }
+      const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
+      tileMesh.position.set(tile.x, 0.11, tile.y);
+      this.#addTileObjects(tileMesh);
+
+      if (!dim) {
+        this.#addLandscapeDetail(tile, this.#tileArtSeedKey(end.tile, `canvas-draft|${domino.number}|${end.name}`));
+        if ((tile.crowns || 0) > 0) {
+          this.#addCrownedLandmark(tile, this.#tileArtSeedKey(end.tile, `canvas-draft|${domino.number}|${end.name}`));
+          this.#addCrownStars(tile.x, tile.y, tile.crowns);
+        }
+      }
+    }
+
+    this.#currentTileRenderGroup = previousGroup;
+    if (shouldAnimate && targetPosition) {
+      this.#registerAnimatedObject(group, animationType, {
+        targetPosition,
+        targetRotationY,
+        startedAt,
+        duration: animationDuration,
+      });
+    }
+    return group;
+  }
+
+  #addCanvasDraftToken(playerIndex, x, z, { current = false, empty = false, outline = false } = {}) {
+    const color = empty ? 0xffffff : this.#playerColorHex(playerIndex);
+    const opacity = empty ? (outline ? 0.12 : 0.18) : 0.96;
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.50,
+      metalness: 0.08,
+      emissive: empty ? 0x000000 : color,
+      emissiveIntensity: current ? 0.22 : 0.04,
+      transparent: true,
+      opacity,
+    });
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.21, 0.35, 10), material);
+    body.position.set(0, 0.29, 0);
+    group.add(body);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 9), material);
+    head.position.set(0, 0.55, 0);
+    group.add(head);
+
+    const arms = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.08, 0.09), material);
+    arms.position.set(0, 0.36, 0);
+    arms.rotation.z = 0.06;
+    group.add(arms);
+
+    if (current) {
+      const halo = new THREE.Mesh(
+        new THREE.RingGeometry(0.31, 0.39, 28),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.30,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+      );
+      halo.position.set(0, 0.025, 0);
+      halo.rotation.x = -Math.PI / 2;
+      group.add(halo);
+    }
+
+    this.#addTileObjects(group);
   }
 
   #renderDominoLibraryScene({ attract = false, focusNumber = this.#libraryFocusedDominoNumber } = {}) {
@@ -6739,21 +9775,208 @@ export class GameLayout extends HTMLElement {
     this.#renderRegionScoring(null);
   }
 
-  #addPlayerPlayArea() {
-    const size = 8.8;
-    const pad = new THREE.Mesh(
-      new THREE.PlaneGeometry(size, size),
+  #kingdomMatBounds(boardManager, playerIndex = null) {
+    const axis = boardManager?.boardSize;
+    const maxSize = Math.max(1, boardManager?.maxBoardSize ?? 7);
+    const pad = maxSize <= 5 ? 0.82 : 0.92;
+    const minSize = maxSize <= 5 ? 3.35 : 3.65;
+    let xMin = (axis?.xMin ?? 0) - 0.5;
+    let xMax = (axis?.xMax ?? 0) + 0.5;
+    let yMin = (axis?.yMin ?? 0) - 0.5;
+    let yMax = (axis?.yMax ?? 0) + 0.5;
+
+    if (
+      playerIndex != null
+      && this.#game?.state === GameState.PLACE
+      && !this.#game?.isGameOver
+      && playerIndex === this.#placementPlayerIndex()
+    ) {
+      const options = this.#currentPlacementOptions();
+      if (options.length) {
+        for (const cell of this.#placementFootprintCells(options)) {
+          xMin = Math.min(xMin, cell.x - 0.52);
+          xMax = Math.max(xMax, cell.x + 0.52);
+          yMin = Math.min(yMin, cell.y - 0.52);
+          yMax = Math.max(yMax, cell.y + 0.52);
+        }
+      }
+    }
+
+    const width = Math.max(minSize, (xMax - xMin) + pad * 2);
+    const height = Math.max(minSize, (yMax - yMin) + pad * 2);
+    return {
+      centerX: (xMin + xMax) / 2,
+      centerZ: (yMin + yMax) / 2,
+      width,
+      height,
+    };
+  }
+
+  #unionKingdomMatBounds(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+
+    const xMin = Math.min(a.centerX - a.width / 2, b.centerX - b.width / 2);
+    const xMax = Math.max(a.centerX + a.width / 2, b.centerX + b.width / 2);
+    const zMin = Math.min(a.centerZ - a.height / 2, b.centerZ - b.height / 2);
+    const zMax = Math.max(a.centerZ + a.height / 2, b.centerZ + b.height / 2);
+
+    return {
+      centerX: (xMin + xMax) / 2,
+      centerZ: (zMin + zMax) / 2,
+      width: xMax - xMin,
+      height: zMax - zMin,
+    };
+  }
+
+  #preservedKingdomMatBounds(boardManager, playerIndex, { commit = false } = {}) {
+    const current = this.#kingdomMatBounds(boardManager, playerIndex);
+    if (playerIndex == null) return current;
+
+    const target = this.#unionKingdomMatBounds(this.#kingdomMatBoundsByPlayer.get(playerIndex), current);
+    if (commit) {
+      const previous = this.#kingdomMatBoundsByPlayer.get(playerIndex);
+      this.#kingdomMatBoundsByPlayer.set(playerIndex, target);
+      if (
+        !previous
+        || Math.hypot(previous.centerX - target.centerX, previous.centerZ - target.centerZ) > 0.001
+        || Math.abs(previous.width - target.width) > 0.001
+        || Math.abs(previous.height - target.height) > 0.001
+      ) {
+        this.#invalidateTabletopLayoutCache();
+      }
+    }
+    return target;
+  }
+
+  #addPlayerScorePlaque(playerIndex, boardManager) {
+    const mat = this.#preservedKingdomMatBounds(boardManager, playerIndex);
+    if (!mat) return;
+
+    const name = this.#playerNames[playerIndex]
+      ?? this.#game?.players?.[playerIndex]?.name
+      ?? `Player ${playerIndex + 1}`;
+    const score = boardManager?.score ?? 0;
+    const label = createPlayerMatLabel(name, score, {
+      playerColor: this.#playerMiniMapColor(playerIndex, 0.94),
+      playerGlow: this.#playerMiniMapColor(playerIndex, 0.20),
+    });
+    const width = Math.max(1.22, Math.min(2.06, mat.width - 0.92));
+    const origin = this.#boardOriginForPlayer(playerIndex);
+    const towardTableCenterZ = origin.z < -0.05 ? 1 : origin.z > 0.05 ? -1 : playerIndex % 2 === 0 ? 1 : -1;
+    label.scale.set(width, width, 1);
+    label.position.set(mat.centerX, 0.012, mat.centerZ + towardTableCenterZ * (mat.height / 2 - 0.30));
+    this.#addTileObjects(label);
+  }
+
+  #addPlayerPlayArea(playerIndex, boardManager) {
+    const current = this.#kingdomMatBounds(boardManager, playerIndex);
+    const previous = this.#kingdomMatBoundsByPlayer.get(playerIndex) ?? current;
+    const target = this.#preservedKingdomMatBounds(boardManager, playerIndex, { commit: true });
+    const shouldAnimate = !this.#prefersReducedMotion()
+      && (
+        Math.hypot(previous.centerX - target.centerX, previous.centerZ - target.centerZ) > 0.035
+        || Math.abs(previous.width - target.width) > 0.035
+        || Math.abs(previous.height - target.height) > 0.035
+      );
+    const color = this.#playerColorHex(playerIndex);
+    const group = new THREE.Group();
+    group.position.set(
+      shouldAnimate ? previous.centerX : target.centerX,
+      0,
+      shouldAnimate ? previous.centerZ : target.centerZ
+    );
+    group.scale.set(
+      shouldAnimate ? previous.width : target.width,
+      1,
+      shouldAnimate ? previous.height : target.height
+    );
+    this.#addTileObjects(group);
+
+    const previousGroup = this.#currentTileRenderGroup;
+    this.#currentTileRenderGroup = group;
+
+    const shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.05, 1.05),
       new THREE.MeshBasicMaterial({
-        color: 0xffffff,
+        color: 0x05070a,
         transparent: true,
-        opacity: 0.018,
+        opacity: 0.20,
         depthWrite: false,
         side: THREE.DoubleSide,
       })
     );
-    pad.rotation.x = -Math.PI / 2;
-    pad.position.y = -0.055;
-    this.#addTileObjects(pad);
+    shadow.position.set(0.02, -0.091, 0.03);
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.renderOrder = -0.78;
+    this.#addTileObjects(shadow);
+
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 0.055, 1),
+      new THREE.MeshStandardMaterial({
+        color: 0x18252d,
+        roughness: 0.80,
+        metalness: 0.04,
+        emissive: color,
+        emissiveIntensity: 0.025,
+      })
+    );
+    floor.position.set(0, -0.074, 0);
+    floor.renderOrder = -0.76;
+    this.#addTileObjects(floor);
+
+    const felt = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.985, 0.985),
+      new THREE.MeshBasicMaterial({
+        color: 0x22323b,
+        transparent: true,
+        opacity: 0.82,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    felt.position.set(0, -0.043, 0);
+    felt.rotation.x = -Math.PI / 2;
+    felt.renderOrder = -0.74;
+    this.#addTileObjects(felt);
+
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.01, 1.01),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.080,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    glow.position.set(0, -0.040, 0);
+    glow.rotation.x = -Math.PI / 2;
+    glow.renderOrder = -0.73;
+    this.#addTileObjects(glow);
+
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.01, 0.058, 1.01)),
+      new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.36,
+      })
+    );
+    edge.position.set(0, -0.072, 0);
+    edge.renderOrder = -0.72;
+    this.#addTileObjects(edge);
+
+    this.#currentTileRenderGroup = previousGroup;
+
+    if (shouldAnimate) {
+      this.#registerAnimatedObject(group, 'kingdomMat', {
+        targetPosition: new THREE.Vector3(target.centerX, 0, target.centerZ),
+        targetScale: new THREE.Vector3(target.width, 1, target.height),
+        startedAt: performance.now(),
+        duration: 560,
+      });
+    }
   }
 
   #castleGrowthState(board, boardManager) {
@@ -8381,6 +11604,9 @@ export class GameLayout extends HTMLElement {
     if (!this.#gridHelper) return;
     const placement = this.#game?.state === GameState.PLACE && !this.#game?.isGameOver;
     const library = this.#libraryOpen || this.#isStartAttractMode();
+    const key = `${library ? 1 : 0}|${placement ? 1 : 0}`;
+    if (this.#lastGridPresentationKey === key) return;
+    this.#lastGridPresentationKey = key;
     const materials = Array.isArray(this.#gridHelper.material)
       ? this.#gridHelper.material
       : [this.#gridHelper.material];
@@ -8433,6 +11659,14 @@ export class GameLayout extends HTMLElement {
       this.#syncStartAttractCamera();
       return;
     }
+    if (this.#game?.state === GameState.DRAFT && this.#canvasDraftEnabled()) {
+      this.#centerOnCanvasDraft(animate);
+      return;
+    }
+    if (this.#game?.state === GameState.PLACE && this.#canvasDraftEnabled()) {
+      this.#centerOnPlacementPlayer(animate);
+      return;
+    }
     if (!this.#controls || !this.#camera) return;
 
     const activeIdx = this.#activePlayerIndex();
@@ -8453,10 +11687,80 @@ export class GameLayout extends HTMLElement {
       this.#syncStartAttractCamera();
       return;
     }
+    if (this.#game?.state === GameState.DRAFT && this.#canvasDraftEnabled()) {
+      this.#centerOnCanvasDraft(animate);
+      return;
+    }
+    if (this.#game?.state === GameState.PLACE && this.#canvasDraftEnabled()) {
+      this.#centerOnPlacementPlayer(animate);
+      return;
+    }
     if (!this.#game?.players?.length) return;
     const idx = Math.max(0, Math.min(this.#focusedPlayerIndex, this.#game.players.length - 1));
     const bs = this.#game.players[idx].board.boardSize;
     this.#frameToBoardSize(bs, 2, this.#boardOriginForPlayer(idx), animate);
+  }
+
+  #centerOnCanvasDraft(animate = false) {
+    if (!this.#game?.players?.length) return;
+    const activeIdx = this.#game.currentPickingPlayerIndex ?? this.#focusedPlayerIndex ?? 0;
+    const origin = this.#boardOriginForPlayer(activeIdx);
+    const boardManager = this.#game.players[activeIdx]?.board;
+    const bs = boardManager?.boardSize;
+    if (!bs || !boardManager) return;
+
+    const layout = this.#canvasDraftLayout();
+    if (!layout.rows.length) {
+      this.#frameToBoardSize(bs, 2, origin, animate);
+      return;
+    }
+    const rowMinX = Math.min(...layout.rows.map((row) => row.xMin));
+    const rowMaxX = Math.max(...layout.rows.map((row) => row.xMax));
+    const rowMinZ = Math.min(...layout.rows.map((row) => row.zMin));
+    const rowMaxZ = Math.max(...layout.rows.map((row) => row.zMax));
+    const claimedTargets = layout.rows
+      .filter((row) => row.slot.player === activeIdx)
+      .map((row) => this.#canvasDraftClaimTarget(row, row.slot.player));
+    const advisorSuggestion = this.#showAdvisor ? this.#advisor.suggestDraftMove(this.#game, activeIdx) : null;
+    const advisorRow = advisorSuggestion == null
+      ? null
+      : layout.rows.find((row) => row.index === advisorSuggestion.index && row.slot.player == null);
+    const advisorPosition = advisorRow ? this.#canvasDraftAdvisorPosition(advisorRow) : null;
+
+    const castlePad = 1.35;
+    const boardMinX = origin.x + Math.min(bs.xMin, -castlePad);
+    const boardMaxX = origin.x + Math.max(bs.xMax, castlePad);
+    const boardMinZ = origin.z + Math.min(bs.yMin, -castlePad);
+    const boardMaxZ = origin.z + Math.max(bs.yMax, castlePad);
+
+    this.#frameToBoardSize({
+      xMin: Math.min(boardMinX, rowMinX, advisorPosition ? advisorPosition.x - 0.72 : rowMinX, ...claimedTargets.map((target) => target.leftX)),
+      xMax: Math.max(boardMaxX, rowMaxX, advisorPosition ? advisorPosition.x + 0.94 : rowMaxX, ...claimedTargets.map((target) => target.leftX + 2)),
+      yMin: Math.min(boardMinZ, rowMinZ, advisorPosition ? advisorPosition.z - 0.58 : rowMinZ, ...claimedTargets.map((target) => target.z - 0.6)),
+      yMax: Math.max(boardMaxZ, rowMaxZ, advisorPosition ? advisorPosition.z + 0.46 : rowMaxZ, ...claimedTargets.map((target) => target.z + 0.6)),
+    }, 0.66, { x: 0, z: 0 }, animate, GameLayout.#VIEW_SIZE_CLOSE);
+  }
+
+  #centerOnPlacementPlayer(animate = false) {
+    if (!this.#game?.players?.length) return;
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return;
+    const boardManager = this.#game.players[playerIndex]?.board;
+    const bs = boardManager?.boardSize;
+    if (!bs || !boardManager) return;
+
+    const bounds = this.#boardWorldBoundsForPlayer(playerIndex, 0.24);
+    if (!bounds) {
+      this.#frameToBoardSize(bs, 2, this.#boardOriginForPlayer(playerIndex), animate, this.#viewSizeForBoardSize(bs));
+      return;
+    }
+
+    this.#frameToBoardSize({
+      xMin: bounds.xMin,
+      xMax: bounds.xMax,
+      yMin: bounds.zMin,
+      yMax: bounds.zMax,
+    }, 0.60, { x: 0, z: 0 }, animate, this.#viewSizeForBoardSize(bs));
   }
 
   #centerOnDominoLibrary(animate = false) {
@@ -8887,12 +12191,14 @@ export class GameLayout extends HTMLElement {
         dominoNumber: option.dominoNumber,
         orientation: option.orientation,
       });
-      if (!this.#hotseat) payload.selectionId = ++this.#placementSelectionSequence;
-      if (!this.#hotseat) {
+      if (this.#hotseat) {
+        this.#applyLocalAction({ type: 'setPlacementSelection', payload }, { render: false });
+      } else {
+        payload.selectionId = ++this.#placementSelectionSequence;
         this.#latestLocalPlacementSelectionId = payload.selectionId;
         this.#applyGameplayAction({ type: 'setPlacementSelection', payload });
+        this.#mp?.sendAction('setPlacementSelection', payload);
       }
-      this.#mp?.sendAction('setPlacementSelection', payload);
     }
     this.#sendPlacementPreview();
     this.#syncLocalPlacementDock();
@@ -8948,6 +12254,47 @@ export class GameLayout extends HTMLElement {
     return localValid.length ? localValid : this.#uniqueVisiblePlacementOptions(rawOptions);
   }
 
+  #advisorPlacementOption() {
+    if (!this.#showAdvisor) return null;
+    const playerIndex = this.#placementPlayerIndex();
+    if (playerIndex == null) return null;
+    const cached = this.#advisorPlacementCache.get(playerIndex);
+    if (cached?.version === this.#placementCacheVersion) return cached.option;
+    const option = this.#advisor.suggestPlacementMove(this.#game, playerIndex);
+    this.#advisorPlacementCache.set(playerIndex, {
+      version: this.#placementCacheVersion,
+      option,
+    });
+    return option;
+  }
+
+  #isAdvisorPlacementOption(option, advisor = this.#advisorPlacementOption()) {
+    return Boolean(option && advisor
+      && option.dominoNumber === advisor.dominoNumber
+      && option.orientation === advisor.orientation
+      && option.x === advisor.x
+      && option.y === advisor.y
+      && option.anchorEnd === advisor.anchorEnd);
+  }
+
+  #jumpToAdvisorPlacement() {
+    if (!this.#isMyTurnToPlace()) return;
+    const advisor = this.#advisorPlacementOption();
+    if (!advisor) {
+      this.#setCanvasNotice('No advisor placement available.', 'info', 1000);
+      this.#syncLocalPlacementDock();
+      return;
+    }
+
+    this.#localPlacementFocus = { x: advisor.x, y: advisor.y };
+    this.#applyPlacementOption(advisor);
+    this.#setCanvasNotice('');
+    this.#renderGhost();
+    this.#syncMobileActions();
+    this.#syncLocalPlacementDock();
+    this.#refreshHud();
+  }
+
   #cycleLocalPlacement(delta) {
     if (!this.#isMyTurnToPlace()) return;
     const valid = this.#placementDockOptions();
@@ -8997,7 +12344,13 @@ export class GameLayout extends HTMLElement {
 
     const currentIndex = this.#currentPlacementOptionIndex(valid);
     const index = currentIndex < 0 ? 0 : currentIndex;
-    this.#localPlacementLabel.textContent = `${index + 1}/${valid.length}`;
+    const currentOption = valid[index] ?? null;
+    const advisor = this.#advisorPlacementOption();
+    const isAdvisor = this.#isAdvisorPlacementOption(currentOption, advisor);
+    this.#localPlacementDock.classList.toggle('isAdvisorPlacement', isAdvisor);
+    this.#localPlacementLabel.textContent = `${isAdvisor ? 'Advisor ' : ''}${index + 1}/${valid.length}`;
+    this.#btnLocalAdvisor.hidden = !this.#showAdvisor;
+    this.#btnLocalAdvisor.disabled = !advisor || isAdvisor;
     this.#btnLocalPrev.disabled = valid.length <= 1;
     this.#btnLocalNext.disabled = valid.length <= 1;
     this.#btnLocalPlace.disabled = !this.#hoverAnchor || !this.#placementFeedbackForAnchor(this.#hoverAnchor).ok;
@@ -9020,6 +12373,7 @@ export class GameLayout extends HTMLElement {
   #hideLocalPlacementDock() {
     if (!this.#localPlacementDock) return;
     this.#localPlacementDock.hidden = true;
+    this.#localPlacementDock.classList.remove('isAdvisorPlacement');
     this.#localPlacementDock.style.left = '';
     this.#localPlacementDock.style.top = '';
     this.#root?.classList.remove('hasLocalPlacementDock');
@@ -9146,18 +12500,6 @@ export class GameLayout extends HTMLElement {
     }
     return this.#game.getPlacementFeedbackAtForPlayer?.(playerIndex, anchor.x, anchor.y)
       ?? this.#game.getPlacementFeedbackAt(anchor.x, anchor.y);
-  }
-
-  #initialCurrentTilePlacementOption() {
-    const g = this.#game;
-    const drafted = this.#currentPlacementDraftedTile();
-    if (!g || !drafted) return null;
-
-    const options = this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions());
-    return options.find((option) =>
-      option.dominoNumber === drafted.domino.number
-      && option.orientation === drafted.domino.orientation
-    ) ?? null;
   }
 
   #withTemporaryPlacementSelection(playerIndex, dominoNumber, orientation, callback) {
@@ -9287,8 +12629,138 @@ export class GameLayout extends HTMLElement {
     ));
   }
 
+  #renderPlacementReturnAnimations() {
+    if (!this.#placementReturnAnimations.size || !this.#ghostGroup) return;
+    const previousGroup = this.#currentTileRenderGroup;
+    this.#currentTileRenderGroup = this.#ghostGroup;
+    const now = performance.now();
+    const ghostOriginX = this.#ghostGroup.position.x;
+    const ghostOriginZ = this.#ghostGroup.position.z;
+
+    for (const animation of this.#placementReturnAnimations.values()) {
+      if (now - animation.startedAt > animation.duration + 180) continue;
+      this.#addCanvasDraftDomino(animation.domino, animation.sourceWorldX - ghostOriginX, animation.sourceWorldZ - ghostOriginZ, {
+        claimed: true,
+        selected: true,
+        playerIndex: animation.playerIndex,
+        sourceLeftX: animation.sourceWorldX - ghostOriginX,
+        sourceZ: animation.sourceWorldZ - ghostOriginZ,
+        targetLeftX: animation.targetWorldX - ghostOriginX,
+        targetZ: animation.targetWorldZ - ghostOriginZ,
+        animationKey: animation.key,
+        animationType: 'placementReturn',
+        animationDuration: animation.duration,
+        rotationY: animation.sourceRotationY,
+        targetRotationY: 0,
+      });
+    }
+
+    this.#currentTileRenderGroup = previousGroup;
+  }
+
+  #renderPlacementSkipAnimations() {
+    if (!this.#placementSkipAnimations.size || !this.#ghostGroup) return;
+    const previousGroup = this.#currentTileRenderGroup;
+    this.#currentTileRenderGroup = this.#ghostGroup;
+    const now = performance.now();
+    const ghostOriginX = this.#ghostGroup.position.x;
+    const ghostOriginZ = this.#ghostGroup.position.z;
+
+    for (const [key, animation] of this.#placementSkipAnimations) {
+      if (now - animation.startedAt > animation.duration + 140) {
+        this.#placementSkipAnimations.delete(key);
+        this.#draftClaimAnimationStartedAt.delete(key);
+        continue;
+      }
+      const group = this.#addCanvasDraftDomino(animation.domino, animation.sourceWorldX - ghostOriginX, animation.sourceWorldZ - ghostOriginZ, {
+        claimed: true,
+        selected: true,
+        playerIndex: animation.playerIndex,
+        sourceLeftX: animation.sourceWorldX - ghostOriginX,
+        sourceZ: animation.sourceWorldZ - ghostOriginZ,
+        targetLeftX: animation.targetWorldX - ghostOriginX,
+        targetZ: animation.targetWorldZ - ghostOriginZ,
+        animationKey: animation.key,
+        animationType: 'skipDiscard',
+        animationDuration: animation.duration,
+        rotationY: animation.sourceRotationY,
+        targetRotationY: animation.sourceRotationY + 0.42,
+      });
+      this.#prepareObjectMaterialsForOpacity(group);
+    }
+
+    this.#currentTileRenderGroup = previousGroup;
+  }
+
+  #placementGhostAnimationCurrentPosition(animation, now = performance.now()) {
+    if (!animation) return null;
+    const progress = Math.max(0, Math.min(1, (now - animation.startedAt) / Math.max(1, animation.duration)));
+    const eased = 1 - Math.pow(1 - progress, 3);
+    return {
+      x: animation.sourceX + (animation.targetX - animation.sourceX) * eased,
+      z: animation.sourceZ + (animation.targetZ - animation.sourceZ) * eased,
+    };
+  }
+
+  #placementGhostAnimationFor(playerIndex, drafted, leftCoord, rightCoord) {
+    const boardOrigin = this.#boardOriginForPlayer(playerIndex);
+    const targetX = leftCoord.x;
+    const targetZ = leftCoord.y;
+    const rightOffset = {
+      x: rightCoord.x - leftCoord.x,
+      y: rightCoord.y - leftCoord.y,
+    };
+    const key = [
+      playerIndex,
+      drafted.domino.number,
+      drafted.domino.orientation,
+      leftCoord.x,
+      leftCoord.y,
+      rightCoord.x,
+      rightCoord.y,
+    ].join('|');
+
+    if (this.#placementGhostAnimation?.key === key) {
+      return { animation: this.#placementGhostAnimation, rightOffset };
+    }
+
+    const previous = this.#placementGhostAnimation;
+    let sourceX = targetX;
+    let sourceZ = targetZ;
+    if (
+      previous
+      && previous.playerIndex === playerIndex
+      && previous.dominoNumber === drafted.domino.number
+    ) {
+      const current = this.#placementGhostAnimationCurrentPosition(previous);
+      sourceX = current?.x ?? previous.targetX;
+      sourceZ = current?.z ?? previous.targetZ;
+    } else {
+      const rackTarget = this.#canvasPlacementChoiceTargetForDomino(playerIndex, drafted.domino.number);
+      if (rackTarget) {
+        sourceX = rackTarget.leftX - boardOrigin.x;
+        sourceZ = rackTarget.z - boardOrigin.z;
+      }
+    }
+
+    this.#placementGhostAnimation = {
+      key,
+      playerIndex,
+      dominoNumber: drafted.domino.number,
+      startedAt: performance.now(),
+      duration: 380,
+      sourceX,
+      sourceZ,
+      targetX,
+      targetZ,
+    };
+    return { animation: this.#placementGhostAnimation, rightOffset };
+  }
+
   #renderGhost() {
+    this.#perfCounters.renderGhost += 1;
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
+    this.#canvasPlacementConfirmTarget = null;
     this.#syncBoardLayerPositions();
     if (this.#libraryOpen) return;
 
@@ -9297,18 +12769,26 @@ export class GameLayout extends HTMLElement {
     if (this.#isMyTurnToPlace() && activeIdx != null && this.#focusedPlayerIndex !== activeIdx) {
       this.#focusedPlayerIndex = activeIdx;
     }
+    this.#renderPlacementSkipAnimations();
 
     if (g.isGameOver) {
+      this.#placementGhostAnimation = null;
+      this.#placementReturnAnimations.clear();
       this.#renderRegionScoring(null);
       this.#syncLocalPlacementDock();
       return;
     }
     if (g.state !== GameState.PLACE) {
+      this.#placementGhostAnimation = null;
+      this.#placementReturnAnimations.clear();
       this.#renderRegionScoring(null);
       this.#syncLocalPlacementDock();
       return;
     }
+    this.#refreshCanvasPlacementChoices();
+    this.#renderPlacementReturnAnimations();
     if (!this.#isMyTurnToPlace()) {
+      this.#placementGhostAnimation = null;
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -9317,6 +12797,7 @@ export class GameLayout extends HTMLElement {
 
     const drafted = this.#currentPlacementDraftedTile();
     if (!drafted) {
+      this.#placementGhostAnimation = null;
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -9325,24 +12806,27 @@ export class GameLayout extends HTMLElement {
 
     const placementBoard = g.players[activeIdx]?.board?.board || g.players[0].board.board;
 
-    // On entering placement phase, show the ghost immediately.
-    // Prefer a legal/visible anchor so the ghost does not spawn hidden under tiles.
-    if (!this.#hoverAnchor || (this.#hoverAnchorAuto && this.#isCurrentHoverAnchorOccluded())) {
-      const option = this.#initialCurrentTilePlacementOption();
-      const suggested = option
-        ? { x: option.x, y: option.y, anchorEnd: option.anchorEnd }
-        : this.#findBestInitialHoverAnchor();
-      if (suggested) {
-        this.#hoverAnchor = suggested;
-        this.#hoverAnchorAuto = true;
-        this.#sendPlacementPreview();
-      }
+    if (this.#hoverAnchorAuto && this.#isCurrentHoverAnchorOccluded()) {
+      this.#hoverAnchor = null;
+      this.#localPlacementFocus = null;
+      this.#hoverAnchorAuto = false;
+      this.#placementGhostAnimation = null;
+      this.#sendPlacementPreview(true);
+    }
+
+    if (!drafted) {
+      this.#placementGhostAnimation = null;
+      this.#renderRegionScoring(null);
+      this.#renderOpponentPlacementPreview();
+      this.#syncLocalPlacementDock();
+      return;
     }
 
     this.#renderValidAnchorHighlights(this.#currentPlacementOptions());
 
     const anchor = this.#hoverAnchor;
     if (!anchor) {
+      this.#placementGhostAnimation = null;
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -9360,6 +12844,13 @@ export class GameLayout extends HTMLElement {
 
     const borderColor = valid && !occupied ? 0x8cff9b : 0xff6b6b;
 
+    const leftCoord = ghostAnchorEnd === DominoEnd.LEFT ? anchor : other;
+    const rightCoord = ghostAnchorEnd === DominoEnd.RIGHT ? anchor : other;
+    const { animation, rightOffset } = this.#placementGhostAnimationFor(activeIdx, drafted, leftCoord, rightCoord);
+    const ghostTileGroup = new THREE.Group();
+    ghostTileGroup.position.set(animation.sourceX, 0, animation.sourceZ);
+    this.#ghostGroup.add(ghostTileGroup);
+
     const makeGhostCell = (x, y, landscape, crowns) => {
       const material = this.#getTileMaterial(landscape, crowns || 0, `${x},${y}`, true);
       const mesh = new THREE.Mesh(
@@ -9367,24 +12858,42 @@ export class GameLayout extends HTMLElement {
         material
       );
       mesh.position.set(x, 0.09, y);
-      this.#ghostGroup.add(mesh);
+      ghostTileGroup.add(mesh);
 
       const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.20, 0.99));
       const edgeMat = new THREE.LineBasicMaterial({ color: borderColor, transparent: true, opacity: 0.98 });
       const edge = new THREE.LineSegments(edgeGeo, edgeMat);
       edge.position.set(x, 0.09, y);
-      this.#ghostGroup.add(edge);
+      ghostTileGroup.add(edge);
 
       if ((crowns || 0) > 0) {
-        this.#addCrownStars(x, y, crowns, { target: this.#ghostGroup, ghost: true });
+        this.#addCrownStars(x, y, crowns, { target: ghostTileGroup, ghost: true });
       }
     };
 
-    const leftCoord = ghostAnchorEnd === DominoEnd.LEFT ? anchor : other;
-    const rightCoord = ghostAnchorEnd === DominoEnd.RIGHT ? anchor : other;
+    makeGhostCell(0, 0, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns);
+    makeGhostCell(rightOffset.x, rightOffset.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns);
+    this.#registerAnimatedObject(ghostTileGroup, 'placementGhost', {
+      targetPosition: new THREE.Vector3(animation.targetX, 0, animation.targetZ),
+      startedAt: animation.startedAt,
+      duration: animation.duration,
+    });
 
-    makeGhostCell(leftCoord.x, leftCoord.y, drafted.domino.leftEnd.landscape, drafted.domino.leftEnd.crowns);
-    makeGhostCell(rightCoord.x, rightCoord.y, drafted.domino.rightEnd.landscape, drafted.domino.rightEnd.crowns);
+    if (valid && !occupied) {
+      const markerX = rightOffset.x / 2;
+      const markerZ = rightOffset.y / 2;
+      const confirmGroup = new THREE.Group();
+      confirmGroup.position.set(animation.targetX + markerX, 0.94, animation.targetZ + markerZ);
+      this.#ghostGroup.add(confirmGroup);
+
+      const confirmSprite = createConfirmButtonSprite();
+      confirmGroup.add(confirmSprite);
+
+      this.#canvasPlacementConfirmTarget = {
+        object: confirmSprite,
+        radiusWorld: 0.34,
+      };
+    }
 
     if (this.#showPlacementScores && valid && !occupied) this.#renderRegionScoring(built.projected);
     else this.#renderRegionScoring(null);
@@ -9435,8 +12944,8 @@ export class GameLayout extends HTMLElement {
 
     if (this.#controls) this.#controls.update();
     this.#syncGridPresentation();
-    this.#syncLocalPlacementDock();
     this.#updateAnimatedObjects();
+    this.#updateScoreBurstAnimations();
     if (this.#renderer && this.#scene && this.#camera) this.#renderer.render(this.#scene, this.#camera);
     requestAnimationFrame(this.#tick);
   };

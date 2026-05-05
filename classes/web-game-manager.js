@@ -75,6 +75,9 @@ export class WebGameManager {
   /** @type {Map<number, number>} playerIndex -> preferred domino number */
   #preferredPlacementDominoByPlayer = new Map();
 
+  /** @type {boolean} */
+  #groupPlacementTurnsByPlayer = false;
+
   /**
    * @param {GameConfiguration} config
    * @param {number} seed deterministic seed for shuffles
@@ -140,6 +143,10 @@ export class WebGameManager {
 
   get currentPickingPlayerIndex() {
     return this.#pickOrder[this.#pickCursor];
+  }
+
+  setGroupedPlacementTurns(enabled) {
+    this.#groupPlacementTurnsByPlayer = Boolean(enabled);
   }
 
   get forcedDraftIndex() {
@@ -342,6 +349,46 @@ export class WebGameManager {
     }
 
     return options;
+  }
+
+  getSuggestedPlacementOption() {
+    return this.getSuggestedPlacementOptionForPlayer(this.currentPlacingPlayerIndex);
+  }
+
+  getSuggestedPlacementOptionForPlayer(playerIndex) {
+    const options = this.getCurrentPlacementOptionsForPlayer(playerIndex);
+    if (!options.length) return null;
+
+    const current = this.currentPlacingDraftedTileForPlayer(playerIndex);
+    const currentNumber = current?.domino.number ?? null;
+    const currentOrientation = current?.domino.orientation ?? null;
+    const boardSize = this.players[playerIndex]?.board?.boardSize;
+    const centerX = boardSize ? (boardSize.xMin + boardSize.xMax) / 2 : 0;
+    const centerY = boardSize ? (boardSize.yMin + boardSize.yMax) / 2 : 0;
+
+    return [...options].sort((a, b) => {
+      const aSelection = a.dominoNumber === currentNumber
+        ? a.orientation === currentOrientation ? 0 : 1
+        : 2;
+      const bSelection = b.dominoNumber === currentNumber
+        ? b.orientation === currentOrientation ? 0 : 1
+        : 2;
+      if (aSelection !== bSelection) return aSelection - bSelection;
+
+      const ar = Math.abs(a.rotationSteps ?? 0);
+      const br = Math.abs(b.rotationSteps ?? 0);
+      if (ar !== br) return ar - br;
+
+      const ad = Math.abs(a.x - centerX) + Math.abs(a.y - centerY);
+      const bd = Math.abs(b.x - centerX) + Math.abs(b.y - centerY);
+      if (ad !== bd) return ad - bd;
+
+      if (a.dominoNumber !== b.dominoNumber) return a.dominoNumber - b.dominoNumber;
+      if (a.orientation !== b.orientation) return a.orientation - b.orientation;
+      if (a.y !== b.y) return a.y - b.y;
+      if (a.x !== b.x) return a.x - b.x;
+      return (a.anchorEnd === DominoEnd.RIGHT ? 1 : 0) - (b.anchorEnd === DominoEnd.RIGHT ? 1 : 0);
+    })[0];
   }
 
   selectCurrentPlacementDomino(dominoNumber) {
@@ -678,6 +725,15 @@ export class WebGameManager {
   }
 
   #advancePlacement() {
+    const currentPlayerIndex = this.currentPlacingPlayerIndex;
+    if (
+      this.#groupPlacementTurnsByPlayer
+      && currentPlayerIndex != null
+      && this.#draftedTileForPlayer(currentPlayerIndex)
+    ) {
+      return;
+    }
+
     this.#placeCursor += 1;
     while (this.#placeCursor < this.#placeOrder.length) {
       const playerIndex = this.#placeOrder[this.#placeCursor];

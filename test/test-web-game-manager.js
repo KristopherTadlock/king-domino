@@ -78,6 +78,42 @@ function placeFirstAvailableDominoForPlayer(game, playerIndex) {
   return game.tryPlaceDominoAtForPlayer(playerIndex, option.x, option.y, option.anchorEnd);
 }
 
+function draftUntilPlacement(game) {
+  let guard = 0;
+  while (game.state.description === 'draft' && guard < 8) {
+    guard += 1;
+    const forcedIndex = game.forcedDraftIndex;
+    const index = forcedIndex ?? game.currentDraft.findIndex((slot) => slot.player == null);
+    if (index < 0) break;
+    game.pickDraft(index);
+  }
+}
+
+function advanceByDeterministicPlacements(game, targetPlacements) {
+  let placements = 0;
+  let guard = 0;
+  while (!game.isGameOver && placements < targetPlacements && guard < 400) {
+    guard += 1;
+    if (game.state.description === 'draft') {
+      draftUntilPlacement(game);
+      continue;
+    }
+
+    const options = game.getCurrentPlacementOptions();
+    if (!options.length) {
+      game.skipCurrentPlacement();
+      continue;
+    }
+
+    const option = options[placements % options.length];
+    game.setCurrentPlacementSelection(option.dominoNumber, option.orientation);
+    const result = game.tryPlaceCurrentDominoAt(option.x, option.y, option.anchorEnd);
+    if (result.ok) placements += 1;
+    else game.skipCurrentPlacement();
+  }
+  return placements;
+}
+
 (function() {
   it('should pad missing web player names to configured player count', () => {
     const game = new WebGameManager(new GameConfiguration(2), 123);
@@ -210,6 +246,45 @@ function placeFirstAvailableDominoForPlayer(game, playerIndex) {
     assert(game.currentPlacingDraftedTile.domino.orientation === other.orientation);
   });
 
+  it('should suggest a rotated placement when the current orientation is invalid', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.start(['Codex', 'Helper']);
+
+    assert(advanceByDeterministicPlacements(game, 23) === 23);
+    draftUntilPlacement(game);
+
+    const current = game.currentPlacingDraftedTile;
+    const options = game.getCurrentPlacementOptions();
+    const exactCurrent = options.find((option) =>
+      option.dominoNumber === current.domino.number
+      && option.orientation === current.domino.orientation
+    );
+    const suggested = game.getSuggestedPlacementOption();
+
+    assert(current.domino.number === 9);
+    assert(current.domino.orientation === 0);
+    assert(!exactCurrent);
+    assert(suggested.dominoNumber === 9);
+    assert(suggested.orientation === 90);
+  });
+
+  it('should suggest another drafted domino when the current domino has no legal placement', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 3);
+    game.start(['Codex', 'Helper']);
+
+    assert(advanceByDeterministicPlacements(game, 8) === 8);
+    draftUntilPlacement(game);
+
+    const current = game.currentPlacingDraftedTile;
+    const options = game.getCurrentPlacementOptions();
+    const currentOptions = options.filter((option) => option.dominoNumber === current.domino.number);
+    const suggested = game.getSuggestedPlacementOption();
+
+    assert(current.domino.number === 7);
+    assert(currentOptions.length === 0);
+    assert(suggested.dominoNumber === 18);
+  });
+
   it('should allow multiplayer players to place out of placement order', () => {
     const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
     game.start(['Codex', 'Helper']);
@@ -230,6 +305,32 @@ function placeFirstAvailableDominoForPlayer(game, playerIndex) {
     assert(game.currentPlacingPlayerIndex === 0);
     assert(game.getCurrentPlacingChoicesForPlayer(0).length === 2);
     assert(game.getCurrentPlacingChoicesForPlayer(1).length === 1);
+  });
+
+  it('should keep a hotseat player active until all their drafted tiles are placed', () => {
+    const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
+    game.setGroupedPlacementTurns(true);
+    game.start(['Codex', 'Helper']);
+    for (const index of [0, 1, 2, 3]) game.pickDraft(index);
+
+    const rulePickOrder = game.pickOrder.join(',');
+    assert(game.state.description === 'place');
+    assert(game.currentPlacingPlayerIndex === 0);
+    assert(game.getCurrentPlacingChoicesForPlayer(0).length === 2);
+
+    let result = placeFirstAvailableDomino(game);
+    assert(result.ok);
+    assert(game.state.description === 'place');
+    assert(game.currentPlacingPlayerIndex === 0);
+    assert(game.getCurrentPlacingChoicesForPlayer(0).length === 1);
+
+    result = placeFirstAvailableDomino(game);
+    assert(result.ok);
+    assert(game.state.description === 'place');
+    assert(game.currentPlacingPlayerIndex === 1);
+    assert(game.getCurrentPlacingChoicesForPlayer(0).length === 0);
+    assert(game.getCurrentPlacingChoicesForPlayer(1).length === 2);
+    assert(game.pickOrder.join(',') === rulePickOrder);
   });
 
   it('should start the next draft after all non-blocking placements finish', () => {

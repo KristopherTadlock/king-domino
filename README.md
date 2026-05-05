@@ -18,6 +18,9 @@ King domino is a board game where 2 - 4 players compete to build the best kingdo
 
 1. Run `npm test`
 2. With the multiplayer server running on port 8081, run `npm run test:ws`
+3. Run `npm run perf` to launch a temporary local server plus headless Chrome and measure the late-game placement interaction budget.
+
+The performance harness defaults to the `late-placement` scenario. It builds a deterministic late-game board, measures local placement cycling and rotation, and fails if those interactions accidentally rebuild the full board or exceed the current CPU budget. Frame cadence is reported as telemetry because headless software WebGL varies a lot by machine. Use `npm run perf -- --scenario=playthrough` for a broader draft/place playthrough trace that reports action timings without applying the late-placement budgets.
 
 ## How to run the multiplayer harness
 
