@@ -10,6 +10,7 @@ import time
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from .candidate_policy import (
     CandidateScoringPolicy,
@@ -50,6 +51,53 @@ def _flat_logits(model, obs_tensor, legal_actions, legal_mask):
     return logits.masked_fill(~full_mask, -1e9)
 
 
+def _candidate_logits(head, model, obs_tensor, legal_actions, legal_mask, action_features=None, action_parts=None):
+    if head == "flat":
+        logits = model(obs_tensor)
+        gathered = logits.gather(1, legal_actions.clamp_min(0))
+    elif head == "factorized":
+        gathered = factorized_candidate_logits(model(obs_tensor), action_parts[legal_actions])
+    else:
+        gathered = model(obs_tensor, action_features[legal_actions])
+    return gathered.masked_fill(~legal_mask, -1e9)
+
+
+def _teacher_probs(candidate_scores: torch.Tensor, legal_mask: torch.Tensor, temperature: float) -> torch.Tensor:
+    scores = torch.nan_to_num(candidate_scores, nan=-1e9, neginf=-1e9, posinf=1e9)
+    scores = scores.masked_fill(~legal_mask, -1e9)
+    row_max = scores.max(dim=-1, keepdim=True).values
+    centered = (scores - row_max) / max(temperature, 1e-6)
+    centered = centered.masked_fill(~legal_mask, -1e9)
+    probs = torch.softmax(centered, dim=-1).masked_fill(~legal_mask, 0.0)
+    return probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+
+def _distill_loss(
+    logits: torch.Tensor,
+    target_indices: torch.Tensor,
+    candidate_scores: torch.Tensor | None,
+    legal_mask: torch.Tensor,
+    *,
+    objective: str,
+    teacher_temperature: float,
+    soft_weight: float,
+) -> tuple[torch.Tensor, float, float]:
+    ce_loss = F.cross_entropy(logits, target_indices)
+    if objective == "ce":
+        return ce_loss, float(ce_loss.item()), 0.0
+    if candidate_scores is None:
+        raise ValueError("objective requires candidate_scores; regenerate the dataset with teacher_dataset v1")
+    teacher = _teacher_probs(candidate_scores, legal_mask, teacher_temperature)
+    log_probs = F.log_softmax(logits, dim=-1)
+    soft_loss = F.kl_div(log_probs, teacher, reduction="batchmean")
+    if objective == "soft":
+        return soft_loss, float(ce_loss.item()), float(soft_loss.item())
+    if objective == "hybrid":
+        weight = min(1.0, max(0.0, soft_weight))
+        return (1.0 - weight) * ce_loss + weight * soft_loss, float(ce_loss.item()), float(soft_loss.item())
+    raise ValueError(f"unknown objective: {objective}")
+
+
 def train_distilled(
     *,
     dataset: Path,
@@ -60,6 +108,9 @@ def train_distilled(
     batch_size: int = 256,
     hidden_size: int = DEFAULT_HIDDEN_SIZE,
     lr: float = 2.5e-4,
+    objective: str = "ce",
+    teacher_temperature: float = 8.0,
+    soft_weight: float = 0.5,
 ) -> dict:
     torch.manual_seed(seed)
     started = time.perf_counter()
@@ -69,6 +120,7 @@ def train_distilled(
     legal_mask = data["legal_mask"].astype(np.bool_, copy=False)
     target_actions = data["target_actions"].astype(np.int64, copy=False)
     target_indices = data["target_indices"].astype(np.int64, copy=False)
+    candidate_scores = data["candidate_scores"].astype(np.float32, copy=False) if "candidate_scores" in data else None
     train_indices, val_indices = _split_indices(observations.shape[0], seed)
 
     if head == "flat":
@@ -86,6 +138,8 @@ def train_distilled(
     action_parts = torch.from_numpy(action_part_table()) if head == "factorized" else None
     updates = 0
     last_loss = 0.0
+    last_ce_loss = 0.0
+    last_soft_loss = 0.0
     last_accuracy = 0.0
 
     for _epoch in range(max(1, epochs)):
@@ -96,44 +150,48 @@ def train_distilled(
             obs_tensor = torch.from_numpy(observations[batch])
             action_tensor = torch.from_numpy(legal_actions[batch])
             mask_tensor = torch.from_numpy(legal_mask[batch])
-            if head == "flat":
-                target_tensor = torch.from_numpy(target_actions[batch])
-                logits = _flat_logits(model, obs_tensor, action_tensor, mask_tensor)
-            elif head == "factorized":
-                target_tensor = torch.from_numpy(target_indices[batch])
-                logits = factorized_candidate_logits(model(obs_tensor), action_parts[action_tensor]).masked_fill(~mask_tensor, -1e9)
-            else:
-                target_tensor = torch.from_numpy(target_indices[batch])
-                logits = model(obs_tensor, action_features[action_tensor]).masked_fill(~mask_tensor, -1e9)
-            loss = loss_fn(logits, target_tensor)
+            score_tensor = torch.from_numpy(candidate_scores[batch]) if candidate_scores is not None else None
+            target_tensor = torch.from_numpy(target_indices[batch])
+            logits = _candidate_logits(head, model, obs_tensor, action_tensor, mask_tensor, action_features, action_parts)
+            loss, ce_loss, soft_loss = _distill_loss(
+                logits,
+                target_tensor,
+                score_tensor,
+                mask_tensor,
+                objective=objective,
+                teacher_temperature=teacher_temperature,
+                soft_weight=soft_weight,
+            )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             updates += 1
             last_loss = float(loss.item())
+            last_ce_loss = ce_loss
+            last_soft_loss = soft_loss
             last_accuracy = _accuracy(logits.detach(), target_tensor)
 
     with torch.no_grad():
         val_accuracy = 0.0
+        val_soft_loss = 0.0
         if len(val_indices):
             accuracies = []
+            soft_losses = []
             for start in range(0, len(val_indices), batch_size):
                 batch = val_indices[start:start + batch_size]
                 obs_tensor = torch.from_numpy(observations[batch])
                 action_tensor = torch.from_numpy(legal_actions[batch])
                 mask_tensor = torch.from_numpy(legal_mask[batch])
-                if head == "flat":
-                    target_tensor = torch.from_numpy(target_actions[batch])
-                    logits = _flat_logits(model, obs_tensor, action_tensor, mask_tensor)
-                elif head == "factorized":
-                    target_tensor = torch.from_numpy(target_indices[batch])
-                    logits = factorized_candidate_logits(model(obs_tensor), action_parts[action_tensor]).masked_fill(~mask_tensor, -1e9)
-                else:
-                    target_tensor = torch.from_numpy(target_indices[batch])
-                    logits = model(obs_tensor, action_features[action_tensor]).masked_fill(~mask_tensor, -1e9)
+                score_tensor = torch.from_numpy(candidate_scores[batch]) if candidate_scores is not None else None
+                target_tensor = torch.from_numpy(target_indices[batch])
+                logits = _candidate_logits(head, model, obs_tensor, action_tensor, mask_tensor, action_features, action_parts)
                 accuracies.append(_accuracy(logits, target_tensor))
+                if score_tensor is not None:
+                    teacher = _teacher_probs(score_tensor, mask_tensor, teacher_temperature)
+                    soft_losses.append(float(F.kl_div(F.log_softmax(logits, dim=-1), teacher, reduction="batchmean").item()))
             val_accuracy = float(np.mean(accuracies)) if accuracies else 0.0
+            val_soft_loss = float(np.mean(soft_losses)) if soft_losses else 0.0
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     metadata = {
@@ -144,6 +202,9 @@ def train_distilled(
         "batch_size": batch_size,
         "hidden_size": hidden_size,
         "lr": lr,
+        "objective": objective,
+        "teacher_temperature": teacher_temperature,
+        "soft_weight": soft_weight,
         "dataset": str(dataset),
         "dataset_metadata": dataset_metadata,
         "samples": int(observations.shape[0]),
@@ -151,8 +212,11 @@ def train_distilled(
         "val_samples": int(len(val_indices)),
         "updates": updates,
         "last_loss": last_loss,
+        "last_ce_loss": last_ce_loss,
+        "last_soft_loss": last_soft_loss,
         "last_train_accuracy": last_accuracy,
         "val_accuracy": val_accuracy,
+        "val_soft_loss": val_soft_loss,
         "seconds": elapsed,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +254,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--lr", type=float, default=2.5e-4)
+    parser.add_argument("--objective", choices=["ce", "soft", "hybrid"], default="ce")
+    parser.add_argument("--teacher-temperature", type=float, default=8.0)
+    parser.add_argument("--soft-weight", type=float, default=0.5)
     args = parser.parse_args()
     print(json.dumps(train_distilled(
         dataset=Path(args.dataset),
@@ -200,6 +267,9 @@ def main():
         batch_size=args.batch_size,
         hidden_size=args.hidden_size,
         lr=args.lr,
+        objective=args.objective,
+        teacher_temperature=args.teacher_temperature,
+        soft_weight=args.soft_weight,
     ), indent=2))
 
 

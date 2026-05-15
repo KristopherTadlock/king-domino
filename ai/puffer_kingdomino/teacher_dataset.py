@@ -46,6 +46,8 @@ def generate_dataset(
     target_indices = np.zeros((samples,), dtype=np.int16)
     target_scores = np.zeros((samples,), dtype=np.float32)
     target_ranks = np.full((samples,), -1, dtype=np.int16)
+    candidate_scores = np.full((samples, max_candidates), np.nan, dtype=np.float32)
+    candidate_ranks = np.full((samples, max_candidates), -1, dtype=np.int16)
     players = np.zeros((samples,), dtype=np.int8)
     phases = np.zeros((samples,), dtype=np.int8)
     game_seeds = np.zeros((samples,), dtype=np.uint32)
@@ -82,6 +84,9 @@ def generate_dataset(
             ranked = sorted(range(len(actions)), key=lambda index: scores[index], reverse=True)
             target_ranks[sample_index] = ranked.index(target_index)
             target_scores[sample_index] = float(scores[target_index])
+            candidate_scores[sample_index, : len(actions)] = np.asarray(scores, dtype=np.float32)
+            for rank, action_index in enumerate(ranked):
+                candidate_ranks[sample_index, action_index] = rank
 
         target_actions[sample_index] = target
         target_indices[sample_index] = target_index
@@ -102,7 +107,7 @@ def generate_dataset(
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     metadata = {
-        "format": "kingdomino-teacher-dataset-v0",
+        "format": "kingdomino-teacher-dataset-v1",
         "samples": samples,
         "seed": seed,
         "teacher_kind": teacher_kind,
@@ -126,6 +131,8 @@ def generate_dataset(
         target_indices=target_indices,
         target_scores=target_scores,
         target_ranks=target_ranks,
+        candidate_scores=candidate_scores,
+        candidate_ranks=candidate_ranks,
         players=players,
         phases=phases,
         game_seeds=game_seeds,

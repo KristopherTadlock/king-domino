@@ -9,4 +9,5 @@ resources
 ai/artifacts/datasets/*.npz
 ai/artifacts/distilled_*.pt
 ai/artifacts/ppo_smoke*.pt
+ai/artifacts/ppo_*.pt
 ai/artifacts/*bakeoff*.json

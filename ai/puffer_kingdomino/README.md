@@ -56,6 +56,8 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind candidate --policy ai/artifacts/distilled_candidate.pt --opponent-kind greedy --games 1000 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4
+.venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_report.json --rollout mixed --objective hybrid
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -174,13 +176,27 @@ competitive with greedy:
   (`6.6%` vs greedy), so this is not just undertraining.
 - A 50k-step PPO smoke continuation from the best mixed flat checkpoint stayed
   in the same band (`6.6%` vs greedy, `81.6%` vs random).
+- A v1 dataset now stores every legal candidate's teacher score/rank, enabling
+  soft/hybrid distillation from the teacher preference landscape instead of only
+  hard chosen-action labels.
+- A 100k mixed-rollout hybrid run improved the best random result and score
+  margin a little, but still only reached `7.5%` vs greedy with the flat head.
+- PPO now scores full learner decision transitions, including the opponent
+  response before the next learner turn. A 300k flat PPO continuation reached
+  `7.8%` vs greedy and `83.0%` vs random.
+- Candidate-action PPO runs over legal candidates directly and is faster
+  locally, around `4.9k` learner decisions/sec in the 300k reference run, but
+  the first 300k continuation did not improve over distillation (`6.9%` vs
+  greedy, `79.3%` vs random).
 
 The practical takeaway: plain hard-label behavioral cloning from a search
 teacher is enough to learn "reasonable random-beating play", but not enough to
 inherit the teacher's strategic strength. The next promising route is to train
 from richer teacher information: score/rank regression or pairwise ranking over
-legal candidates, plus a candidate/factorized PPO path that can optimize actual
-game outcomes instead of only imitating one chosen action.
+legal candidates, then use PPO with a stronger value/advantage setup. The first
+candidate PPO trainer is now in place, but its early results suggest we need
+better reward/advantage estimation, a value warm start, and probably opponent
+curriculum or self-play before million-step runs are likely to pay off.
 
 For browser play against the current executable policy:
 
