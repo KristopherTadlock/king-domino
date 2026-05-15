@@ -88,7 +88,8 @@ export class AIPolicyRunner {
     for (const action of legalActions) {
       const features = this.#candidateFeatures(game, playerIndex, action, policy.featureMode);
       if (!features) continue;
-      const score = this.#candidatePolicyScore(policy, state, features);
+      const score = this.#candidatePolicyScore(policy, state, features)
+        + this.#candidateActionAdjustment(game, playerIndex, action);
       if (score > bestScore) {
         bestScore = score;
         bestAction = action;
@@ -122,6 +123,40 @@ export class AIPolicyRunner {
       bias += (policy.weights.actionBiasWeight?.[i] ?? 0) * features[i];
     }
     return score + bias;
+  }
+
+  #candidateActionAdjustment(game, playerIndex, action) {
+    if (game.state !== GameState.DRAFT || action < 0 || action >= DRAFT_ACTIONS) return 0;
+    return this.#draftOpponentPressureBonus(game, playerIndex, action);
+  }
+
+  #draftOpponentPressureBonus(game, playerIndex, draftIndex) {
+    if (game.currentPickingPlayerIndex !== playerIndex) return 0;
+    const domino = game.currentDraft?.[draftIndex]?.domino;
+    if (!domino) return 0;
+
+    const ownValue = this.#draftOpportunityScore(game, playerIndex, domino);
+    let opponentValue = 0;
+    for (let opponentIndex = 0; opponentIndex < (game.players?.length ?? 0); opponentIndex += 1) {
+      if (opponentIndex === playerIndex) continue;
+      opponentValue = Math.max(opponentValue, this.#draftOpportunityScore(game, opponentIndex, domino));
+    }
+
+    const pressure = opponentValue - ownValue * 0.7;
+    if (pressure <= 0) return 0;
+    return Math.min(0.75, pressure * 0.04);
+  }
+
+  #draftOpportunityScore(game, playerIndex, domino) {
+    const boardState = this.#boardFeatureState(game, playerIndex);
+    const metrics = this.#bestMobilityMetrics(boardState, domino);
+    const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
+    const diversity = terrainKey(domino.leftEnd?.landscape) === terrainKey(domino.rightEnd?.landscape) ? 0 : 1;
+    return metrics.bestScoreDelta
+      + metrics.bestTouchCount * 0.75
+      + Math.min(24, metrics.count) * 0.12
+      + crowns * 1.25
+      + diversity * 0.4;
   }
 
   #linearTanh(weight, bias, input) {

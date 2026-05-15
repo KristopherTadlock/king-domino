@@ -78,6 +78,7 @@ const ALL_EDGES = [Edges.TOP, Edges.BOTTOM, Edges.LEFT, Edges.RIGHT];
 const SCORE_HISTORY_STORAGE_KEY = 'kd.completedGames.v1';
 const SCORE_HISTORY_LIMIT = 50;
 const ADVISOR_VISIBILITY_STORAGE_KEY = 'kd.showAdvisor';
+const HOTSEAT_SAVE_STORAGE_KEY = 'kd.hotseatGame.v1';
 
 const LANDSCAPE_COLOR_BY_KEY = Object.freeze(Object.fromEntries(
   Object.getOwnPropertySymbols(LANDSCAPE_COLORS)
@@ -3796,6 +3797,80 @@ export class GameLayout extends HTMLElement {
     }
   }
 
+  #hotseatUrlSeedFallback() {
+    const urlSeed = Number.parseInt(new URL(location.href).searchParams.get('seed') || '', 10);
+    if (Number.isFinite(urlSeed)) return urlSeed >>> 0;
+    return this.#game?.seed ?? randomSeed();
+  }
+
+  #hotseatAiPlayers() {
+    return [...this.#aiPlayerIndices].filter((index) => Number.isInteger(index)).sort((a, b) => a - b);
+  }
+
+  #hotseatSaveSignature(seed, playerNames, playerCount, aiPlayers = this.#hotseatAiPlayers()) {
+    return {
+      seed: Number(seed) >>> 0,
+      playerCount: this.#normalizePlayerCount(playerCount, this.#playerCount),
+      playerNames: (playerNames ?? []).slice(0, playerCount).map((name) => String(name ?? '')),
+      aiPlayers: [...aiPlayers].sort((a, b) => a - b),
+    };
+  }
+
+  #hotseatSaveMatches(save, seed, playerNames, playerCount) {
+    if (!save || save.schema !== 1 || !Array.isArray(save.actions)) return false;
+    const expected = this.#hotseatSaveSignature(seed, playerNames, playerCount);
+    const actual = this.#hotseatSaveSignature(
+      save.seed,
+      Array.isArray(save.playerNames) ? save.playerNames : [],
+      save.playerCount,
+      Array.isArray(save.aiPlayers) ? save.aiPlayers : []
+    );
+    return JSON.stringify(actual) === JSON.stringify(expected);
+  }
+
+  #saveHotseatGame() {
+    if (!this.#hotseat || !this.#game) return;
+    try {
+      const seed = this.#hotseatUrlSeedFallback();
+      const payload = {
+        schema: 1,
+        savedAt: Date.now(),
+        ...this.#hotseatSaveSignature(seed, this.#playerNames, this.#playerCount),
+        actions: this.#actionHistory,
+      };
+      localStorage.setItem(HOTSEAT_SAVE_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Local recovery is best-effort; private mode/quota errors should not block play.
+    }
+  }
+
+  #clearHotseatSave() {
+    try {
+      localStorage.removeItem(HOTSEAT_SAVE_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  #restoreHotseatGame(seed, playerNames, playerCount) {
+    try {
+      const raw = localStorage.getItem(HOTSEAT_SAVE_STORAGE_KEY);
+      if (!raw) return false;
+      const save = JSON.parse(raw);
+      if (!this.#hotseatSaveMatches(save, seed, playerNames, playerCount)) return false;
+      this.#actionHistory = [];
+      for (const action of save.actions) {
+        if (!action || typeof action.type !== 'string') continue;
+        const replayAction = JSON.parse(JSON.stringify(action));
+        this.#actionHistory.push(replayAction);
+        this.#applyNetworkAction(replayAction, { effects: false });
+      }
+      return this.#actionHistory.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   #currentScoreHistoryRecord() {
     if (!this.#game?.isGameOver || !this.#game.players?.length) return null;
 
@@ -4366,6 +4441,7 @@ export class GameLayout extends HTMLElement {
       this.#mp.leaveRoom();
       this.#mp = null;
     }
+    if (this.#hotseat) this.#clearHotseatSave();
     const url = new URL(location.href);
     url.search = '';
     history.replaceState(null, '', url.toString());
@@ -4560,6 +4636,7 @@ export class GameLayout extends HTMLElement {
     });
     history.replaceState(null, '', url.toString());
 
+    this.#clearHotseatSave();
     this.#mp?.disconnect?.();
     this.#homeMode = false;
     this.#hotseat = true;
@@ -4604,8 +4681,12 @@ export class GameLayout extends HTMLElement {
       this.#pendingUndoRequest = null;
       this.#lobbyNotice = null;
       this.#actionHistory = [];
-      this.#initGame(Number.isFinite(seed) ? seed : randomSeed(), playerNames, playerCount);
+      const initialSeed = Number.isFinite(seed) ? seed : randomSeed();
+      this.#initGame(initialSeed, playerNames, playerCount);
+      this.#configureAiFromUrl(url.searchParams);
+      this.#restoreHotseatGame(initialSeed, playerNames, playerCount);
       this.#syncHotseatPlayerIndex();
+      this.#syncFocusedBoardToPhase();
       this.#mp = {
         sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
         disconnect: () => {},
@@ -4706,6 +4787,7 @@ export class GameLayout extends HTMLElement {
     const autoDraftOrigin = this.#draftOriginSnapshotForAutoDraft(action, previousState);
     this.#actionHistory.push(action);
     this.#applyNetworkAction(action, { effects: render });
+    this.#saveHotseatGame();
     this.#syncHotseatPlayerIndex();
     const focusChanged = this.#syncFocusedBoardToPhase();
     const phaseChanged = previousState != null && previousState !== this.#game?.state;
