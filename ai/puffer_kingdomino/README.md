@@ -63,6 +63,7 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_obs_v2_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_obs_v2_report.json --rollout mixed --objective hybrid
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_obs_v2_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_obs_v2_300k.json
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_obs_v2_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_obs_v2_1m.json
+.venv/bin/python -m ai.puffer_kingdomino.policy_diagnostic --policy-kind candidate --policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --reference-kind greedy --opponent-kind greedy --games 1000 --seed 456
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -243,6 +244,29 @@ curriculum or self-play before additional million-step runs are likely to pay
 off. Since the 1M run plateaued near the distilled baseline, the next likely
 model-side step is a richer state encoder or decomposed draft/place heads rather
 than simply extending this same run.
+
+`policy_diagnostic` breaks policy strength down by phase. The repeated
+`~7%`-vs-greedy result appears to be a placement-policy ceiling, not an eval
+artifact:
+
+- Greedy vs greedy is balanced under seat-swapped eval.
+- The weighted heuristic still beats greedy cleanly.
+- Random is only about `1%` vs greedy, so `~7%` is not a floor.
+- Distilled and PPO candidate policies match greedy's draft pick about `99.6%`
+  of the time.
+- The same policies match greedy placement only about `33%` of the time and put
+  the selected placement in greedy's top three about `62%` of the time.
+- Replacing only the neural draft with greedy barely matters; replacing only the
+  neural placement with greedy moves the policy back near greedy-vs-greedy.
+
+This points to the current action representation and candidate scorer as the
+systemic bottleneck. Placement candidates only expose generic action ids
+(`draft slot`, `orientation`, `x`, `y`, `anchor end`) while the model must infer
+local terrain/crown consequences indirectly from a flat board vector. The next
+serious neural step should add placement-specific candidate features or a local
+board/action encoder: placed terrain/crowns, matching-edge counts, immediate
+score delta, board expansion, castle contact, region size/crown potential, and
+possibly separate draft/place heads.
 
 For browser play against the current executable policy:
 
