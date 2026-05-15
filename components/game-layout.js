@@ -1325,6 +1325,9 @@ export class GameLayout extends HTMLElement {
   /** @type {THREE.Group | null} */
   #currentTileRenderGroup = null;
 
+  /** @type {'full' | 'lite'} */
+  #currentLandscapeDetailMode = 'full';
+
   /** @type {{object:THREE.Object3D,type:string,basePosition:THREE.Vector3,baseRotation:THREE.Euler,baseScale:THREE.Vector3,phase:number,speed:number,amplitude:number,travel:number,wander:number,tail?:THREE.Object3D,tailBaseRotation?:THREE.Euler,fin?:THREE.Object3D,finBaseRotation?:THREE.Euler,flippers?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],head?:THREE.Object3D,headBasePosition?:THREE.Vector3,headBaseRotation?:THREE.Euler,legs?:{object:THREE.Object3D,baseRotation:THREE.Euler}[],material?:THREE.Material,targetPosition?:THREE.Vector3,targetScale?:THREE.Vector3,targetRotationY?:number,startedAt?:number,duration?:number}[]} */
   #animatedObjects = [];
 
@@ -1384,6 +1387,12 @@ export class GameLayout extends HTMLElement {
 
   /** @type {Map<string, THREE.MeshStandardMaterial>} */
   #tileMaterialCache = new Map();
+
+  /** @type {Map<string, THREE.Material>} */
+  #detailMaterialCache = new Map();
+
+  /** @type {Map<string, THREE.BufferGeometry>} */
+  #detailGeometryCache = new Map();
 
   /** @type {{x:number,y:number} | null} */
   #hoverAnchor = null;
@@ -6048,6 +6057,16 @@ export class GameLayout extends HTMLElement {
     return this.#game.currentPickingPlayerIndex;
   }
 
+  #fullDetailPlayerIndices() {
+    const players = this.#game?.players ?? [];
+    const indices = new Set();
+    const active = this.#activePlayerIndex();
+    if (Number.isInteger(active)) indices.add(active);
+    if (Number.isInteger(this.#focusedPlayerIndex)) indices.add(this.#focusedPlayerIndex);
+    if (!indices.size && players.length) indices.add(0);
+    return indices;
+  }
+
   #roundProgress(g = this.#game) {
     if (!g) return { round: 1, total: 1 };
     const round = Math.max(1, g.round || 1);
@@ -9459,6 +9478,8 @@ export class GameLayout extends HTMLElement {
 
     const players = this.#game?.players ?? [];
     const previousGroup = this.#currentTileRenderGroup;
+    const previousDetailMode = this.#currentLandscapeDetailMode;
+    const fullDetailPlayerIndices = this.#fullDetailPlayerIndices();
     for (let playerIndex = 0; playerIndex < players.length; playerIndex++) {
       const player = players[playerIndex];
       const boardManager = player.board;
@@ -9469,6 +9490,7 @@ export class GameLayout extends HTMLElement {
       boardGroup.userData.playerIndex = playerIndex;
       this.#tilesGroup.add(boardGroup);
       this.#currentTileRenderGroup = boardGroup;
+      this.#currentLandscapeDetailMode = fullDetailPlayerIndices.has(playerIndex) ? 'full' : 'lite';
       this.#addPlayerPlayArea(playerIndex, boardManager);
       this.#addPlayerScorePlaque(playerIndex, boardManager);
 
@@ -9478,7 +9500,7 @@ export class GameLayout extends HTMLElement {
         const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, tileSeedKey, false);
 
         const tileMesh = new THREE.Mesh(
-          new THREE.BoxGeometry(0.98, 0.22, 0.98),
+          this.#cachedDetailGeometry('tile-base', () => new THREE.BoxGeometry(0.98, 0.22, 0.98)),
           material
         );
         tileMesh.position.set(tile.x, 0.11, tile.y);
@@ -9487,7 +9509,8 @@ export class GameLayout extends HTMLElement {
         if (tile.landscape === Landscapes.CASTLE) {
           this.#addCastleDetail(tile.x, tile.y, board, boardManager, playerIndex);
         } else {
-          this.#addLandscapeDetail(tile, tileSeedKey);
+          if (this.#currentLandscapeDetailMode === 'lite') this.#addLiteLandscapeDetail(tile, tileSeedKey);
+          else this.#addLandscapeDetail(tile, tileSeedKey);
           if ((tile.crowns || 0) > 0) {
             this.#addCrownedLandmark(tile, tileSeedKey);
             this.#addCrownStars(tile.x, tile.y, tile.crowns);
@@ -9507,6 +9530,7 @@ export class GameLayout extends HTMLElement {
       }
     }
     this.#currentTileRenderGroup = previousGroup;
+    this.#currentLandscapeDetailMode = previousDetailMode;
 
     if (this.#game?.state === GameState.DRAFT && !this.#game.isGameOver) {
       this.#renderCanvasDraft();
@@ -11259,6 +11283,93 @@ export class GameLayout extends HTMLElement {
     }
 
     this.#addTileObjects(group);
+  }
+
+  #cachedDetailMaterial(key, createMaterial) {
+    const cached = this.#detailMaterialCache.get(key);
+    if (cached) return cached;
+    const material = createMaterial();
+    this.#detailMaterialCache.set(key, material);
+    return material;
+  }
+
+  #cachedDetailGeometry(key, createGeometry) {
+    const cached = this.#detailGeometryCache.get(key);
+    if (cached) return cached;
+    const geometry = createGeometry();
+    this.#detailGeometryCache.set(key, geometry);
+    return geometry;
+  }
+
+  #addLiteLandscapeDetail(tile, seedKey = '') {
+    const x = tile.x;
+    const y = tile.y;
+    const rand = this.#variationRand(tile, 'lite-landscape', seedKey);
+    const crowned = (tile.crowns || 0) > 0;
+    const dx = crowned ? 0.24 : -0.22 + rand() * 0.44;
+    const dz = crowned ? -0.24 : -0.22 + rand() * 0.44;
+    const spin = rand() * Math.PI * 2;
+
+    switch (tile.landscape) {
+      case Landscapes.FOREST: {
+        const trunkMat = this.#cachedDetailMaterial('lite-forest-trunk', () => new THREE.MeshStandardMaterial({ color: 0x6a4930, roughness: 0.78, metalness: 0.02 }));
+        const leafMat = this.#cachedDetailMaterial('lite-forest-leaf', () => new THREE.MeshStandardMaterial({ color: 0x2f7d44, roughness: 0.70, metalness: 0.02 }));
+        const trunk = new THREE.Mesh(this.#cachedDetailGeometry('lite-forest-trunk', () => new THREE.CylinderGeometry(0.022, 0.026, 0.15, 7)), trunkMat);
+        trunk.position.set(x + dx, 0.30, y + dz);
+        trunk.rotation.y = spin;
+        const canopy = new THREE.Mesh(this.#cachedDetailGeometry('lite-forest-canopy', () => new THREE.ConeGeometry(0.105, 0.20, 8)), leafMat);
+        canopy.position.set(x + dx, 0.44, y + dz);
+        canopy.rotation.y = spin + 0.4;
+        this.#addTileObjects(trunk, canopy);
+        break;
+      }
+      case Landscapes.WHEAT: {
+        const mat = this.#cachedDetailMaterial('lite-wheat', () => new THREE.MeshStandardMaterial({ color: 0xf1bf4d, roughness: 0.66, metalness: 0.03, emissive: 0x2d1803, emissiveIntensity: 0.05 }));
+        const patch = new THREE.Mesh(this.#cachedDetailGeometry('lite-wheat-patch', () => new THREE.BoxGeometry(0.38, 0.045, 0.12)), mat);
+        patch.position.set(x + dx, 0.255, y + dz);
+        patch.rotation.y = spin;
+        this.#addTileObjects(patch);
+        break;
+      }
+      case Landscapes.WATER: {
+        const mat = this.#cachedDetailMaterial('lite-water-glint', () => new THREE.MeshBasicMaterial({ color: 0x9bd8ff, transparent: true, opacity: 0.46, depthWrite: false, side: THREE.DoubleSide }));
+        const glint = new THREE.Mesh(this.#cachedDetailGeometry('lite-water-glint', () => new THREE.PlaneGeometry(0.34, 0.055)), mat);
+        glint.position.set(x + dx, 0.236, y + dz);
+        glint.rotation.x = -Math.PI / 2;
+        glint.rotation.z = spin;
+        this.#addTileObjects(glint);
+        break;
+      }
+      case Landscapes.PASTURE: {
+        const mat = this.#cachedDetailMaterial('lite-pasture', () => new THREE.MeshStandardMaterial({ color: 0xdaf2a6, roughness: 0.72, metalness: 0.02 }));
+        const tuft = new THREE.Mesh(this.#cachedDetailGeometry('lite-pasture-tuft', () => new THREE.SphereGeometry(0.07, 8, 6)), mat);
+        tuft.scale.set(1.5, 0.28, 0.9);
+        tuft.position.set(x + dx, 0.245, y + dz);
+        tuft.rotation.y = spin;
+        this.#addTileObjects(tuft);
+        break;
+      }
+      case Landscapes.BOG: {
+        const mat = this.#cachedDetailMaterial('lite-bog', () => new THREE.MeshStandardMaterial({ color: 0x8a6a8e, roughness: 0.70, metalness: 0.03, transparent: true, opacity: 0.78 }));
+        const pool = new THREE.Mesh(this.#cachedDetailGeometry('lite-bog-pool', () => new THREE.SphereGeometry(0.08, 10, 6)), mat);
+        pool.scale.set(1.55, 0.14, 0.82);
+        pool.position.set(x + dx, 0.238, y + dz);
+        pool.rotation.y = spin;
+        this.#addTileObjects(pool);
+        break;
+      }
+      case Landscapes.MINE: {
+        const mat = this.#cachedDetailMaterial('lite-mine', () => new THREE.MeshStandardMaterial({ color: 0x6f6d72, roughness: 0.62, metalness: 0.12 }));
+        const rock = new THREE.Mesh(this.#cachedDetailGeometry('lite-mine-rock', () => new THREE.DodecahedronGeometry(0.085, 0)), mat);
+        rock.scale.set(1.25, 0.72, 0.9);
+        rock.position.set(x + dx, 0.285, y + dz);
+        rock.rotation.set(0.25, spin, -0.14);
+        this.#addTileObjects(rock);
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   #addLandscapeDetail(tile, seedKey = '') {
