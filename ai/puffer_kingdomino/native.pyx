@@ -336,6 +336,18 @@ cdef class NativeKingdominoEnv:
         index = <int>rng.randrange(count)
         return actions[index]
 
+    def write_legal_actions(self, object out):
+        cdef int[::1] values = out
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
+        count = self._fill_legal_actions_fast(actions)
+        if values.shape[0] < count:
+            raise ValueError("legal action buffer is too small")
+        for i in range(count):
+            values[i] = actions[i]
+        return count
+
     def observe(self):
         cdef tuple scores = self.scores()
         cdef list flat = [
