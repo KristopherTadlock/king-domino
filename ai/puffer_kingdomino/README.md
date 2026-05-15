@@ -19,6 +19,10 @@ Current state:
 - Weighted heuristic policy at `ai/artifacts/heuristic_policy.json`.
 - Profiling benchmark for Python, native compatibility, optimized native, and
   multi-env native rollout paths.
+- Seat-swapped fair evaluation for random, greedy, delta-greedy, weighted
+  heuristic, search teacher, and neural checkpoints.
+- Search-teacher dataset generation, neural distillation, and a masked PPO
+  smoke loop.
 
 The Torch trainer uses imitation learning from native experts. This is not full
 PPO yet, but it is a real Torch train/eval/export path and uses the same
@@ -44,6 +48,13 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/latest.pt --output ai/artifacts/browser_policy.json
+.venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind heuristic --policy ai/artifacts/heuristic_policy.json --opponent-kind greedy --games 1000 --seed 456
+.venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind search --policy ai/artifacts/heuristic_policy.json --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --games 200 --seed 456 --search-depth 2 --search-breadth 6
+.venv/bin/python -m ai.puffer_kingdomino.teacher_dataset --output ai/artifacts/datasets/search_teacher.npz --samples 20000 --seed 123 --teacher-kind search --teacher-policy ai/artifacts/heuristic_policy.json --search-depth 2 --search-breadth 6
+.venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_candidate.pt --head candidate --epochs 4 --batch-size 256
+.venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_flat.pt --head flat --epochs 4 --batch-size 256
+.venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind candidate --policy ai/artifacts/distilled_candidate.pt --opponent-kind greedy --games 1000 --seed 456
+.venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -88,6 +99,65 @@ the native greedy baseline over 200 games with seed `456` (`107.3` average score
 vs `98.1`). This gives us a strong non-neural target to distill from or beat
 with PPO next.
 
+## Fair Evaluation
+
+`fair_eval` plays each seed twice: once with the policy in seat 0 and once with
+the seats swapped. It reports wins, losses, ties, average scores, score margin,
+standard error, and a 95% confidence interval for win rate. This matters because
+the draft order and seed can otherwise make a small policy look better or worse
+than it is.
+
+Current reference results from this milestone:
+
+- Weighted heuristic vs old greedy, 1000 seat-swapped games, seed `456`:
+  `62.8%` win rate, `1.5%` ties, average score `108.3` vs `97.5`, mean margin
+  `+10.7`, 95% win-rate CI about `[59.8%, 65.8%]`.
+- Search teacher depth `2`, breadth `6` vs weighted heuristic, 200
+  seat-swapped games, seed `456`: `58.0%` win rate, average score `108.8` vs
+  `105.2`, mean margin `+3.6`, 95% win-rate CI about `[51.2%, 64.8%]`.
+
+The search teacher uses the weighted heuristic to rank candidates and evaluate
+rollouts, then searches shallow continuations for the acting player. The first
+important fix was to preserve the weighted heuristic as a tie/shape term during
+drafting; without that, draft moves often looked identical because immediate
+score deltas are zero.
+
+## Distillation And PPO
+
+`teacher_dataset` records supervised samples from a teacher policy:
+
+- normalized observation
+- compact legal action candidate list and mask
+- chosen teacher action
+- target candidate index
+- teacher score/rank when available
+- phase, player, seed, and generation metadata
+
+`distill_train` trains one of three heads from that dataset:
+
+- `flat`: the exportable `5413`-action masked MLP.
+- `candidate`: scores only the current legal candidates with action features.
+- `factorized`: scores legal candidates from compact action-component logits.
+
+The candidate and factorized heads are better research targets for PPO because
+they avoid spending most model capacity and update time on invalid flat actions.
+The flat head remains useful because it is the current browser-exportable neural
+format.
+
+`ppo_smoke` is a deliberately small clipped-PPO legality test. It supports
+initializing from a flat distilled checkpoint, samples only legal masked actions,
+rolls out a configurable opponent, applies PPO updates, and saves a flat
+checkpoint. It is not expected to be the final high-quality PPO trainer; its job
+is to prove that the PPO control loop can run without illegal moves or crashes.
+
+Current recommendation:
+
+- Use the weighted heuristic in the browser until a distilled or PPO policy
+  beats it under fair evaluation.
+- Use the depth-2 search teacher to generate supervised data.
+- Use candidate/factorized distillation to choose the next PPO architecture.
+- Keep flat distillation around as the browser-export and PPO-smoke bridge.
+
 For browser play against the current executable policy:
 
 ```sh
@@ -113,8 +183,8 @@ The action mask is part of every observation.
 
 ## Known Gaps
 
-- Full PPO is still outstanding. The current learning path is Torch imitation
-  of native heuristic experts plus a trained weighted heuristic policy.
+- Serious PPO is still outstanding. The current PPO path is a smoke trainer for
+  legality and checkpoint flow, not a tuned RL trainer.
 - The first PufferLib adapter is wired as a single learning agent against a
   random opponent.
 - The Torch neural policies beat random play but are not yet competitive with
