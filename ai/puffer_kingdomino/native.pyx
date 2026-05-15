@@ -204,6 +204,43 @@ cdef class NativeKingdominoEnv:
     def __init__(self, int seed=1):
         self.reset(seed)
 
+    def clone(self):
+        cdef NativeKingdominoEnv other = NativeKingdominoEnv(seed=1)
+        cdef int i
+        cdef int player
+        cdef int idx
+        other.phase = self.phase
+        other.pick_cursor = self.pick_cursor
+        other.place_cursor = self.place_cursor
+        other.round = self.round
+        other.done_flag = self.done_flag
+        other.seed = self.seed
+        other.rng_t = self.rng_t
+        other.deck_pos = self.deck_pos
+        other.place_count = self.place_count
+        other.placement_seen_stamp = 1
+        for i in range(48):
+            other.deck[i] = self.deck[i]
+        for player in range(2):
+            other.board_x_min[player] = self.board_x_min[player]
+            other.board_x_max[player] = self.board_x_max[player]
+            other.board_y_min[player] = self.board_y_min[player]
+            other.board_y_max[player] = self.board_y_max[player]
+            for idx in range(BOARD_CELLS):
+                other.terrain[player][idx] = self.terrain[player][idx]
+                other.crowns[player][idx] = self.crowns[player][idx]
+                other.domino_num[player][idx] = self.domino_num[player][idx]
+                other.domino_end[player][idx] = self.domino_end[player][idx]
+        for i in range(4):
+            other.current_draft_num[i] = self.current_draft_num[i]
+            other.draft_player[i] = self.draft_player[i]
+            other.draft_placed[i] = self.draft_placed[i]
+            other.pick_order_values[i] = self.pick_order_values[i]
+            other.place_order_values[i] = self.place_order_values[i]
+        for i in range(PLACEMENT_SEEN_CONST):
+            other.placement_seen[i] = 0
+        return other
+
     @property
     def done(self):
         return bool(self.done_flag)
@@ -590,6 +627,23 @@ cdef class NativeKingdominoEnv:
                     best = action
             return best
         return actions[0]
+
+    def weighted_score(self, int player, int action, object weights):
+        cdef double w0 = <double>weights[0]
+        cdef double w1 = <double>weights[1]
+        cdef double w2 = <double>weights[2]
+        cdef double w3 = <double>weights[3]
+        cdef double w4 = <double>weights[4]
+        cdef double w5 = <double>weights[5]
+        cdef double w6 = <double>weights[6]
+        cdef double w7 = <double>weights[7]
+        cdef double w8 = <double>weights[8]
+        cdef double w9 = <double>weights[9]
+        if action < N_DRAFT_ACTIONS:
+            return self._weighted_draft_score(self.current_draft_num[action], w0, w1, w2)
+        if action == N_SKIP_ACTION:
+            return -1000000.0
+        return self._weighted_placement_score(player, action, w3, w4, w5, w6, w7, w8, w9)
 
     def heuristic_score(self, int player, int action):
         if action < N_DRAFT_ACTIONS:
