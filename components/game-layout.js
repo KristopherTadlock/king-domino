@@ -1196,7 +1196,7 @@ export class GameLayout extends HTMLElement {
   /** @type {{type:string,payload:any}[]} */
   #actionHistory = [];
 
-  /** @type {{requestId:string, requesterIndex:number, targetPlaceId:string | null} | null} */
+  /** @type {{requestId:string, requesterIndex:number, targetPlaceId:string | null, targetActionIndex?:number, undoActionCount?:number} | null} */
   #pendingUndoRequest = null;
 
   /** @type {string | null} */
@@ -3877,7 +3877,7 @@ export class GameLayout extends HTMLElement {
       this.#actionHistory = [];
       for (const action of save.actions) {
         if (!action || typeof action.type !== 'string') continue;
-        const replayAction = JSON.parse(JSON.stringify(action));
+        const replayAction = this.#actionWithLocalActor(JSON.parse(JSON.stringify(action)));
         this.#actionHistory.push(replayAction);
         this.#applyNetworkAction(replayAction, { effects: false });
       }
@@ -4803,9 +4803,10 @@ export class GameLayout extends HTMLElement {
 
   #applyLocalAction(action, { render = true } = {}) {
     const previousState = this.#game?.state;
-    const autoDraftOrigin = this.#draftOriginSnapshotForAutoDraft(action, previousState);
-    this.#actionHistory.push(action);
-    this.#applyNetworkAction(action, { effects: render });
+    const localAction = this.#actionWithLocalActor(action);
+    const autoDraftOrigin = this.#draftOriginSnapshotForAutoDraft(localAction, previousState);
+    this.#actionHistory.push(localAction);
+    this.#applyNetworkAction(localAction, { effects: render });
     this.#saveHotseatGame();
     this.#syncHotseatPlayerIndex();
     const focusChanged = this.#syncFocusedBoardToPhase();
@@ -4826,12 +4827,12 @@ export class GameLayout extends HTMLElement {
       this.#syncBoardLayerPositions();
     }
     this.#renderGhost();
-    const shouldCenter = action.type === 'place'
+    const shouldCenter = localAction.type === 'place'
       ? phaseChanged || (this.#hotseat && focusChanged)
-      : focusChanged || phaseChanged || action.type === 'pickDraft' || action.type === 'skip' || action.type === 'restart';
+      : focusChanged || phaseChanged || localAction.type === 'pickDraft' || localAction.type === 'skip' || localAction.type === 'restart';
     if (shouldCenter && !autoDraftHoldStarted) {
-      this.#centerOnFocusedBoard(focusChanged || phaseChanged || action.type === 'pickDraft');
-    } else if (action.type === 'place') {
+      this.#centerOnFocusedBoard(focusChanged || phaseChanged || localAction.type === 'pickDraft');
+    } else if (localAction.type === 'place') {
       this.#cancelCameraTransition();
     }
     this.#autoResolveForcedDraft();
@@ -4864,6 +4865,36 @@ export class GameLayout extends HTMLElement {
       : 'No draft choice remains. Picking remaining tiles automatically.';
     this.#setCanvasNotice(message, 'info', 1200);
     this.#mp?.sendAction('pickDraft', { index, auto: true });
+  }
+
+  #actionWithLocalActor(action) {
+    if (!this.#hotseat || !action || !this.#isGameplayActionType(action.type)) return action;
+    if (Number.isInteger(action.payload?.playerIndex)) return action;
+    const playerIndex = this.#currentActionPlayerIndex(action);
+    if (!Number.isInteger(playerIndex)) return action;
+    return {
+      ...action,
+      payload: {
+        ...(action.payload ?? {}),
+        playerIndex,
+      },
+    };
+  }
+
+  #currentActionPlayerIndex(action) {
+    if (!this.#game || !action) return null;
+    if (Number.isInteger(action.payload?.playerIndex)) return action.payload.playerIndex;
+    if (action.type === 'pickDraft') return this.#game.currentPickingPlayerIndex;
+    if (
+      action.type === 'rotate'
+      || action.type === 'skip'
+      || action.type === 'selectPlacementTile'
+      || action.type === 'setPlacementSelection'
+      || action.type === 'place'
+    ) {
+      return this.#placementPlayerIndex() ?? this.#game.currentPlacingPlayerIndex;
+    }
+    return null;
   }
 
   #isGameplayActionType(type) {
@@ -5582,6 +5613,12 @@ export class GameLayout extends HTMLElement {
             targetPlaceId: typeof action.payload?.targetPlaceId === 'string'
               ? action.payload.targetPlaceId
               : null,
+            targetActionIndex: Number.isInteger(action.payload?.targetActionIndex)
+              ? action.payload.targetActionIndex
+              : null,
+            undoActionCount: Number.isInteger(action.payload?.undoActionCount)
+              ? action.payload.undoActionCount
+              : null,
           };
         }
         continue;
@@ -5597,20 +5634,28 @@ export class GameLayout extends HTMLElement {
         const requestId = String(action.payload?.requestId || '').trim();
         if (pendingUndo && pendingUndo.requestId !== requestId) continue;
 
-        const targetPlaceId = action.payload?.targetPlaceId || pendingUndo?.targetPlaceId;
-        if (targetPlaceId) {
-          for (let i = effective.length - 1; i >= 0; i--) {
-            const e = effective[i];
-            if (e.type === 'place' && e.payload?.placeId === targetPlaceId) {
-              effective.splice(i, 1);
-              break;
-            }
-          }
+        const targetActionIndex = Number.isInteger(action.payload?.targetActionIndex)
+          ? action.payload.targetActionIndex
+          : pendingUndo?.targetActionIndex;
+        if (Number.isInteger(targetActionIndex)) {
+          const index = Math.max(0, Math.min(targetActionIndex, effective.length));
+          effective.splice(index);
         } else {
-          for (let i = effective.length - 1; i >= 0; i--) {
-            if (effective[i].type === 'place') {
-              effective.splice(i, 1);
-              break;
+          const targetPlaceId = action.payload?.targetPlaceId || pendingUndo?.targetPlaceId;
+          if (targetPlaceId) {
+            for (let i = effective.length - 1; i >= 0; i--) {
+              const e = effective[i];
+              if (e.type === 'place' && e.payload?.placeId === targetPlaceId) {
+                effective.splice(i, 1);
+                break;
+              }
+            }
+          } else {
+            for (let i = effective.length - 1; i >= 0; i--) {
+              if (effective[i].type === 'place') {
+                effective.splice(i, 1);
+                break;
+              }
             }
           }
         }
@@ -5620,47 +5665,100 @@ export class GameLayout extends HTMLElement {
     return effective;
   }
 
-  #rebuildGameFromHistory() {
-    const seed = this.#game?.seed ?? randomSeed();
-    this.#initGame(seed, this.#playerNames);
-    const effective = this.#effectiveGameplayActionsFromHistory();
-    for (const action of effective) {
-      this.#applyGameplayAction(action);
+  #undoRequesterIndex() {
+    if (this.#hotseat && this.#aiPlayerIndices.size) {
+      const humanIndex = this.#game?.players?.findIndex((_, index) => !this.#aiPlayerIndices.has(index));
+      if (humanIndex != null && humanIndex >= 0) return humanIndex;
     }
+    return this.#myPlayerIndex;
   }
 
-  #latestUndoablePlaceAction() {
+  #isUndoVisibleActionType(type) {
+    return type === 'pickDraft' || type === 'place' || type === 'skip';
+  }
+
+  #undoActionPlayerIndex(action) {
+    return Number.isInteger(action?.payload?.playerIndex) ? action.payload.playerIndex : null;
+  }
+
+  #undoPlanForRequester(requesterIndex) {
+    if (!Number.isInteger(requesterIndex)) return null;
     const effective = this.#effectiveGameplayActionsFromHistory();
     for (let i = effective.length - 1; i >= 0; i--) {
-      const a = effective[i];
-      if (a?.type === 'restart') return null;
-      if (a?.type === 'place') return a;
+      const action = effective[i];
+      if (action?.type === 'restart') return null;
+      if (!this.#isUndoVisibleActionType(action?.type)) continue;
+      if (this.#hotseat && this.#aiPlayerIndices.size && this.#undoActionPlayerIndex(action) !== requesterIndex) continue;
+
+      if (this.#hotseat && this.#aiPlayerIndices.size) {
+        const actionsToUndo = effective.slice(i);
+        const undoActionCount = actionsToUndo.filter((a) => this.#isUndoVisibleActionType(a?.type)).length || actionsToUndo.length;
+        const latestPlace = [...actionsToUndo].reverse().find((a) => a?.type === 'place');
+        return {
+          targetActionIndex: i,
+          targetPlaceId: latestPlace?.payload?.placeId ?? null,
+          undoActionCount,
+        };
+      }
+
+      if (action.type === 'place') {
+        return {
+          targetPlaceId: action.payload?.placeId ?? null,
+          undoActionCount: 1,
+        };
+      }
     }
     return null;
   }
 
-  #isGameplayPausedForUndo() {
-    return !!this.#pendingUndoRequest;
+  #undoCountText(count) {
+    const safeCount = Math.max(1, Number.isInteger(count) ? count : 1);
+    return `${safeCount} ${safeCount === 1 ? 'action' : 'actions'}`;
+  }
+
+  #latestUndoablePlaceAction() {
+    const plan = this.#undoPlanForRequester(this.#undoRequesterIndex());
+    if (!plan) return null;
+    if (plan.targetPlaceId) {
+      const effective = this.#effectiveGameplayActionsFromHistory();
+      for (let i = effective.length - 1; i >= 0; i--) {
+        const a = effective[i];
+        if (a?.type === 'restart') return null;
+        if (a?.type === 'place' && a.payload?.placeId === plan.targetPlaceId) return a;
+      }
+    }
+    return { type: 'place', payload: { placeId: plan.targetPlaceId ?? null } };
+  }
+
+  #canRequestUndo() {
+    return !this.#game?.isGameOver
+      && this.#undoRequesterIndex() != null
+      && !!this.#undoPlanForRequester(this.#undoRequesterIndex())
+      && !this.#pendingUndoRequest;
   }
 
   #requestUndo() {
-    if (this.#myPlayerIndex == null) return;
+    const requesterIndex = this.#undoRequesterIndex();
+    if (requesterIndex == null) return;
     if (this.#pendingUndoRequest) {
       this.#setCanvasNotice('An undo request is already pending.', 'info', 1200);
       return;
     }
 
-    const lastPlace = this.#latestUndoablePlaceAction();
-    if (!lastPlace) {
+    const plan = this.#undoPlanForRequester(requesterIndex);
+    if (!plan) {
       this.#setCanvasNotice('No move available to undo yet.', 'info', 1200);
       return;
     }
 
     const requestId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.#setCanvasNotice(`Undo will rewind ${this.#undoCountText(plan.undoActionCount)}.`, 'info', 1500);
     this.#mp?.sendAction('requestUndo', {
       requestId,
-      requesterIndex: this.#myPlayerIndex,
-      targetPlaceId: lastPlace.payload?.placeId ?? null,
+      requesterIndex,
+      targetPlaceId: plan.targetPlaceId,
+      targetActionIndex: plan.targetActionIndex,
+      undoActionCount: plan.undoActionCount,
     });
   }
 
@@ -5672,6 +5770,8 @@ export class GameLayout extends HTMLElement {
       requestId: req.requestId,
       approverIndex: this.#myPlayerIndex,
       targetPlaceId: req.targetPlaceId,
+      targetActionIndex: req.targetActionIndex,
+      undoActionCount: req.undoActionCount,
     });
   }
 
@@ -5683,6 +5783,19 @@ export class GameLayout extends HTMLElement {
       requestId: req.requestId,
       deniedByIndex: this.#myPlayerIndex,
     });
+  }
+
+  #rebuildGameFromHistory() {
+    const seed = this.#game?.seed ?? randomSeed();
+    this.#initGame(seed, this.#playerNames);
+    const effective = this.#effectiveGameplayActionsFromHistory();
+    for (const action of effective) {
+      this.#applyGameplayAction(action);
+    }
+  }
+
+  #isGameplayPausedForUndo() {
+    return !!this.#pendingUndoRequest;
   }
 
   #applyNetworkAction(action, { effects = true } = {}) {
@@ -5749,12 +5862,18 @@ export class GameLayout extends HTMLElement {
         const targetPlaceId = typeof action.payload?.targetPlaceId === 'string'
           ? action.payload.targetPlaceId
           : null;
+        const targetActionIndex = Number.isInteger(action.payload?.targetActionIndex)
+          ? action.payload.targetActionIndex
+          : null;
+        const undoActionCount = Number.isInteger(action.payload?.undoActionCount)
+          ? action.payload.undoActionCount
+          : 1;
         if (!requestId || requesterIndex < 0) return;
 
-        this.#pendingUndoRequest = { requestId, requesterIndex, targetPlaceId };
+        this.#pendingUndoRequest = { requestId, requesterIndex, targetPlaceId, targetActionIndex, undoActionCount };
         if (this.#myPlayerIndex != null && this.#myPlayerIndex !== requesterIndex) {
           const who = this.#playerNames[requesterIndex] ?? this.#game.players[requesterIndex]?.name ?? `P${requesterIndex + 1}`;
-          this.#setCanvasNotice(`${who} requested an undo.`, 'info', 1400);
+          this.#setCanvasNotice(`${who} requested an undo for ${this.#undoCountText(undoActionCount)}.`, 'info', 1600);
         }
         return;
       }
@@ -5765,7 +5884,8 @@ export class GameLayout extends HTMLElement {
 
         this.#pendingUndoRequest = null;
         this.#rebuildGameFromHistory();
-        this.#setCanvasNotice('Undo approved.', 'info', 1000);
+        const undoActionCount = Number.isInteger(action.payload?.undoActionCount) ? action.payload.undoActionCount : 1;
+        this.#setCanvasNotice(`Undo approved. Rewound ${this.#undoCountText(undoActionCount)}.`, 'info', 1200);
         return;
       }
       case 'denyUndo': {
@@ -6031,7 +6151,7 @@ export class GameLayout extends HTMLElement {
 
     const canAct = !!drafted && !this.#isGameplayPausedForUndo();
     const canSkip = canAct && this.#canSkipPlacement();
-    const canUndo = this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
+    const canUndo = this.#canRequestUndo();
     this.#btnMobileRotate.disabled = !canAct;
     this.#btnMobileSkip.disabled = !canSkip;
     this.#btnMobileSkip.hidden = !canSkip;
@@ -8923,7 +9043,7 @@ export class GameLayout extends HTMLElement {
     const canPlaceUi = this.#isMyTurnToPlace() && !g.isGameOver && !!this.#currentPlacementDraftedTile() && !this.#isGameplayPausedForUndo();
     const placementOptions = canPlaceUi ? this.#uniqueVisiblePlacementOptions(this.#currentPlacementOptions()) : [];
     const hasPlacementOptions = placementOptions.length > 0;
-    const canRequestUndo = !g.isGameOver && this.#myPlayerIndex != null && !!this.#latestUndoablePlaceAction() && !this.#pendingUndoRequest;
+    const canRequestUndo = this.#canRequestUndo();
     const canSkip = canPlaceUi && this.#canSkipPlacement();
     const isPlacementPhase = g.state === GameState.PLACE && !g.isGameOver;
     const useCanvasWorldUi = this.#canvasDraftEnabled();
@@ -8974,7 +9094,7 @@ export class GameLayout extends HTMLElement {
 
       const undoLine = document.createElement('div');
       undoLine.className = 'turnBanner turnOther';
-      undoLine.textContent = `${requester} requested an undo.`;
+      undoLine.textContent = `${requester} requested an undo for ${this.#undoCountText(p.undoActionCount)}.`;
       this.#hudBody.append(undoLine);
 
       if (this.#myPlayerIndex != null && this.#myPlayerIndex !== p.requesterIndex) {
