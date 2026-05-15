@@ -1321,6 +1321,8 @@ export class GameLayout extends HTMLElement {
   /** @type {THREE.Group} */
   #ghostGroup;
   /** @type {THREE.Group} */
+  #placementHighlightGroup;
+  /** @type {THREE.Group} */
   #scoreBurstGroup;
   /** @type {THREE.Group | null} */
   #currentTileRenderGroup = null;
@@ -1393,6 +1395,12 @@ export class GameLayout extends HTMLElement {
 
   /** @type {Map<string, THREE.BufferGeometry>} */
   #detailGeometryCache = new Map();
+
+  /** @type {string} */
+  #canvasPlacementChoicesRenderKey = '';
+
+  /** @type {string} */
+  #placementHighlightRenderKey = '';
 
   /** @type {{x:number,y:number} | null} */
   #hoverAnchor = null;
@@ -1683,6 +1691,13 @@ export class GameLayout extends HTMLElement {
       startedAt: options.startedAt,
       duration: options.duration,
     });
+  }
+
+  #pruneAnimatedObjectsIn(root) {
+    if (!root || !this.#animatedObjects.length) return;
+    const removed = new Set();
+    root.traverse((object) => removed.add(object));
+    this.#animatedObjects = this.#animatedObjects.filter((item) => !removed.has(item.object));
   }
 
   #prepareObjectMaterialsForOpacity(object) {
@@ -4924,6 +4939,14 @@ export class GameLayout extends HTMLElement {
       || action?.type === 'approveUndo';
   }
 
+  #actionInvalidatesPlacementCaches(action) {
+    return action?.type === 'pickDraft'
+      || action?.type === 'place'
+      || action?.type === 'skip'
+      || action?.type === 'restart'
+      || action?.type === 'approveUndo';
+  }
+
   #resetPerfGame(seed, playerCount) {
     const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
     const names = Array.from({ length: count }, (_, index) => (
@@ -5809,7 +5832,7 @@ export class GameLayout extends HTMLElement {
 
   #applyNetworkAction(action, { effects = true } = {}) {
     if (this.#isGameplayActionType(action.type)) {
-      this.#invalidatePlacementCaches();
+      if (this.#actionInvalidatesPlacementCaches(action)) this.#invalidatePlacementCaches();
       if (
         action.type === 'setPlacementSelection'
         && !this.#hotseat
@@ -5892,6 +5915,7 @@ export class GameLayout extends HTMLElement {
         if (!this.#pendingUndoRequest || this.#pendingUndoRequest.requestId !== requestId) return;
 
         this.#pendingUndoRequest = null;
+        this.#invalidatePlacementCaches();
         this.#rebuildGameFromHistory();
         const undoActionCount = Number.isInteger(action.payload?.undoActionCount) ? action.payload.undoActionCount : 1;
         this.#setCanvasNotice(`Undo approved. Rewound ${this.#undoCountText(undoActionCount)}.`, 'info', 1200);
@@ -6880,61 +6904,91 @@ export class GameLayout extends HTMLElement {
     return cells.values();
   }
 
+  #placementHighlightKey(options) {
+    if (!this.#game || this.#game.state !== GameState.PLACE || this.#game.isGameOver || !options.length) return '';
+    const playerIndex = this.#placementPlayerIndex();
+    const drafted = this.#currentPlacementDraftedTile();
+    return [
+      this.#placementCacheVersion,
+      playerIndex ?? '',
+      drafted?.domino?.number ?? '',
+      options.length,
+    ].join('|');
+  }
+
+  #clearPlacementHighlights() {
+    if (!this.#placementHighlightGroup) return;
+    this.#pruneAnimatedObjectsIn(this.#placementHighlightGroup);
+    while (this.#placementHighlightGroup.children.length) {
+      this.#placementHighlightGroup.remove(this.#placementHighlightGroup.children[0]);
+    }
+    this.#placementHighlightRenderKey = '';
+  }
+
   #renderValidAnchorHighlights(options) {
-    if (!options.length) return;
+    if (!options.length || !this.#placementHighlightGroup) {
+      this.#clearPlacementHighlights();
+      return;
+    }
+
+    const key = this.#placementHighlightKey(options);
+    if (key && this.#placementHighlightRenderKey === key) return;
+    this.#clearPlacementHighlights();
+    this.#placementHighlightRenderKey = key;
 
     const highlights = this.#placementHighlightCells(options);
-    const tileGeo = new THREE.PlaneGeometry(0.86, 0.86);
-    const tileMat = new THREE.MeshBasicMaterial({
+    const density = highlights.dense ? 'dense' : 'open';
+    const tileGeo = this.#cachedDetailGeometry('placement-highlight-tile', () => new THREE.PlaneGeometry(0.86, 0.86));
+    const tileMat = this.#cachedDetailMaterial(`placement-highlight-fill-${density}`, () => new THREE.MeshBasicMaterial({
       color: 0xd7f1ff,
       transparent: true,
       opacity: highlights.dense ? 0.24 : 0.28,
       depthWrite: false,
       depthTest: false,
       side: THREE.DoubleSide,
-    });
-    const edgeGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.86, 0.86));
-    const shadowEdgeMat = new THREE.LineBasicMaterial({
+    }));
+    const edgeGeo = this.#cachedDetailGeometry('placement-highlight-edge', () => new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.86, 0.86)));
+    const shadowEdgeMat = this.#cachedDetailMaterial(`placement-highlight-shadow-${density}`, () => new THREE.LineBasicMaterial({
       color: 0x101923,
       transparent: true,
       opacity: highlights.dense ? 0.42 : 0.52,
-    });
-    const edgeMat = new THREE.LineBasicMaterial({
+    }));
+    const edgeMat = this.#cachedDetailMaterial(`placement-highlight-edge-${density}`, () => new THREE.LineBasicMaterial({
       color: 0xf4fbff,
       transparent: true,
       opacity: highlights.dense ? 0.58 : 0.68,
-    });
-    const cornerGeo = this.#placementHighlightCornerGeometry();
-    const cornerMat = new THREE.LineBasicMaterial({
+    }));
+    const cornerGeo = this.#cachedDetailGeometry('placement-highlight-corners', () => this.#placementHighlightCornerGeometry());
+    const cornerMat = this.#cachedDetailMaterial(`placement-highlight-corners-${density}`, () => new THREE.LineBasicMaterial({
       color: 0xf4fbff,
       transparent: true,
       opacity: highlights.dense ? 0.76 : 0.86,
-    });
+    }));
 
     for (const cell of highlights.cells) {
       const tile = new THREE.Mesh(tileGeo, tileMat);
       tile.rotation.x = -Math.PI / 2;
       tile.position.set(cell.x, 0.205, cell.y);
       tile.renderOrder = 20;
-      this.#ghostGroup.add(tile);
+      this.#placementHighlightGroup.add(tile);
 
       const shadowEdge = new THREE.LineSegments(edgeGeo, shadowEdgeMat);
       shadowEdge.rotation.x = -Math.PI / 2;
       shadowEdge.position.set(cell.x, 0.212, cell.y);
       shadowEdge.renderOrder = 21;
-      this.#ghostGroup.add(shadowEdge);
+      this.#placementHighlightGroup.add(shadowEdge);
 
       const edge = new THREE.LineSegments(edgeGeo, edgeMat);
       edge.rotation.x = -Math.PI / 2;
       edge.position.set(cell.x, 0.218, cell.y);
       edge.renderOrder = 22;
-      this.#ghostGroup.add(edge);
+      this.#placementHighlightGroup.add(edge);
 
       const corners = new THREE.LineSegments(cornerGeo, cornerMat);
       corners.rotation.x = -Math.PI / 2;
       corners.position.set(cell.x, 0.222, cell.y);
       corners.renderOrder = 23;
-      this.#ghostGroup.add(corners);
+      this.#placementHighlightGroup.add(corners);
     }
   }
 
@@ -7069,6 +7123,8 @@ export class GameLayout extends HTMLElement {
     this.#scene.add(this.#regionOverlayGroup);
     this.#ghostGroup = new THREE.Group();
     this.#scene.add(this.#ghostGroup);
+    this.#placementHighlightGroup = new THREE.Group();
+    this.#scene.add(this.#placementHighlightGroup);
     this.#scoreBurstGroup = new THREE.Group();
     this.#scene.add(this.#scoreBurstGroup);
 
@@ -9463,6 +9519,8 @@ export class GameLayout extends HTMLElement {
   #renderBoard() {
     this.#perfCounters.renderBoard += 1;
     this.#animatedObjects = [];
+    this.#canvasPlacementChoicesRenderKey = '';
+    this.#clearPlacementHighlights();
     while (this.#tilesGroup.children.length) this.#tilesGroup.remove(this.#tilesGroup.children[0]);
     if (this.#isStartAttractMode() && !this.#libraryOpen) {
       this.#renderDominoLibraryScene({
@@ -9898,19 +9956,57 @@ export class GameLayout extends HTMLElement {
     this.#currentTileRenderGroup = previousGroup;
   }
 
-  #clearCanvasPlacementChoices() {
+  #canvasPlacementChoicesKey() {
+    const g = this.#game;
+    if (!g || g.state !== GameState.PLACE || g.isGameOver) return '';
+    const placementPlayerIndex = this.#placementPlayerIndex();
+    const selected = this.#currentPlacementDraftedTile();
+    const ghostDominoNumber = this.#hoverAnchor ? selected?.domino?.number : null;
+    const draftState = (g.currentDraft ?? [])
+      .map((slot) => [
+        slot?.domino?.number ?? '',
+        slot?.player ?? '',
+        slot?.placed ? 1 : 0,
+      ].join(':'))
+      .join('|');
+    const remoteState = [...this.#remotePlacementPreviews.entries()]
+      .map(([playerIndex, preview]) => `${playerIndex}:${preview.dominoNumber}`)
+      .sort()
+      .join('|');
+    const returnState = [...this.#placementReturnAnimations.values()]
+      .map((animation) => `${animation.playerIndex}:${animation.dominoNumber}:${animation.key}`)
+      .sort()
+      .join('|');
+    return [
+      placementPlayerIndex ?? '',
+      selected?.domino?.number ?? '',
+      ghostDominoNumber ?? '',
+      draftState,
+      remoteState,
+      returnState,
+    ].join('::');
+  }
+
+  #clearCanvasPlacementChoices({ resetKey = true } = {}) {
     if (!this.#tilesGroup) return;
     for (let i = this.#tilesGroup.children.length - 1; i >= 0; i--) {
       const child = this.#tilesGroup.children[i];
       if (child?.userData?.canvasPlacementChoices) this.#tilesGroup.remove(child);
     }
+    if (resetKey) this.#canvasPlacementChoicesRenderKey = '';
   }
 
   #refreshCanvasPlacementChoices() {
     if (!this.#canvasDraftEnabled()) return;
-    if (this.#game?.state !== GameState.PLACE || this.#game?.isGameOver) return;
-    this.#clearCanvasPlacementChoices();
+    if (this.#game?.state !== GameState.PLACE || this.#game?.isGameOver) {
+      this.#clearCanvasPlacementChoices();
+      return;
+    }
+    const key = this.#canvasPlacementChoicesKey();
+    if (key && this.#canvasPlacementChoicesRenderKey === key) return;
+    this.#clearCanvasPlacementChoices({ resetKey: false });
     this.#renderCanvasPlacementChoices();
+    this.#canvasPlacementChoicesRenderKey = key;
   }
 
   #addCanvasDraftPlaceholder(leftX, z) {
@@ -10004,7 +10100,7 @@ export class GameLayout extends HTMLElement {
         material.opacity = 0.64;
         material.color = new THREE.Color(0xa7adb7);
       }
-      const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
+      const tileMesh = new THREE.Mesh(this.#cachedDetailGeometry('tile-base', () => new THREE.BoxGeometry(0.98, 0.22, 0.98)), material);
       tileMesh.position.set(tile.x, 0.11, tile.y);
       this.#addTileObjects(tileMesh);
 
@@ -10166,7 +10262,7 @@ export class GameLayout extends HTMLElement {
         const sourceTile = endName === 'left' ? domino.leftEnd : domino.rightEnd;
         const seedKey = this.#tileArtSeedKey(sourceTile, `library|${domino.number}|${endName}`);
         const material = this.#getTileMaterial(tile.landscape, tile.crowns || 0, seedKey, false);
-        const tileMesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98), material);
+        const tileMesh = new THREE.Mesh(this.#cachedDetailGeometry('tile-base', () => new THREE.BoxGeometry(0.98, 0.22, 0.98)), material);
         if (filtered) {
           tileMesh.material = material.clone();
           tileMesh.material.color = new THREE.Color(0x535861);
@@ -12164,6 +12260,10 @@ export class GameLayout extends HTMLElement {
         this.#ghostGroup.position.x = 0;
         this.#ghostGroup.position.z = 0;
       }
+      if (this.#placementHighlightGroup) {
+        this.#placementHighlightGroup.position.x = 0;
+        this.#placementHighlightGroup.position.z = 0;
+      }
       if (this.#regionOverlayGroup) {
         this.#regionOverlayGroup.position.x = 0;
         this.#regionOverlayGroup.position.z = 0;
@@ -12180,6 +12280,10 @@ export class GameLayout extends HTMLElement {
     if (this.#ghostGroup) {
       this.#ghostGroup.position.x = placement.x;
       this.#ghostGroup.position.z = placement.z;
+    }
+    if (this.#placementHighlightGroup) {
+      this.#placementHighlightGroup.position.x = placement.x;
+      this.#placementHighlightGroup.position.z = placement.z;
     }
     if (this.#regionOverlayGroup) {
       this.#regionOverlayGroup.position.x = placement.x;
@@ -13155,7 +13259,7 @@ export class GameLayout extends HTMLElement {
           const material = this.#getTileMaterial(landscape, crowns || 0, `remote|${drafted.domino.number}|${endName}`, true).clone();
           material.opacity = 0.66;
           const mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(0.98, 0.18, 0.98),
+            this.#cachedDetailGeometry('ghost-tile', () => new THREE.BoxGeometry(0.98, 0.18, 0.98)),
             material
           );
           mesh.position.set(x, 0.10, y);
@@ -13175,7 +13279,7 @@ export class GameLayout extends HTMLElement {
           wash.position.set(x, 0.202, y);
           remoteGroup.add(wash);
 
-          const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.01, 0.22, 1.01));
+          const edgeGeo = this.#cachedDetailGeometry('remote-ghost-edge', () => new THREE.EdgesGeometry(new THREE.BoxGeometry(1.01, 0.22, 1.01)));
           const edgeMat = new THREE.LineBasicMaterial({ color: borderColor, transparent: true, opacity: 0.96 });
           const edge = new THREE.LineSegments(edgeGeo, edgeMat);
           edge.position.set(x, 0.11, y);
@@ -13326,10 +13430,14 @@ export class GameLayout extends HTMLElement {
 
   #renderGhost() {
     this.#perfCounters.renderGhost += 1;
+    this.#pruneAnimatedObjectsIn(this.#ghostGroup);
     while (this.#ghostGroup.children.length) this.#ghostGroup.remove(this.#ghostGroup.children[0]);
     this.#canvasPlacementConfirmTarget = null;
     this.#syncBoardLayerPositions();
-    if (this.#libraryOpen) return;
+    if (this.#libraryOpen) {
+      this.#clearPlacementHighlights();
+      return;
+    }
 
     const g = this.#game;
     const activeIdx = this.#placementPlayerIndex();
@@ -13341,6 +13449,7 @@ export class GameLayout extends HTMLElement {
     if (g.isGameOver) {
       this.#placementGhostAnimation = null;
       this.#placementReturnAnimations.clear();
+      this.#clearPlacementHighlights();
       this.#renderRegionScoring(null);
       this.#syncLocalPlacementDock();
       return;
@@ -13348,6 +13457,7 @@ export class GameLayout extends HTMLElement {
     if (g.state !== GameState.PLACE) {
       this.#placementGhostAnimation = null;
       this.#placementReturnAnimations.clear();
+      this.#clearPlacementHighlights();
       this.#renderRegionScoring(null);
       this.#syncLocalPlacementDock();
       return;
@@ -13356,6 +13466,7 @@ export class GameLayout extends HTMLElement {
     this.#renderPlacementReturnAnimations();
     if (!this.#isMyTurnToPlace()) {
       this.#placementGhostAnimation = null;
+      this.#clearPlacementHighlights();
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -13365,6 +13476,7 @@ export class GameLayout extends HTMLElement {
     const drafted = this.#currentPlacementDraftedTile();
     if (!drafted) {
       this.#placementGhostAnimation = null;
+      this.#clearPlacementHighlights();
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -13383,6 +13495,7 @@ export class GameLayout extends HTMLElement {
 
     if (!drafted) {
       this.#placementGhostAnimation = null;
+      this.#clearPlacementHighlights();
       this.#renderRegionScoring(null);
       this.#renderOpponentPlacementPreview();
       this.#syncLocalPlacementDock();
@@ -13421,13 +13534,13 @@ export class GameLayout extends HTMLElement {
     const makeGhostCell = (x, y, landscape, crowns) => {
       const material = this.#getTileMaterial(landscape, crowns || 0, `${x},${y}`, true);
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.98, 0.18, 0.98),
+        this.#cachedDetailGeometry('ghost-tile', () => new THREE.BoxGeometry(0.98, 0.18, 0.98)),
         material
       );
       mesh.position.set(x, 0.09, y);
       ghostTileGroup.add(mesh);
 
-      const edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.20, 0.99));
+      const edgeGeo = this.#cachedDetailGeometry('local-ghost-edge', () => new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.20, 0.99)));
       const edgeMat = new THREE.LineBasicMaterial({ color: borderColor, transparent: true, opacity: 0.98 });
       const edge = new THREE.LineSegments(edgeGeo, edgeMat);
       edge.position.set(x, 0.09, y);
