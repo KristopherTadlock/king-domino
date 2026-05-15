@@ -192,6 +192,12 @@ competitive with greedy:
 - Candidate PPO now supports GAE, value-only warmup, linear opponent
   curriculum, periodic fair-eval checkpoints, best-checkpoint saving, and JSON
   run reports. This is the shape we want before spending on a 1M-step run.
+- The first 1M-step candidate PPO run completed legally with zero illegal
+  actions in about `318s` (`3.1k` learner decisions/sec). It used 50k value
+  warmup, random/greedy/heuristic curriculum, and eval every 50k steps. The best
+  checkpoint was at about 200k learner decisions and reached `7.3%` vs greedy,
+  `78.5%` vs random, and `3.1%` vs the weighted heuristic over 1000-game fair
+  evals. The final checkpoint was similar at `6.9%` vs greedy.
 
 The practical takeaway: plain hard-label behavioral cloning from a search
 teacher is enough to learn "reasonable random-beating play", but not enough to
@@ -200,7 +206,10 @@ from richer teacher information: score/rank regression or pairwise ranking over
 legal candidates, then use PPO with a stronger value/advantage setup. The first
 candidate PPO trainer is now in place, but its early results suggest we need
 better reward/advantage estimation, a value warm start, and probably opponent
-curriculum or self-play before million-step runs are likely to pay off.
+curriculum or self-play before additional million-step runs are likely to pay
+off. Since the 1M run plateaued near the distilled baseline, the next likely
+model-side step is a richer state encoder or decomposed draft/place heads rather
+than simply extending this same run.
 
 For browser play against the current executable policy:
 
