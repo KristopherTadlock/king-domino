@@ -12,7 +12,7 @@ import numpy as np
 
 from .agents import agent_kinds, legal_actions, load_agent, make_env, step_legal
 from .candidate_train import DEFAULT_MAX_CANDIDATES
-from .policy import OBSERVATION_SIZE, OBS_SCALE, observation_vector
+from .policy import OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION, observation_vector
 
 
 def generate_dataset(
@@ -108,6 +108,7 @@ def generate_dataset(
     elapsed = max(time.perf_counter() - started, 1e-9)
     metadata = {
         "format": "kingdomino-teacher-dataset-v1",
+        "observation_version": OBSERVATION_VERSION,
         "samples": samples,
         "seed": seed,
         "teacher_kind": teacher_kind,

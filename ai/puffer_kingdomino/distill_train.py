@@ -15,12 +15,13 @@ from torch.nn import functional as F
 from .candidate_policy import (
     CandidateScoringPolicy,
     FactorizedActionPolicy,
+    InteractionCandidatePolicy,
     action_feature_table,
     action_part_table,
     factorized_candidate_logits,
 )
 from .core import ACTION_COUNT
-from .policy import DEFAULT_HIDDEN_SIZE, MaskedMLPPolicy, save_checkpoint
+from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_VERSION, MaskedMLPPolicy, save_checkpoint
 
 
 def _load_dataset(path: Path):
@@ -111,10 +112,17 @@ def train_distilled(
     objective: str = "ce",
     teacher_temperature: float = 8.0,
     soft_weight: float = 0.5,
+    model_type: str = "dot",
 ) -> dict:
     torch.manual_seed(seed)
     started = time.perf_counter()
     data, dataset_metadata = _load_dataset(dataset)
+    dataset_observation_version = int(dataset_metadata.get("observation_version", 1))
+    if dataset_observation_version != OBSERVATION_VERSION:
+        raise ValueError(
+            f"dataset observation_version {dataset_observation_version} != {OBSERVATION_VERSION}; "
+            "regenerate the dataset before training"
+        )
     observations = data["observations"].astype(np.float32, copy=False)
     legal_actions = data["legal_actions"].astype(np.int64, copy=False)
     legal_mask = data["legal_mask"].astype(np.bool_, copy=False)
@@ -128,7 +136,7 @@ def train_distilled(
     elif head == "factorized":
         model = FactorizedActionPolicy(hidden_size=hidden_size)
     elif head == "candidate":
-        model = CandidateScoringPolicy(hidden_size=hidden_size)
+        model = InteractionCandidatePolicy(hidden_size=hidden_size) if model_type == "interaction" else CandidateScoringPolicy(hidden_size=hidden_size)
     else:
         raise ValueError(f"unknown head: {head}")
 
@@ -197,6 +205,8 @@ def train_distilled(
     metadata = {
         "backend": f"torch-{head}-teacher-distill-v0",
         "head": head,
+        "model_type": model_type if head == "candidate" else None,
+        "observation_version": OBSERVATION_VERSION,
         "seed": seed,
         "epochs": epochs,
         "batch_size": batch_size,
@@ -235,7 +245,7 @@ def train_distilled(
         torch.save(
             {
                 "format": "kingdomino-candidate-policy-v0",
-                "model_type": "dot",
+                "model_type": model_type,
                 "state_dict": model.state_dict(),
                 "metadata": metadata,
             },
@@ -257,6 +267,7 @@ def main():
     parser.add_argument("--objective", choices=["ce", "soft", "hybrid"], default="ce")
     parser.add_argument("--teacher-temperature", type=float, default=8.0)
     parser.add_argument("--soft-weight", type=float, default=0.5)
+    parser.add_argument("--model-type", choices=["dot", "interaction"], default="dot", help="Candidate head architecture; ignored for non-candidate heads")
     args = parser.parse_args()
     print(json.dumps(train_distilled(
         dataset=Path(args.dataset),
@@ -270,6 +281,7 @@ def main():
         objective=args.objective,
         teacher_temperature=args.teacher_temperature,
         soft_weight=args.soft_weight,
+        model_type=args.model_type,
     ), indent=2))
 
 

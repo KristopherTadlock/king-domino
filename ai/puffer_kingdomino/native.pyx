@@ -702,7 +702,7 @@ cdef class NativeKingdominoEnv:
                     out[pos] = 0.0
                     pos += 1
                 else:
-                    out[pos] = self.terrain[player][idx] / scale
+                    out[pos] = (self.terrain[player][idx] + 1) / scale
                     pos += 1
                     out[pos] = self.crowns[player][idx] / scale
                     pos += 1
@@ -1497,6 +1497,6 @@ cdef class NativeKingdominoEnv:
                 values.append(0)
                 values.append(0)
             else:
-                values.append(self.terrain[player][idx])
+                values.append(self.terrain[player][idx] + 1)
                 values.append(self.crowns[player][idx])
         return values

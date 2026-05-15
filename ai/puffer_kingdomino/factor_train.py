@@ -14,7 +14,7 @@ from torch import nn
 
 from .candidate_policy import FactorizedActionPolicy, action_part_table, factorized_candidate_logits
 from .candidate_train import DEFAULT_MAX_CANDIDATES, _write_legal_actions
-from .policy import OBSERVATION_SIZE, OBS_SCALE
+from .policy import OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION
 from .train import _advance_opponent, _expert_action, _make_env
 
 
@@ -159,6 +159,7 @@ def train_factorized(
         "expert": expert,
         "native": bool(native),
         "hidden_size": hidden_size,
+        "observation_version": OBSERVATION_VERSION,
         "roll_in": roll_in,
         "expert_roll_in_prob": expert_roll_in_prob,
         "seconds": elapsed,

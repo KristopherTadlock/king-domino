@@ -23,6 +23,8 @@ Current state:
   heuristic, search teacher, and neural checkpoints.
 - Search-teacher dataset generation, neural distillation, and a masked PPO
   smoke loop.
+- Observation contract v2, where empty cells are `0`, castles are visible as
+  `1`, and terrain ids are shifted by one in board features.
 
 The Torch trainer uses imitation learning from native experts. This is not full
 PPO yet, but it is a real Torch train/eval/export path and uses the same
@@ -56,9 +58,10 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind candidate --policy ai/artifacts/distilled_candidate.pt --opponent-kind greedy --games 1000 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4
-.venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_report.json --rollout mixed --objective hybrid
-.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_300k.json
-.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_1m.json
+.venv/bin/python -m ai.puffer_kingdomino.teacher_dataset --output ai/artifacts/datasets/search_teacher_scores_mixed_obs_v2_100k.npz --samples 100000 --seed 123 --teacher-kind search --teacher-policy ai/artifacts/heuristic_policy.json --search-depth 2 --search-breadth 6 --rollout mixed
+.venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_obs_v2_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_obs_v2_report.json --rollout mixed --objective hybrid
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_obs_v2_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_obs_v2_300k.json
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_obs_v2_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_obs_v2_1m.json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -141,7 +144,15 @@ score deltas are zero.
 
 - `flat`: the exportable `5413`-action masked MLP.
 - `candidate`: scores only the current legal candidates with action features.
+  It supports the historical dot scorer and an experimental
+  `--model-type interaction` scorer.
 - `factorized`: scores legal candidates from compact action-component logits.
+
+Datasets and neural checkpoints now carry `observation_version=2`. This version
+fixes an important representation bug from the earlier experiments: empty board
+cells and castle cells were both encoded as zero, so neural policies could not
+directly see the castle. Old v1 datasets/checkpoints are useful for historical
+comparison only; regenerate teacher data before training new neural policies.
 
 The candidate and factorized heads are better research targets for PPO because
 they avoid spending most model capacity and update time on invalid flat actions.
@@ -198,6 +209,14 @@ competitive with greedy:
   checkpoint was at about 200k learner decisions and reached `7.3%` vs greedy,
   `78.5%` vs random, and `3.1%` vs the weighted heuristic over 1000-game fair
   evals. The final checkpoint was similar at `6.9%` vs greedy.
+- Observation v2 was then introduced to make the castle visible in neural board
+  features. A fresh 100k mixed search-teacher dataset generated at about `666`
+  samples/sec. The v2 dot candidate hybrid distillation reached `62.3%`
+  validation accuracy and evaluated at `78.3%` vs random, `6.9%` vs old greedy,
+  and `3.0%` vs weighted heuristic over 1000 seat-swapped games. A 10k candidate
+  PPO continuation initialized from this v2 checkpoint completed with zero
+  illegal actions. The fix was necessary for representation correctness, but it
+  did not by itself break the greedy ceiling.
 
 The practical takeaway: plain hard-label behavioral cloning from a search
 teacher is enough to learn "reasonable random-beating play", but not enough to

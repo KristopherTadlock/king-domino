@@ -20,17 +20,18 @@ import torch
 from torch import nn
 
 from .agents import load_agent, make_env, step_legal
-from .candidate_policy import CandidateScoringPolicy, action_feature_table
+from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
 from .candidate_train import DEFAULT_MAX_CANDIDATES, _write_legal_actions
 from .fair_eval import fair_evaluate
-from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE
+from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION
 
 
 class CandidateActorCritic(nn.Module):
-    def __init__(self, hidden_size: int = DEFAULT_HIDDEN_SIZE):
+    def __init__(self, hidden_size: int = DEFAULT_HIDDEN_SIZE, model_type: str = "dot"):
         super().__init__()
         self.hidden_size = hidden_size
-        self.actor = CandidateScoringPolicy(hidden_size=hidden_size)
+        self.model_type = model_type
+        self.actor = InteractionCandidatePolicy(hidden_size=hidden_size) if model_type == "interaction" else CandidateScoringPolicy(hidden_size=hidden_size)
         self.value_input = nn.Linear(OBSERVATION_SIZE, hidden_size)
         self.value_output = nn.Linear(hidden_size, 1)
 
@@ -79,6 +80,18 @@ def _advance_to_learner(env, opponent, learner_player: int, max_steps: int = 128
     return steps
 
 
+def _infer_model_type(path: Path | None, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if path is None:
+        return "dot"
+    try:
+        payload = torch.load(path, map_location="cpu")
+    except Exception:  # noqa: BLE001 - fallback to the historical candidate architecture.
+        return "dot"
+    return str(payload.get("model_type") or payload.get("metadata", {}).get("model_type", "dot"))
+
+
 def _load_actor_init(model: CandidateActorCritic, path: Path | None) -> str | None:
     if path is None:
         return None
@@ -89,6 +102,12 @@ def _load_actor_init(model: CandidateActorCritic, path: Path | None) -> str | No
         hidden_size = int(payload.get("metadata", {}).get("hidden_size", model.hidden_size))
         if hidden_size != model.hidden_size:
             return f"ignored init policy {path}: hidden size {hidden_size} != {model.hidden_size}"
+        observation_version = int(payload.get("metadata", {}).get("observation_version", 1))
+        if observation_version != OBSERVATION_VERSION:
+            return f"ignored init policy {path}: observation version {observation_version} != {OBSERVATION_VERSION}"
+        payload_model_type = str(payload.get("model_type") or payload.get("metadata", {}).get("model_type", "dot"))
+        if payload_model_type != model.model_type:
+            return f"ignored init policy {path}: model type {payload_model_type} != {model.model_type}"
         model.actor.load_state_dict(payload["state_dict"])
     except Exception as exc:  # noqa: BLE001 - smoke/training CLI should report and continue.
         return f"ignored init policy {path}: {exc}"
@@ -100,7 +119,7 @@ def _save_candidate_checkpoint(model: CandidateActorCritic, output: Path, metada
     torch.save(
         {
             "format": "kingdomino-candidate-policy-v0",
-            "model_type": "dot",
+            "model_type": model.model_type,
             "state_dict": model.actor.state_dict(),
             "metadata": metadata,
         },
@@ -184,6 +203,7 @@ def run_candidate_ppo(
     opponent_curriculum: Sequence[str] | None = None,
     opponent_policy: Path | None = Path("ai/artifacts/heuristic_policy.json"),
     hidden_size: int = DEFAULT_HIDDEN_SIZE,
+    model_type: str = "dot",
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     rollout_size: int = 1024,
     batch_size: int = 256,
@@ -205,7 +225,8 @@ def run_candidate_ppo(
 ) -> dict:
     started = time.perf_counter()
     torch.manual_seed(seed)
-    model = CandidateActorCritic(hidden_size=hidden_size)
+    resolved_model_type = _infer_model_type(init_policy, model_type)
+    model = CandidateActorCritic(hidden_size=hidden_size, model_type=resolved_model_type)
     init_status = _load_actor_init(model, init_policy)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     curriculum = list(opponent_curriculum) if opponent_curriculum else [opponent_kind]
@@ -383,6 +404,8 @@ def run_candidate_ppo(
         "init_policy": str(init_policy) if init_policy else None,
         "init_status": init_status,
         "hidden_size": hidden_size,
+        "model_type": resolved_model_type,
+        "observation_version": OBSERVATION_VERSION,
         "max_candidates": max_candidates,
         "rollout_size": rollout_size,
         "batch_size": batch_size,
@@ -426,6 +449,7 @@ def main() -> None:
     parser.add_argument("--opponent-curriculum", nargs="+", choices=["random", "greedy", "delta", "heuristic", "search"])
     parser.add_argument("--opponent-policy", default="ai/artifacts/heuristic_policy.json")
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
+    parser.add_argument("--model-type", choices=["dot", "interaction", "auto"], default="dot")
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--rollout-size", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -454,6 +478,7 @@ def main() -> None:
         opponent_curriculum=args.opponent_curriculum,
         opponent_policy=Path(args.opponent_policy) if args.opponent_policy else None,
         hidden_size=args.hidden_size,
+        model_type=args.model_type,
         max_candidates=args.max_candidates,
         rollout_size=args.rollout_size,
         batch_size=args.batch_size,

@@ -20,7 +20,7 @@ from torch import nn
 
 from .agents import load_agent, make_env, step_legal
 from .core import ACTION_COUNT
-from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, MaskedMLPPolicy, load_checkpoint, save_checkpoint
+from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION, MaskedMLPPolicy, load_checkpoint, save_checkpoint
 
 
 class ActorCritic(nn.Module):
@@ -242,6 +242,7 @@ def run_ppo_smoke(
         "init_policy": str(init_policy) if init_policy else None,
         "init_status": init_status,
         "hidden_size": hidden_size,
+        "observation_version": OBSERVATION_VERSION,
         "rollout_size": rollout_size,
         "batch_size": batch_size,
         "epochs": epochs,

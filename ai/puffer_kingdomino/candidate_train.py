@@ -13,7 +13,7 @@ import torch
 from torch import nn
 
 from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
-from .policy import OBSERVATION_SIZE, OBS_SCALE
+from .policy import OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION
 from .train import _advance_opponent, _expert_action, _make_env
 
 
@@ -149,6 +149,7 @@ def train_candidate(
         "native": bool(native),
         "hidden_size": hidden_size,
         "model_type": model_type,
+        "observation_version": OBSERVATION_VERSION,
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
         "max_seen_candidates": max_seen_candidates,

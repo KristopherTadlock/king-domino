@@ -19,7 +19,7 @@ import torch
 from torch import nn
 
 from .core import KingdominoEnv, random_legal_action
-from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, MaskedMLPPolicy, observation_vector, save_checkpoint
+from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION, MaskedMLPPolicy, observation_vector, save_checkpoint
 
 try:
     from .native import NativeKingdominoEnv
@@ -176,6 +176,7 @@ def train(
         "opponent": opponent,
         "expert": expert,
         "native": bool(native and NativeKingdominoEnv is not None),
+        "observation_version": OBSERVATION_VERSION,
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
         "created_at": int(time.time()),

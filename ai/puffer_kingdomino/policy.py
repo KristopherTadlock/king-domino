@@ -15,6 +15,7 @@ from .core import ACTION_COUNT
 OBSERVATION_SIZE = 695
 DEFAULT_HIDDEN_SIZE = 64
 OBS_SCALE = 50.0
+OBSERVATION_VERSION = 2
 
 
 class MaskedMLPPolicy(nn.Module):
@@ -68,6 +69,7 @@ def checkpoint_payload(model: MaskedMLPPolicy, metadata: dict[str, Any]) -> dict
         "hidden_size": model.hidden_size,
         "action_count": model.action_count,
         "obs_scale": OBS_SCALE,
+        "observation_version": OBSERVATION_VERSION,
         "state_dict": model.state_dict(),
         "metadata": metadata,
     }
@@ -103,6 +105,7 @@ def browser_export_payload(model: MaskedMLPPolicy, checkpoint: dict[str, Any]) -
             "hiddenSize": model.hidden_size,
             "actionCount": model.action_count,
             "obsScale": checkpoint.get("obs_scale", OBS_SCALE),
+            "observationVersion": checkpoint.get("observation_version", OBSERVATION_VERSION),
             "activation": "tanh",
             "weights": {
                 "inputWeight": state["input.weight"].detach().cpu().tolist(),

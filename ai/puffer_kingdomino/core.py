@@ -615,7 +615,7 @@ class KingdominoEnv:
         for y in range(COORD_MIN, COORD_MAX + 1):
             for x in range(COORD_MIN, COORD_MAX + 1):
                 tile = board.get((x, y))
-                values.append(0 if tile is None else tile.terrain)
+                values.append(0 if tile is None else tile.terrain + 1)
                 values.append(0 if tile is None else tile.crowns)
         return values
 

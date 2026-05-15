@@ -20,8 +20,9 @@ HEAD_TO_AGENT_KIND = {
 }
 
 
-def _policy_path(output_dir: Path, dataset: Path, head: str, objective: str, samples: int, seed: int) -> Path:
-    return output_dir / f"distilled_{dataset.stem}_{head}_{objective}_{samples}_{seed}.pt"
+def _policy_path(output_dir: Path, dataset: Path, head: str, objective: str, model_type: str, samples: int, seed: int) -> Path:
+    model_suffix = f"_{model_type}" if head == "candidate" else ""
+    return output_dir / f"distilled_{dataset.stem}_{head}{model_suffix}_{objective}_{samples}_{seed}.pt"
 
 
 def run_bakeoff(
@@ -40,6 +41,7 @@ def run_bakeoff(
     objective: str,
     teacher_temperature: float,
     soft_weight: float,
+    candidate_model_type: str,
     teacher_kind: str,
     teacher_policy: Path | None,
     search_depth: int,
@@ -71,7 +73,7 @@ def run_bakeoff(
     evaluations = {}
     pairs = games // 2
     for head in heads:
-        policy_path = _policy_path(output_dir, dataset, head, objective, samples, seed)
+        policy_path = _policy_path(output_dir, dataset, head, objective, candidate_model_type, samples, seed)
         if force_train or not policy_path.exists():
             print(f"Training {head} head ({objective}) -> {policy_path}", file=sys.stderr, flush=True)
             training[head] = train_distilled(
@@ -86,6 +88,7 @@ def run_bakeoff(
                 objective=objective,
                 teacher_temperature=teacher_temperature,
                 soft_weight=soft_weight,
+                model_type=candidate_model_type,
             )
         else:
             training[head] = {"output": str(policy_path), "reused": True}
@@ -138,6 +141,7 @@ def run_bakeoff(
         "objective": objective,
         "teacher_temperature": teacher_temperature,
         "soft_weight": soft_weight,
+        "candidate_model_type": candidate_model_type,
         "training": training,
         "evaluations": evaluations,
         "best_by_greedy": best_by_greedy,
@@ -163,6 +167,7 @@ def main() -> None:
     parser.add_argument("--objective", choices=["ce", "soft", "hybrid"], default="ce")
     parser.add_argument("--teacher-temperature", type=float, default=8.0)
     parser.add_argument("--soft-weight", type=float, default=0.5)
+    parser.add_argument("--candidate-model-type", choices=["dot", "interaction"], default="dot")
     parser.add_argument("--teacher-kind", default="search", choices=["heuristic", "search"])
     parser.add_argument("--teacher-policy", default="ai/artifacts/heuristic_policy.json")
     parser.add_argument("--search-depth", type=int, default=2)
@@ -187,6 +192,7 @@ def main() -> None:
         objective=args.objective,
         teacher_temperature=args.teacher_temperature,
         soft_weight=args.soft_weight,
+        candidate_model_type=args.candidate_model_type,
         teacher_kind=args.teacher_kind,
         teacher_policy=Path(args.teacher_policy) if args.teacher_policy else None,
         search_depth=args.search_depth,

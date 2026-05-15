@@ -6,7 +6,10 @@ import json
 import subprocess
 from pathlib import Path
 
-from .core import ANCHOR_RIGHT, KingdominoEnv
+import numpy as np
+
+from .core import ANCHOR_RIGHT, COORD_MIN, COORD_SPAN, KingdominoEnv
+from .policy import OBS_SCALE
 
 try:
     from .native import NativeKingdominoEnv
@@ -15,6 +18,9 @@ except ImportError:  # pragma: no cover - extension intentionally optional
 
 
 ROOT = Path(__file__).resolve().parents[2]
+BOARD_OBSERVATION_OFFSET = 7 + 4 * 3
+BOARD_FEATURE_SIZE = COORD_SPAN * COORD_SPAN * 2
+CASTLE_CELL_INDEX = (0 - COORD_MIN) * COORD_SPAN + (0 - COORD_MIN)
 
 
 def _js_probe(seed: int) -> dict:
@@ -90,8 +96,42 @@ def _assert_equal(label: str, actual, expected):
         raise AssertionError(f"{label} mismatch:\nactual={actual}\nexpected={expected}")
 
 
+def _assert_observation_contract(seed: int):
+    py = KingdominoEnv(seed=seed)
+    native = NativeKingdominoEnv(seed=seed) if NativeKingdominoEnv is not None else None
+
+    for step in range(12):
+        py_observation = py.observe()["observation"]
+        for player in range(2):
+            terrain_index = BOARD_OBSERVATION_OFFSET + player * BOARD_FEATURE_SIZE + CASTLE_CELL_INDEX * 2
+            _assert_equal(
+                f"seed {seed} step {step} player {player} castle observation",
+                py_observation[terrain_index],
+                1,
+            )
+
+        if native is not None:
+            native_observation = native.observe()["observation"]
+            _assert_equal(f"seed {seed} step {step} native observation", native_observation, py_observation)
+            vector = np.empty(len(native_observation), dtype=np.float32)
+            native.write_observation_vector(vector, OBS_SCALE)
+            expected = np.asarray(native_observation, dtype=np.float32) / OBS_SCALE
+            if not np.allclose(vector, expected):
+                raise AssertionError(f"seed {seed} step {step} native observation vector mismatch")
+            _assert_equal(f"seed {seed} step {step} native legal actions", native.legal_actions(), py.legal_actions())
+
+        legal = py.legal_actions()
+        if not legal:
+            break
+        action = legal[0]
+        py.step(action, observe=False)
+        if native is not None:
+            native.step(action, observe=False)
+
+
 def run():
     for seed in (1, 123, 456, 98765):
+        _assert_observation_contract(seed)
         js = _js_probe(seed)
         py = _py_probe(seed)
         _assert_equal(f"seed {seed} initial", py["initial"], js["initial"])
