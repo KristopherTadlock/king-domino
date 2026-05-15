@@ -90,6 +90,7 @@ cdef int N_DRAFT_ACTIONS = 4
 cdef int N_PLACEMENT_ACTIONS = 4 * 4 * COORD_SPAN * COORD_SPAN * 2
 cdef int N_SKIP_ACTION = N_DRAFT_ACTIONS + N_PLACEMENT_ACTIONS
 cdef int N_ACTION_COUNT = N_SKIP_ACTION + 1
+cdef int N_OBSERVATION_COUNT = 695
 
 
 DECK_LEFT_TERRAIN = (
@@ -365,6 +366,27 @@ cdef class NativeKingdominoEnv:
             "round": self.round,
         }
 
+    def write_observation_vector(self, object out, float scale=50.0):
+        cdef float[::1] values = out
+        if values.shape[0] < N_OBSERVATION_COUNT:
+            raise ValueError("observation buffer is too small")
+        self._write_observation_vector(&values[0], scale)
+        return N_OBSERVATION_COUNT
+
+    def write_action_mask_vector(self, object out):
+        cdef float[::1] values = out
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
+        if values.shape[0] < N_ACTION_COUNT:
+            raise ValueError("action mask buffer is too small")
+        for i in range(N_ACTION_COUNT):
+            values[i] = 0.0
+        count = self._fill_legal_actions_fast(actions)
+        for i in range(count):
+            values[actions[i]] = 1.0
+        return N_ACTION_COUNT
+
     def step(self, int action, bint observe=True):
         if self.done_flag:
             return self._step_observation(observe), 0.0, True, {"error": "game already done"}
@@ -446,37 +468,87 @@ cdef class NativeKingdominoEnv:
         return [row[5] for row in self._placement_rows(player)]
 
     def greedy_action(self, int player=0):
-        cdef list legal = self.legal_actions()
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
         cdef int action
         cdef int best = -1
         cdef double score
         cdef double best_score = -1000000000.0
-        if not legal:
+        count = self._fill_legal_actions_fast(actions)
+        if count <= 0:
             raise RuntimeError("no legal actions available")
         if self._current_player() != player:
-            return legal[0]
+            return actions[0]
         if self.phase == PHASE_DRAFT:
-            for action in legal:
+            for i in range(count):
+                action = actions[i]
                 score = self._draft_score(self.current_draft_num[action])
                 if score > best_score:
                     best_score = score
                     best = action
             return best
         if self.phase == PHASE_PLACE:
-            if len(legal) == 1 and legal[0] == N_SKIP_ACTION:
+            if count == 1 and actions[0] == N_SKIP_ACTION:
                 return N_SKIP_ACTION
-            for action in legal:
+            for i in range(count):
+                action = actions[i]
                 score = self._placement_heuristic(player, action)
                 if score > best_score:
                     best_score = score
                     best = action
             return best
-        return legal[0]
+        return actions[0]
 
     cdef object _step_observation(self, bint observe):
         if observe:
             return self.observe()
         return None
+
+    cdef void _write_observation_vector(self, float* out, float scale):
+        cdef int pos = 0
+        cdef int score0
+        cdef int score1
+        cdef int i
+        cdef int player
+        cdef int idx
+        score0 = self.score_board(0)
+        score1 = self.score_board(1)
+        out[pos] = self.phase / scale
+        pos += 1
+        out[pos] = self._current_player() / scale
+        pos += 1
+        out[pos] = self.pick_cursor / scale
+        pos += 1
+        out[pos] = self.place_cursor / scale
+        pos += 1
+        out[pos] = self.round / scale
+        pos += 1
+        out[pos] = score0 / scale
+        pos += 1
+        out[pos] = score1 / scale
+        pos += 1
+
+        for i in range(4):
+            out[pos] = self.current_draft_num[i] / scale
+            pos += 1
+            out[pos] = self.draft_player[i] / scale
+            pos += 1
+            out[pos] = self.draft_placed[i] / scale
+            pos += 1
+
+        for player in range(2):
+            for idx in range(BOARD_CELLS):
+                if self.terrain[player][idx] == TERRAIN_EMPTY:
+                    out[pos] = 0.0
+                    pos += 1
+                    out[pos] = 0.0
+                    pos += 1
+                else:
+                    out[pos] = self.terrain[player][idx] / scale
+                    pos += 1
+                    out[pos] = self.crowns[player][idx] / scale
+                    pos += 1
 
     cdef int _fill_legal_actions_fast(self, int* actions):
         cdef int i

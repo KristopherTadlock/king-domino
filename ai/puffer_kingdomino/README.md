@@ -31,6 +31,7 @@ same observation/action-mask contract that PPO will use next.
 .venv/bin/python -m ai.puffer_kingdomino.parity_test
 .venv/bin/python -m ai.puffer_kingdomino.benchmark --steps 100000 --seed 123
 .venv/bin/python -m ai.puffer_kingdomino.train --steps 1000000 --seed 123
+.venv/bin/python -m ai.puffer_kingdomino.train --steps 20000 --seed 123 --output /tmp/kingdomino-profile.pt --profile
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/latest.pt --output ai/artifacts/browser_policy.json
@@ -44,10 +45,12 @@ current optimized rollout path. On the local reference run for this pass:
 - optimized native rollout: about `224k` steps/sec
 - 64-env native rollout loop: about `212k` steps/sec
 
-The current bottlenecks are now observation/action-mask generation and policy
-forward speed, not board scoring or the 7x7 bounds check. That points the next
-PPO-oriented optimization at reusable observation buffers, reusable action-mask
-buffers, and eventually a smaller or factorized action head.
+The training path now uses reusable native observation buffers and can report a
+rough timing breakdown with `--profile`. In the local training-loop pass,
+observation creation dropped from roughly half the loop to a low single-digit
+percentage; the remaining bottleneck is the Torch update over the flat
+`5413`-action head. Puffer observations also write directly into their backing
+buffer now, including the action mask.
 
 For browser play against the current executable policy:
 

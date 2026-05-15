@@ -10,6 +10,7 @@ import pufferlib
 from gymnasium import spaces
 
 from .core import ACTION_COUNT, KingdominoEnv, random_legal_action
+from .policy import OBSERVATION_SIZE
 
 try:
     from .native import NativeKingdominoEnv
@@ -77,6 +78,10 @@ class PufferKingdominoEnv(pufferlib.PufferEnv):
             raise RuntimeError("opponent rollout exceeded guard")
 
     def _write_observation(self):
+        if hasattr(self.env, "write_observation_vector") and hasattr(self.env, "write_action_mask_vector"):
+            self.env.write_observation_vector(self.observations[0, :OBSERVATION_SIZE], 1.0)
+            self.env.write_action_mask_vector(self.observations[0, OBSERVATION_SIZE:])
+            return
         obs = self.env.observe()
         values = obs["observation"] + obs["action_mask"]
         self.observations[0, :] = np.asarray(values, dtype=np.float32)

@@ -19,7 +19,7 @@ import torch
 from torch import nn
 
 from .core import KingdominoEnv, random_legal_action
-from .policy import DEFAULT_HIDDEN_SIZE, MaskedMLPPolicy, observation_vector, save_checkpoint
+from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, MaskedMLPPolicy, observation_vector, save_checkpoint
 
 try:
     from .native import NativeKingdominoEnv
@@ -71,6 +71,7 @@ def train(
     lr: float = 2.5e-4,
     opponent: str = "random",
     native: bool = True,
+    profile: bool = False,
 ) -> dict:
     torch.manual_seed(seed)
     rng = random.Random(seed)
@@ -78,48 +79,79 @@ def train(
     model = MaskedMLPPolicy(hidden_size=hidden_size)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
-    batch_obs = []
-    batch_targets = []
+    batch_obs = np.empty((batch_size, OBSERVATION_SIZE), dtype=np.float32)
+    batch_targets = np.empty((batch_size,), dtype=np.int64)
+    batch_count = 0
     completed_games = 0
     updates = 0
+    timings = {
+        "reset": 0.0,
+        "opponent": 0.0,
+        "expert": 0.0,
+        "observe": 0.0,
+        "step": 0.0,
+        "update": 0.0,
+    }
     started = time.perf_counter()
 
     for step_index in range(max(0, steps)):
         if env.done:
             completed_games += 1
+            timed = time.perf_counter() if profile else 0.0
             env = _make_env((seed + completed_games) & 0xFFFFFFFF, native=native)
+            if profile:
+                timings["reset"] += time.perf_counter() - timed
 
+        timed = time.perf_counter() if profile else 0.0
         _advance_opponent(env, rng, opponent)
+        if profile:
+            timings["opponent"] += time.perf_counter() - timed
         if env.done:
             continue
 
+        timed = time.perf_counter() if profile else 0.0
         target = _expert_action(env, player=0)
-        batch_obs.append(observation_vector(env))
-        batch_targets.append(target)
+        if profile:
+            timings["expert"] += time.perf_counter() - timed
+        timed = time.perf_counter() if profile else 0.0
+        if hasattr(env, "write_observation_vector"):
+            env.write_observation_vector(batch_obs[batch_count], OBS_SCALE)
+        else:
+            batch_obs[batch_count, :] = observation_vector(env)
+        batch_targets[batch_count] = target
+        batch_count += 1
+        if profile:
+            timings["observe"] += time.perf_counter() - timed
 
+        timed = time.perf_counter() if profile else 0.0
         if hasattr(env, "step_known_legal"):
             _obs, _reward, _done, info = env.step_known_legal(target, observe=False)
         else:
             _obs, _reward, _done, info = env.step(target, observe=False)
+        if profile:
+            timings["step"] += time.perf_counter() - timed
         if "error" in info:
             raise RuntimeError(info["error"])
 
-        if len(batch_obs) >= batch_size:
-            obs_tensor = torch.from_numpy(np.asarray(batch_obs, dtype=np.float32))
-            target_tensor = torch.tensor(batch_targets, dtype=torch.long)
+        if batch_count >= batch_size:
+            timed = time.perf_counter() if profile else 0.0
+            obs_tensor = torch.from_numpy(batch_obs)
+            target_tensor = torch.from_numpy(batch_targets)
             logits = model(obs_tensor)
             loss = loss_fn(logits, target_tensor)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            batch_obs.clear()
-            batch_targets.clear()
+            batch_count = 0
             updates += 1
+            if profile:
+                timings["update"] += time.perf_counter() - timed
 
-    if batch_obs:
-        obs_tensor = torch.from_numpy(np.asarray(batch_obs, dtype=np.float32))
-        target_tensor = torch.tensor(batch_targets, dtype=torch.long)
+    if batch_count:
+        timed = time.perf_counter() if profile else 0.0
+        obs_tensor = torch.from_numpy(batch_obs[:batch_count])
+        target_tensor = torch.from_numpy(batch_targets[:batch_count])
         logits = model(obs_tensor)
         loss = loss_fn(logits, target_tensor)
         optimizer.zero_grad(set_to_none=True)
@@ -127,6 +159,8 @@ def train(
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         updates += 1
+        if profile:
+            timings["update"] += time.perf_counter() - timed
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     metadata = {
@@ -142,6 +176,14 @@ def train(
         "steps_per_second": steps / elapsed if steps else 0.0,
         "created_at": int(time.time()),
     }
+    if profile:
+        metadata["profile"] = {
+            name: {
+                "seconds": seconds,
+                "fraction": seconds / elapsed,
+            }
+            for name, seconds in timings.items()
+        }
     save_checkpoint(model, output, metadata)
     return {"policy": str(output), **metadata}
 
@@ -156,6 +198,7 @@ def main():
     parser.add_argument("--lr", type=float, default=2.5e-4)
     parser.add_argument("--opponent", choices=["random", "greedy"], default="random")
     parser.add_argument("--python-env", action="store_true", help="Use the Python env instead of the native extension")
+    parser.add_argument("--profile", action="store_true", help="Include rough training loop timing breakdown")
     args = parser.parse_args()
     result = train(
         steps=args.steps,
@@ -166,6 +209,7 @@ def main():
         lr=args.lr,
         opponent=args.opponent,
         native=not args.python_env,
+        profile=args.profile,
     )
     print(json.dumps(result, indent=2))
 

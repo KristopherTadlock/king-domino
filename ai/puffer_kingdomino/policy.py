@@ -32,6 +32,10 @@ class MaskedMLPPolicy(nn.Module):
 
 
 def observation_vector(env) -> np.ndarray:
+    if hasattr(env, "write_observation_vector"):
+        obs = np.empty(OBSERVATION_SIZE, dtype=np.float32)
+        env.write_observation_vector(obs, OBS_SCALE)
+        return obs
     obs = env.observe()["observation"]
     return np.asarray(obs, dtype=np.float32) / OBS_SCALE
 
