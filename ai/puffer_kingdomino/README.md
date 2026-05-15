@@ -38,6 +38,7 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.puffer_smoke --steps 200 --seed 123
 .venv/bin/python -m ai.puffer_kingdomino.random_rollout --games 1000 --seed 123
 .venv/bin/python -m ai.puffer_kingdomino.parity_test
+.venv/bin/python -m ai.puffer_kingdomino.encoding_contract_test
 .venv/bin/python -m ai.puffer_kingdomino.benchmark --steps 100000 --seed 123
 .venv/bin/python -m ai.puffer_kingdomino.train --steps 1000000 --seed 123
 .venv/bin/python -m ai.puffer_kingdomino.train --steps 20000 --seed 123 --output /tmp/kingdomino-profile.pt --profile
@@ -68,9 +69,9 @@ The benchmark reports a recorded pre-optimization native baseline and the
 current optimized rollout path. On the local reference run for this pass:
 
 - recorded native baseline: about `31k` steps/sec
-- native compatibility path: about `139k` steps/sec
-- optimized native rollout: about `224k` steps/sec
-- 64-env native rollout loop: about `212k` steps/sec
+- native compatibility path: about `132k` steps/sec
+- optimized native rollout: about `216k` steps/sec
+- 64-env native rollout loop: about `214k` steps/sec
 
 The training path now uses reusable native observation buffers and can report a
 rough timing breakdown with `--profile`. In the local training-loop pass,
@@ -154,6 +155,17 @@ cells and castle cells were both encoded as zero, so neural policies could not
 directly see the castle. Old v1 datasets/checkpoints are useful for historical
 comparison only; regenerate teacher data before training new neural policies.
 
+`encoding_contract_test` is a wider executable audit of the representation. It
+checks every placement action encode/decode round trip, Python/native raw and
+scaled observations, masks, legal-action buffers, candidate feature tables, and
+a tiny generated teacher dataset. This audit caught a second subtle bug: the
+fast native legal-action path could choose a different duplicate-equivalent
+placement action id than the canonical Python/JS path because anchor candidates
+were not sorted before deduplication. The native fast path now sorts candidates
+using the canonical `(distance, y, x)` order. Any local datasets generated before
+that fix, including early observation-v2 datasets, should be regenerated before
+serious training.
+
 The candidate and factorized heads are better research targets for PPO because
 they avoid spending most model capacity and update time on invalid flat actions.
 The flat head remains useful because it is the current browser-exportable neural
@@ -211,12 +223,14 @@ competitive with greedy:
   evals. The final checkpoint was similar at `6.9%` vs greedy.
 - Observation v2 was then introduced to make the castle visible in neural board
   features. A fresh 100k mixed search-teacher dataset generated at about `666`
-  samples/sec. The v2 dot candidate hybrid distillation reached `62.3%`
+  samples/sec before the canonical-action audit. The v2 dot candidate hybrid
+  distillation reached `62.3%`
   validation accuracy and evaluated at `78.3%` vs random, `6.9%` vs old greedy,
   and `3.0%` vs weighted heuristic over 1000 seat-swapped games. A 10k candidate
   PPO continuation initialized from this v2 checkpoint completed with zero
   illegal actions. The fix was necessary for representation correctness, but it
-  did not by itself break the greedy ceiling.
+  did not by itself break the greedy ceiling. Regenerate this dataset/checkpoint
+  after the canonical-action fix before treating it as a serious training base.
 
 The practical takeaway: plain hard-label behavioral cloning from a search
 teacher is enough to learn "reasonable random-beating play", but not enough to

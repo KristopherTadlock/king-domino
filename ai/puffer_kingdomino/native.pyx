@@ -789,6 +789,7 @@ cdef class NativeKingdominoEnv:
             candidates_x[0] = 0
             candidates_y[0] = 0
             candidate_count = 1
+        self._sort_candidates_fast(candidates_x, candidates_y, candidate_count)
 
         for draft_index in range(4):
             if self.draft_player[draft_index] != player or self.draft_placed[draft_index]:
@@ -852,6 +853,31 @@ cdef class NativeKingdominoEnv:
         candidates_x[candidate_count[0]] = x
         candidates_y[candidate_count[0]] = y
         candidate_count[0] += 1
+
+    cdef void _sort_candidates_fast(self, int* candidates_x, int* candidates_y, int count):
+        cdef int i
+        cdef int j
+        cdef int x
+        cdef int y
+        for i in range(1, count):
+            x = candidates_x[i]
+            y = candidates_y[i]
+            j = i - 1
+            while j >= 0 and self._candidate_sort_after(candidates_x[j], candidates_y[j], x, y):
+                candidates_x[j + 1] = candidates_x[j]
+                candidates_y[j + 1] = candidates_y[j]
+                j -= 1
+            candidates_x[j + 1] = x
+            candidates_y[j + 1] = y
+
+    cdef bint _candidate_sort_after(self, int ax, int ay, int bx, int by):
+        cdef int ad = (ax if ax >= 0 else -ax) + (ay if ay >= 0 else -ay)
+        cdef int bd = (bx if bx >= 0 else -bx) + (by if by >= 0 else -by)
+        if ad != bd:
+            return ad > bd
+        if ay != by:
+            return ay > by
+        return ax > bx
 
     cdef int _current_player(self):
         if self.done_flag:
