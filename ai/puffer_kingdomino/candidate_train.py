@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .candidate_policy import CandidateScoringPolicy, action_feature_table
+from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
 from .policy import OBSERVATION_SIZE, OBS_SCALE
 from .train import _advance_opponent, _expert_action, _make_env
 
@@ -40,11 +40,15 @@ def train_candidate(
     lr: float = 2.5e-4,
     opponent: str = "random",
     native: bool = True,
+    model_type: str = "dot",
 ) -> dict:
     torch.manual_seed(seed)
     rng = random.Random(seed)
     env = _make_env(seed, native=native)
-    model = CandidateScoringPolicy(hidden_size=hidden_size)
+    if model_type == "interaction":
+        model = InteractionCandidatePolicy(hidden_size=hidden_size)
+    else:
+        model = CandidateScoringPolicy(hidden_size=hidden_size)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
     action_features = torch.from_numpy(action_feature_table())
@@ -133,7 +137,7 @@ def train_candidate(
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     result = {
-        "backend": "torch-candidate-imitation-v0",
+        "backend": f"torch-candidate-{model_type}-imitation-v0",
         "seed": seed,
         "requested_steps": steps,
         "sampled_steps": steps,
@@ -142,6 +146,7 @@ def train_candidate(
         "opponent": opponent,
         "native": bool(native),
         "hidden_size": hidden_size,
+        "model_type": model_type,
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
         "max_seen_candidates": max_seen_candidates,
@@ -154,6 +159,7 @@ def train_candidate(
         torch.save(
             {
                 "format": "kingdomino-candidate-policy-v0",
+                "model_type": model_type,
                 "state_dict": model.state_dict(),
                 "metadata": result,
             },
@@ -174,6 +180,7 @@ def main():
     parser.add_argument("--lr", type=float, default=2.5e-4)
     parser.add_argument("--opponent", choices=["random", "greedy"], default="random")
     parser.add_argument("--python-env", action="store_true")
+    parser.add_argument("--model-type", choices=["dot", "interaction"], default="dot")
     args = parser.parse_args()
     print(json.dumps(train_candidate(
         steps=args.steps,
@@ -185,6 +192,7 @@ def main():
         lr=args.lr,
         opponent=args.opponent,
         native=not args.python_env,
+        model_type=args.model_type,
     ), indent=2))
 
 

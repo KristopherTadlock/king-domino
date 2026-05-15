@@ -34,6 +34,8 @@ same observation/action-mask contract that PPO will use next.
 .venv/bin/python -m ai.puffer_kingdomino.train --steps 20000 --seed 123 --output /tmp/kingdomino-profile.pt --profile
 .venv/bin/python -m ai.puffer_kingdomino.factor_train --steps 50000 --seed 123 --output /tmp/kingdomino-factor.pt
 .venv/bin/python -m ai.puffer_kingdomino.factor_eval --policy /tmp/kingdomino-factor.pt --games 200 --seed 456
+.venv/bin/python -m ai.puffer_kingdomino.factor_train --steps 200000 --seed 123 --output /tmp/kingdomino-factor-dagger.pt --roll-in mixed
+.venv/bin/python -m ai.puffer_kingdomino.imitation_eval --policy ai/artifacts/latest.pt --kind flat --states 10000 --seed 789
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/latest.pt --output ai/artifacts/browser_policy.json
@@ -65,6 +67,14 @@ The factorized prototype is the better next direction so far. In a local 50k
 imitation run it reached about `30k` training steps/sec and `82.5%` win rate
 against random, close to the flat-head policy's early quality while using a much
 smaller action head.
+
+The factorized trainer also supports DAgger-style roll-in with `--roll-in
+mixed` or `--roll-in student`: states are labeled by the greedy expert while the
+student can create part or all of the trajectory. Early DAgger runs recovered
+the current flat policy's random-opponent quality, but still did not meaningfully
+challenge greedy. The `imitation_eval` command measures teacher-forced agreement
+with the greedy expert, which helps separate imitation fidelity from compounding
+rollout errors.
 
 For browser play against the current executable policy:
 

@@ -18,6 +18,21 @@ from .policy import OBSERVATION_SIZE, OBS_SCALE
 from .train import _advance_opponent, _expert_action, _make_env
 
 
+@torch.no_grad()
+def _choose_factorized_rollin_action(
+    model,
+    obs_row: np.ndarray,
+    legal_actions: np.ndarray,
+    legal_count: int,
+    action_parts: torch.Tensor,
+) -> int:
+    obs_tensor = torch.from_numpy(obs_row).unsqueeze(0)
+    action_tensor = torch.from_numpy(legal_actions[:legal_count].astype(np.int64, copy=False)).unsqueeze(0)
+    logits = factorized_candidate_logits(model(obs_tensor), action_parts[action_tensor])
+    index = int(torch.argmax(logits, dim=-1).item())
+    return int(legal_actions[index])
+
+
 def train_factorized(
     steps: int,
     seed: int,
@@ -28,6 +43,8 @@ def train_factorized(
     lr: float = 2.5e-4,
     opponent: str = "random",
     native: bool = True,
+    roll_in: str = "expert",
+    expert_roll_in_prob: float = 0.25,
 ) -> dict:
     torch.manual_seed(seed)
     rng = random.Random(seed)
@@ -81,10 +98,20 @@ def train_factorized(
         batch_count += 1
         batch_max_count = max(batch_max_count, legal_count)
 
+        action = target
+        if roll_in == "student" or (roll_in == "mixed" and rng.random() >= expert_roll_in_prob):
+            action = _choose_factorized_rollin_action(
+                model,
+                batch_obs[batch_count - 1],
+                legal_buffer,
+                legal_count,
+                action_parts,
+            )
+
         if hasattr(env, "step_known_legal"):
-            _obs, _reward, _done, info = env.step_known_legal(target, observe=False)
+            _obs, _reward, _done, info = env.step_known_legal(action, observe=False)
         else:
-            _obs, _reward, _done, info = env.step(target, observe=False)
+            _obs, _reward, _done, info = env.step(action, observe=False)
         if "error" in info:
             raise RuntimeError(info["error"])
 
@@ -130,6 +157,8 @@ def train_factorized(
         "opponent": opponent,
         "native": bool(native),
         "hidden_size": hidden_size,
+        "roll_in": roll_in,
+        "expert_roll_in_prob": expert_roll_in_prob,
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
         "max_seen_candidates": max_seen_candidates,
@@ -162,6 +191,8 @@ def main():
     parser.add_argument("--lr", type=float, default=2.5e-4)
     parser.add_argument("--opponent", choices=["random", "greedy"], default="random")
     parser.add_argument("--python-env", action="store_true")
+    parser.add_argument("--roll-in", choices=["expert", "student", "mixed"], default="expert")
+    parser.add_argument("--expert-roll-in-prob", type=float, default=0.25)
     args = parser.parse_args()
     print(json.dumps(train_factorized(
         steps=args.steps,
@@ -173,6 +204,8 @@ def main():
         lr=args.lr,
         opponent=args.opponent,
         native=not args.python_env,
+        roll_in=args.roll_in,
+        expert_roll_in_prob=args.expert_roll_in_prob,
     ), indent=2))
 
 

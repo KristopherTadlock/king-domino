@@ -19,7 +19,7 @@ from .core import (
 from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE
 
 
-ACTION_FEATURE_SIZE = 11
+ACTION_FEATURE_SIZE = 40
 ACTION_PART_SIZE = 6
 FACTOR_LOGIT_SIZE = 37
 FACTOR_DRAFT_OFFSET = 0
@@ -40,7 +40,7 @@ def action_feature_table() -> np.ndarray:
     for action in range(ACTION_COUNT):
         if action < DRAFT_ACTIONS:
             features[action, 0] = 1.0
-            features[action, 3] = action / 3.0
+            features[action, 3 + action] = 1.0
             continue
 
         if action == SKIP_ACTION:
@@ -53,14 +53,12 @@ def action_feature_table() -> np.ndarray:
         draft_index, orientation, x, y, anchor_end = decoded
         radians = math.radians(orientation)
         features[action, 1] = 1.0
-        features[action, 3] = draft_index / 3.0
-        features[action, 4] = math.sin(radians)
-        features[action, 5] = math.cos(radians)
-        features[action, 6] = x / coord_scale
-        features[action, 7] = y / coord_scale
-        features[action, 8] = float(anchor_end)
-        features[action, 9] = abs(x) / coord_scale
-        features[action, 10] = abs(y) / coord_scale
+        features[action, 3 + draft_index] = 1.0
+        features[action, 7 + (orientation // 90)] = 1.0
+        features[action, 11 + (x - COORD_MIN)] = 1.0
+        features[action, 24 + (y - COORD_MIN)] = 1.0
+        features[action, 37 + anchor_end] = 1.0
+        features[action, 39] = (abs(x) + abs(y)) / (coord_scale * 2.0)
 
     return features
 
@@ -116,6 +114,32 @@ class CandidateScoringPolicy(nn.Module):
         action = torch.tanh(self.action(candidate_features))
         score = (state[:, None, :] * action).sum(dim=-1) / math.sqrt(self.hidden_size)
         return score + self.action_bias(candidate_features).squeeze(-1)
+
+
+class InteractionCandidatePolicy(nn.Module):
+    """Richer legal-candidate scorer with explicit state/action interaction."""
+
+    def __init__(
+        self,
+        obs_size: int = OBSERVATION_SIZE,
+        action_feature_size: int = ACTION_FEATURE_SIZE,
+        hidden_size: int = DEFAULT_HIDDEN_SIZE,
+    ):
+        super().__init__()
+        self.obs_size = obs_size
+        self.action_feature_size = action_feature_size
+        self.hidden_size = hidden_size
+        self.obs = nn.Linear(obs_size, hidden_size)
+        self.action = nn.Linear(action_feature_size, hidden_size)
+        self.joint = nn.Linear(hidden_size * 3, hidden_size)
+        self.output = nn.Linear(hidden_size, 1)
+
+    def forward(self, observations: torch.Tensor, candidate_features: torch.Tensor) -> torch.Tensor:
+        state = torch.tanh(self.obs(observations))[:, None, :]
+        action = torch.tanh(self.action(candidate_features))
+        state = state.expand(-1, action.shape[1], -1)
+        joint = torch.cat([state, action, state * action], dim=-1)
+        return self.output(torch.tanh(self.joint(joint))).squeeze(-1)
 
 
 class FactorizedActionPolicy(nn.Module):

@@ -512,6 +512,13 @@ cdef class NativeKingdominoEnv:
             return best
         return actions[0]
 
+    def heuristic_score(self, int player, int action):
+        if action < N_DRAFT_ACTIONS:
+            return self._draft_score(self.current_draft_num[action])
+        if action == N_SKIP_ACTION:
+            return -1000000.0
+        return self._placement_heuristic(player, action)
+
     cdef object _step_observation(self, bint observe):
         if observe:
             return self.observe()
