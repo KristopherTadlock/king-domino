@@ -283,6 +283,18 @@ placement won about `62%`, and the full rich policy won about `61%`. A separate
 mean score margin of `+3.8`. That is not yet a final statistically stable
 policy, but it strongly suggests the previous plateau was representation-bound.
 
+A 50k-sample rich interaction candidate run strengthened that signal:
+
+- validation top-choice accuracy: about `86.9%`
+- 400 seat-swapped games vs old greedy, seed `789`: `64.25%` win rate, average
+  score `107.7` vs `97.4`, mean margin `+10.3`
+- 100-game phase diagnostic vs old greedy: draft agreement about `98.8%`,
+  placement agreement about `59.8%`, and greedy-draft plus rich-placement at
+  `67%` wins in the hybrid probe
+- 200 seat-swapped games vs the weighted heuristic, seed `789`: `51%` win rate
+  but mean margin `-1.4`, so this is not yet a proven replacement for the
+  browser fallback
+
 The current rich feature builder is Python-side and computes local placement
 consequences from observations. It is good enough for proof and short PPO
 smokes, but it is slower than static features. Before a large rich PPO run, move

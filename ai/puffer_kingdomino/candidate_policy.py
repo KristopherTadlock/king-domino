@@ -261,7 +261,9 @@ def _best_mobility_metrics(
 ) -> dict[str, float]:
     anchors = _candidate_anchors(terrain)
     seen: set[tuple] = set()
-    best = _empty_metrics()
+    best_score_delta = -1_000_000_000.0
+    best_touch_count = -1.0
+    best_cells = None
     count = 0
     for orientation in LEFT_TO_RIGHT_OFFSETS:
         for x, y in anchors:
@@ -274,16 +276,23 @@ def _best_mobility_metrics(
                     continue
                 seen.add(key)
                 count += 1
-                metrics = _placement_metrics_for_cells(terrain, crowns, domino, left, right, bounds)
-                if metrics["score_delta"] > best["score_delta"]:
-                    best = metrics
-                elif metrics["score_delta"] == best["score_delta"] and metrics["same_touch_count"] > best["same_touch_count"]:
-                    best = metrics
-    best = dict(best)
-    best["count"] = float(count)
-    best["best_score_delta"] = best["score_delta"]
-    best["best_touch_count"] = best["same_touch_count"] + best["castle_touch_count"]
-    return best
+                score_delta = float(_score_delta_local(terrain, crowns, domino, left, right))
+                touch_count = _same_touch_count(terrain, domino, left, right)
+                if score_delta > best_score_delta or (
+                    score_delta == best_score_delta and touch_count > best_touch_count
+                ):
+                    best_score_delta = score_delta
+                    best_touch_count = touch_count
+                    best_cells = (left, right)
+    if best_cells is None:
+        metrics = _empty_metrics()
+    else:
+        metrics = _placement_metrics_for_cells(terrain, crowns, domino, best_cells[0], best_cells[1], bounds)
+    metrics = dict(metrics)
+    metrics["count"] = float(count)
+    metrics["best_score_delta"] = max(0.0, best_score_delta)
+    metrics["best_touch_count"] = max(0.0, best_touch_count)
+    return metrics
 
 
 def _placement_metrics(
@@ -364,6 +373,27 @@ def _score_delta_local(
             group[1] += region_crowns
     after_score = sum(size * crown_count for size, crown_count in groups.values())
     return after_score - before_score
+
+
+def _same_touch_count(
+    terrain: np.ndarray,
+    domino: DominoSpec,
+    left: tuple[int, int],
+    right: tuple[int, int],
+) -> float:
+    count = 0.0
+    for coord, terrain_plus in (
+        (left, domino.left_terrain + 1),
+        (right, domino.right_terrain + 1),
+    ):
+        for neighbor in _neighbors(coord):
+            if not _coord_in_bounds(neighbor):
+                continue
+            ny, nx = _array_coord(neighbor)
+            neighbor_terrain = int(terrain[ny, nx])
+            if neighbor_terrain == terrain_plus:
+                count += 1.0
+    return count
 
 
 def _empty_metrics() -> dict[str, float]:
