@@ -6,3 +6,7 @@ build/
 *.so
 ai/puffer_kingdomino/native.c
 resources
+ai/artifacts/datasets/*.npz
+ai/artifacts/distilled_*.pt
+ai/artifacts/ppo_smoke*.pt
+ai/artifacts/*bakeoff*.json

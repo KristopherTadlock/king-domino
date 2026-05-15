@@ -55,6 +55,7 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_flat.pt --head flat --epochs 4 --batch-size 256
 .venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind candidate --policy ai/artifacts/distilled_candidate.pt --opponent-kind greedy --games 1000 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
+.venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -157,6 +158,29 @@ Current recommendation:
 - Use the depth-2 search teacher to generate supervised data.
 - Use candidate/factorized distillation to choose the next PPO architecture.
 - Keep flat distillation around as the browser-export and PPO-smoke bridge.
+
+### Distillation Bakeoff Notes
+
+A 100k-sample depth-2 search-teacher bakeoff is now reproducible with
+`distill_bakeoff`. Local reference runs with 1000 seat-swapped eval games showed
+that the distilled policies are legal and beat random reliably, but are not yet
+competitive with greedy:
+
+- Teacher-rollout dataset: validation accuracy around `65-67%`; best greedy
+  result was factorized at `6.3%` win rate, with a mean margin around `-37.7`.
+- Mixed-rollout dataset: validation accuracy around `62-64%`; best greedy
+  result was flat at `7.6%` win rate, with a mean margin around `-36.0`.
+- A 20-epoch flat run on the mixed dataset did not improve gameplay
+  (`6.6%` vs greedy), so this is not just undertraining.
+- A 50k-step PPO smoke continuation from the best mixed flat checkpoint stayed
+  in the same band (`6.6%` vs greedy, `81.6%` vs random).
+
+The practical takeaway: plain hard-label behavioral cloning from a search
+teacher is enough to learn "reasonable random-beating play", but not enough to
+inherit the teacher's strategic strength. The next promising route is to train
+from richer teacher information: score/rank regression or pairwise ranking over
+legal candidates, plus a candidate/factorized PPO path that can optimize actual
+game outcomes instead of only imitating one chosen action.
 
 For browser play against the current executable policy:
 
