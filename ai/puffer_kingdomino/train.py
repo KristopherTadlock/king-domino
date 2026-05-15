@@ -33,7 +33,9 @@ def _make_env(seed: int, native: bool = True):
     return KingdominoEnv(seed=seed)
 
 
-def _expert_action(env, player: int = 0) -> int:
+def _expert_action(env, player: int = 0, expert: str = "greedy") -> int:
+    if expert == "delta" and hasattr(env, "delta_greedy_action"):
+        return int(env.delta_greedy_action(player))
     if hasattr(env, "greedy_action"):
         return int(env.greedy_action(player))
     from .core import greedy_policy_action
@@ -44,8 +46,8 @@ def _expert_action(env, player: int = 0) -> int:
 def _advance_opponent(env, rng: random.Random, opponent: str) -> None:
     guard = 0
     while not env.done and env.current_player == 1 and guard < 128:
-        if opponent == "greedy":
-            action = _expert_action(env, player=1)
+        if opponent in ("greedy", "delta"):
+            action = _expert_action(env, player=1, expert=opponent)
             if hasattr(env, "step_known_legal"):
                 _obs, _reward, _done, info = env.step_known_legal(action, observe=False)
             else:
@@ -70,6 +72,7 @@ def train(
     batch_size: int = 256,
     lr: float = 2.5e-4,
     opponent: str = "random",
+    expert: str = "greedy",
     native: bool = True,
     profile: bool = False,
 ) -> dict:
@@ -110,7 +113,7 @@ def train(
             continue
 
         timed = time.perf_counter() if profile else 0.0
-        target = _expert_action(env, player=0)
+        target = _expert_action(env, player=0, expert=expert)
         if profile:
             timings["expert"] += time.perf_counter() - timed
         timed = time.perf_counter() if profile else 0.0
@@ -171,6 +174,7 @@ def train(
         "completed_games": completed_games,
         "updates": updates,
         "opponent": opponent,
+        "expert": expert,
         "native": bool(native and NativeKingdominoEnv is not None),
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
@@ -196,7 +200,8 @@ def main():
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=2.5e-4)
-    parser.add_argument("--opponent", choices=["random", "greedy"], default="random")
+    parser.add_argument("--opponent", choices=["random", "greedy", "delta"], default="random")
+    parser.add_argument("--expert", choices=["greedy", "delta"], default="greedy")
     parser.add_argument("--python-env", action="store_true", help="Use the Python env instead of the native extension")
     parser.add_argument("--profile", action="store_true", help="Include rough training loop timing breakdown")
     args = parser.parse_args()
@@ -208,6 +213,7 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         opponent=args.opponent,
+        expert=args.expert,
         native=not args.python_env,
         profile=args.profile,
     )

@@ -512,12 +512,96 @@ cdef class NativeKingdominoEnv:
             return best
         return actions[0]
 
+    def delta_greedy_action(self, int player=0):
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
+        cdef int action
+        cdef int best = -1
+        cdef double score
+        cdef double best_score = -1000000000.0
+        count = self._fill_legal_actions_fast(actions)
+        if count <= 0:
+            raise RuntimeError("no legal actions available")
+        if self._current_player() != player:
+            return actions[0]
+        if self.phase == PHASE_DRAFT:
+            for i in range(count):
+                action = actions[i]
+                score = self._draft_score(self.current_draft_num[action])
+                if score > best_score:
+                    best_score = score
+                    best = action
+            return best
+        if self.phase == PHASE_PLACE:
+            if count == 1 and actions[0] == N_SKIP_ACTION:
+                return N_SKIP_ACTION
+            for i in range(count):
+                action = actions[i]
+                score = (
+                    self._placement_score_delta(player, action) * 100.0
+                    + self._placement_heuristic(player, action)
+                )
+                if score > best_score:
+                    best_score = score
+                    best = action
+            return best
+        return actions[0]
+
+    def weighted_action(self, int player, object weights):
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
+        cdef int action
+        cdef int best = -1
+        cdef double score
+        cdef double best_score = -1000000000.0
+        cdef double w0 = <double>weights[0]
+        cdef double w1 = <double>weights[1]
+        cdef double w2 = <double>weights[2]
+        cdef double w3 = <double>weights[3]
+        cdef double w4 = <double>weights[4]
+        cdef double w5 = <double>weights[5]
+        cdef double w6 = <double>weights[6]
+        cdef double w7 = <double>weights[7]
+        cdef double w8 = <double>weights[8]
+        cdef double w9 = <double>weights[9]
+        count = self._fill_legal_actions_fast(actions)
+        if count <= 0:
+            raise RuntimeError("no legal actions available")
+        if self._current_player() != player:
+            return actions[0]
+        if self.phase == PHASE_DRAFT:
+            for i in range(count):
+                action = actions[i]
+                score = self._weighted_draft_score(self.current_draft_num[action], w0, w1, w2)
+                if score > best_score:
+                    best_score = score
+                    best = action
+            return best
+        if self.phase == PHASE_PLACE:
+            if count == 1 and actions[0] == N_SKIP_ACTION:
+                return N_SKIP_ACTION
+            for i in range(count):
+                action = actions[i]
+                score = self._weighted_placement_score(player, action, w3, w4, w5, w6, w7, w8, w9)
+                if score > best_score:
+                    best_score = score
+                    best = action
+            return best
+        return actions[0]
+
     def heuristic_score(self, int player, int action):
         if action < N_DRAFT_ACTIONS:
             return self._draft_score(self.current_draft_num[action])
         if action == N_SKIP_ACTION:
             return -1000000.0
         return self._placement_heuristic(player, action)
+
+    def placement_score_delta(self, int player, int action):
+        if action < N_DRAFT_ACTIONS or action == N_SKIP_ACTION:
+            return 0
+        return self._placement_score_delta(player, action)
 
     cdef object _step_observation(self, bint observe):
         if observe:
@@ -1136,6 +1220,11 @@ cdef class NativeKingdominoEnv:
         cdef double terrain_diversity = 0.5 if DECK_LEFT_TERRAIN[number] != DECK_RIGHT_TERRAIN[number] else 0.0
         return crowns * 12.0 + number * 0.25 + terrain_diversity
 
+    cdef double _weighted_draft_score(self, int number, double crown_weight, double number_weight, double diversity_weight):
+        cdef int crowns = <int>DECK_LEFT_CROWNS[number] + <int>DECK_RIGHT_CROWNS[number]
+        cdef int diversity = 1 if DECK_LEFT_TERRAIN[number] != DECK_RIGHT_TERRAIN[number] else 0
+        return crowns * crown_weight + number * number_weight + diversity * diversity_weight
+
     cdef double _placement_heuristic(self, int player, int action):
         cdef int value = action - N_DRAFT_ACTIONS
         cdef int anchor_end = value % 2
@@ -1168,6 +1257,152 @@ cdef class NativeKingdominoEnv:
             - number * 0.005
         )
 
+    cdef double _weighted_placement_score(
+        self,
+        int player,
+        int action,
+        double delta_weight,
+        double heuristic_weight,
+        double crown_weight,
+        double compact_weight,
+        double number_weight,
+        double expansion_weight,
+        double touch_weight,
+    ):
+        cdef int value = action - N_DRAFT_ACTIONS
+        cdef int anchor_end = value % 2
+        cdef int coord_y
+        cdef int coord_x
+        cdef int orientation_steps
+        cdef int draft_index
+        cdef int x
+        cdef int y
+        cdef int number
+        cdef int lx
+        cdef int ly
+        cdef int rx
+        cdef int ry
+        cdef int crowns
+        cdef int x_min
+        cdef int x_max
+        cdef int y_min
+        cdef int y_max
+        cdef int old_area
+        cdef int new_area
+        cdef int compactness
+        cdef int touches
+        value //= 2
+        coord_y = value % COORD_SPAN
+        value //= COORD_SPAN
+        coord_x = value % COORD_SPAN
+        value //= COORD_SPAN
+        orientation_steps = value % 4
+        draft_index = value // 4
+        x = coord_x + COORD_MIN
+        y = coord_y + COORD_MIN
+        number = self.current_draft_num[draft_index]
+        self._cells_for(orientation_steps * 90, x, y, anchor_end, &lx, &ly, &rx, &ry)
+        crowns = <int>DECK_LEFT_CROWNS[number] + <int>DECK_RIGHT_CROWNS[number]
+        compactness = abs(lx) + abs(ly) + abs(rx) + abs(ry)
+
+        x_min = self.board_x_min[player]
+        x_max = self.board_x_max[player]
+        y_min = self.board_y_min[player]
+        y_max = self.board_y_max[player]
+        old_area = (x_max - x_min + 1) * (y_max - y_min + 1)
+        if lx < x_min:
+            x_min = lx
+        if rx < x_min:
+            x_min = rx
+        if lx > x_max:
+            x_max = lx
+        if rx > x_max:
+            x_max = rx
+        if ly < y_min:
+            y_min = ly
+        if ry < y_min:
+            y_min = ry
+        if ly > y_max:
+            y_max = ly
+        if ry > y_max:
+            y_max = ry
+        new_area = (x_max - x_min + 1) * (y_max - y_min + 1)
+
+        touches = self._matching_touch_count(player, lx, ly, <int>DECK_LEFT_TERRAIN[number])
+        touches += self._matching_touch_count(player, rx, ry, <int>DECK_RIGHT_TERRAIN[number])
+        return (
+            self._placement_score_delta(player, action) * delta_weight
+            + self._placement_heuristic(player, action) * heuristic_weight
+            + crowns * crown_weight
+            - compactness * compact_weight
+            - number * number_weight
+            - (new_area - old_area) * expansion_weight
+            + touches * touch_weight
+        )
+
+    cdef int _placement_score_delta(self, int player, int action):
+        cdef int value = action - N_DRAFT_ACTIONS
+        cdef int anchor_end = value % 2
+        cdef int coord_y
+        cdef int coord_x
+        cdef int orientation_steps
+        cdef int draft_index
+        cdef int x
+        cdef int y
+        cdef int number
+        cdef int lx
+        cdef int ly
+        cdef int rx
+        cdef int ry
+        cdef int lidx
+        cdef int ridx
+        cdef int before
+        cdef int after
+        cdef int old_x_min
+        cdef int old_x_max
+        cdef int old_y_min
+        cdef int old_y_max
+        value //= 2
+        coord_y = value % COORD_SPAN
+        value //= COORD_SPAN
+        coord_x = value % COORD_SPAN
+        value //= COORD_SPAN
+        orientation_steps = value % 4
+        draft_index = value // 4
+        x = coord_x + COORD_MIN
+        y = coord_y + COORD_MIN
+        number = self.current_draft_num[draft_index]
+        self._cells_for(orientation_steps * 90, x, y, anchor_end, &lx, &ly, &rx, &ry)
+        lidx = _coord_to_idx(lx, ly)
+        ridx = _coord_to_idx(rx, ry)
+        if lidx < 0 or ridx < 0:
+            return -1000000
+
+        before = self.score_board(player)
+        old_x_min = self.board_x_min[player]
+        old_x_max = self.board_x_max[player]
+        old_y_min = self.board_y_min[player]
+        old_y_max = self.board_y_max[player]
+
+        self.terrain[player][lidx] = <int>DECK_LEFT_TERRAIN[number]
+        self.crowns[player][lidx] = <int>DECK_LEFT_CROWNS[number]
+        self.terrain[player][ridx] = <int>DECK_RIGHT_TERRAIN[number]
+        self.crowns[player][ridx] = <int>DECK_RIGHT_CROWNS[number]
+        self._expand_board_bounds(player, lx, ly)
+        self._expand_board_bounds(player, rx, ry)
+        after = self.score_board(player)
+
+        self.terrain[player][lidx] = TERRAIN_EMPTY
+        self.crowns[player][lidx] = 0
+        self.terrain[player][ridx] = TERRAIN_EMPTY
+        self.crowns[player][ridx] = 0
+        self.board_x_min[player] = old_x_min
+        self.board_x_max[player] = old_x_max
+        self.board_y_min[player] = old_y_min
+        self.board_y_max[player] = old_y_max
+
+        return after - before
+
     cdef double _touch_score(self, int player, int x, int y, int terrain, int crowns):
         cdef double score = crowns * 10.0
         score += self._touch_score_one(player, x + 1, y, terrain, crowns)
@@ -1187,6 +1422,18 @@ cdef class NativeKingdominoEnv:
         if other == TERRAIN_CASTLE:
             return 1.5
         return 0.0
+
+    cdef int _matching_touch_count(self, int player, int x, int y, int terrain):
+        cdef int count = 0
+        if self._touch_matches(player, x + 1, y, terrain):
+            count += 1
+        if self._touch_matches(player, x - 1, y, terrain):
+            count += 1
+        if self._touch_matches(player, x, y + 1, terrain):
+            count += 1
+        if self._touch_matches(player, x, y - 1, terrain):
+            count += 1
+        return count
 
     cdef list _board_features(self, int player):
         cdef list values = []

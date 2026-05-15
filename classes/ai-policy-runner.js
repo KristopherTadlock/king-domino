@@ -21,6 +21,10 @@ function terrainId(landscape) {
   return TERRAIN[landscape?.description ?? String(landscape)] ?? 0;
 }
 
+function terrainKey(landscape) {
+  return landscape?.description ?? String(landscape);
+}
+
 export class AIPolicyRunner {
   #advisor = new GameAdvisor();
   #artifact = null;
@@ -30,11 +34,14 @@ export class AIPolicyRunner {
   }
 
   get backend() {
-    return this.#artifact?.backend ?? 'unloaded';
+    return this.#artifact?.metadata?.backend ?? this.#artifact?.backend ?? 'unloaded';
   }
 
-  async load(url = 'ai/artifacts/browser_policy.json') {
+  async load(url = 'ai/artifacts/heuristic_policy.json') {
     let response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok && url !== 'ai/artifacts/browser_policy.json') {
+      response = await fetch('ai/artifacts/browser_policy.json', { cache: 'no-store' });
+    }
     if (!response.ok && url !== 'ai/artifacts/latest.pt') {
       response = await fetch('ai/artifacts/latest.pt', { cache: 'no-store' });
     }
@@ -47,6 +54,9 @@ export class AIPolicyRunner {
 
   chooseAction(game, playerIndex) {
     if (!this.ready || !game || game.isGameOver || playerIndex == null) return null;
+    if (this.#artifact?.format === 'kingdomino-weighted-heuristic-v0') {
+      return this.#chooseHeuristicAction(game, playerIndex);
+    }
     if (this.#artifact?.policy?.type === 'masked_mlp_v0') {
       const action = this.#chooseModelAction(game, playerIndex);
       if (action) return action;
@@ -262,5 +272,207 @@ export class AIPolicyRunner {
     }
 
     return null;
+  }
+
+  #chooseHeuristicAction(game, playerIndex) {
+    const weights = this.#artifact?.weights;
+    if (!Array.isArray(weights) || weights.length < 10) return null;
+    if (game.state === GameState.DRAFT) return this.#chooseHeuristicDraftAction(game, playerIndex, weights);
+    if (game.state === GameState.PLACE) return this.#chooseHeuristicPlacementAction(game, playerIndex, weights);
+    return null;
+  }
+
+  #chooseHeuristicDraftAction(game, playerIndex, weights) {
+    if (game.currentPickingPlayerIndex !== playerIndex) return null;
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    (game.currentDraft ?? []).forEach((slot, index) => {
+      if (slot?.player != null || slot?.placed || !slot?.domino) return;
+      const domino = slot.domino;
+      const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
+      const diversity = terrainKey(domino.leftEnd?.landscape) === terrainKey(domino.rightEnd?.landscape) ? 0 : 1;
+      const score = crowns * weights[0] + domino.number * weights[1] + diversity * weights[2];
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    if (bestIndex < 0) return null;
+    return { type: 'pickDraft', payload: { index: bestIndex, ai: true } };
+  }
+
+  #chooseHeuristicPlacementAction(game, playerIndex, weights) {
+    const options = game.getCurrentPlacementOptionsForPlayer?.(playerIndex) ?? [];
+    if (!options.length) {
+      if (game.canSkipPlacementForPlayer?.(playerIndex)) return { type: 'skip', payload: { ai: true } };
+      return null;
+    }
+
+    let best = null;
+    let bestScore = -Infinity;
+    for (const option of options) {
+      const score = this.#weightedPlacementScore(game, playerIndex, option, weights);
+      if (score > bestScore) {
+        bestScore = score;
+        best = option;
+      }
+    }
+    if (!best) return null;
+    return {
+      type: 'place',
+      payload: {
+        ai: true,
+        dominoNumber: best.dominoNumber,
+        orientation: best.orientation,
+        x: best.x,
+        y: best.y,
+        anchorEnd: best.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT',
+        placeId: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    };
+  }
+
+  #weightedPlacementScore(game, playerIndex, option, weights) {
+    const domino = this.#dominoForOption(game, playerIndex, option);
+    if (!domino) return -Infinity;
+    const cells = this.#cellsForOption(option, domino);
+    const boardManager = game.players?.[playerIndex]?.board;
+    const board = boardManager?.board ?? {};
+    const boardSize = boardManager?.boardSize;
+    const before = this.#scoreBoard(board);
+    const after = this.#scoreBoard(board, cells);
+    const scoreDelta = after - before;
+    const placementHeuristic = this.#placementHeuristic(board, option, domino, cells);
+    const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
+    const compactness = Math.abs(cells[0].x) + Math.abs(cells[0].y) + Math.abs(cells[1].x) + Math.abs(cells[1].y);
+    const oldArea = boardSize
+      ? (boardSize.xMax - boardSize.xMin + 1) * (boardSize.yMax - boardSize.yMin + 1)
+      : 1;
+    const xs = [
+      boardSize?.xMin ?? 0,
+      boardSize?.xMax ?? 0,
+      cells[0].x,
+      cells[1].x,
+    ];
+    const ys = [
+      boardSize?.yMin ?? 0,
+      boardSize?.yMax ?? 0,
+      cells[0].y,
+      cells[1].y,
+    ];
+    const newArea = (Math.max(...xs) - Math.min(...xs) + 1) * (Math.max(...ys) - Math.min(...ys) + 1);
+    const touches = this.#matchingTouchCount(board, cells[0]) + this.#matchingTouchCount(board, cells[1]);
+    return scoreDelta * weights[3]
+      + placementHeuristic * weights[4]
+      + crowns * weights[5]
+      - compactness * weights[6]
+      - option.dominoNumber * weights[7]
+      - (newArea - oldArea) * weights[8]
+      + touches * weights[9];
+  }
+
+  #dominoForOption(game, playerIndex, option) {
+    return (game.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? [])
+      .find((choice) => choice?.domino?.number === option.dominoNumber)
+      ?.domino ?? null;
+  }
+
+  #cellsForOption(option, domino) {
+    const anchor = { x: option.x, y: option.y };
+    const offsets = {
+      0: { x: 1, y: 0 },
+      90: { x: 0, y: -1 },
+      180: { x: -1, y: 0 },
+      270: { x: 0, y: 1 },
+    };
+    const offset = offsets[((Number(option.orientation) % 360) + 360) % 360] ?? offsets[0];
+    const other = { x: option.x + offset.x, y: option.y + offset.y };
+    return option.anchorEnd === DominoEnd.LEFT
+      ? [
+        { ...anchor, landscape: domino.leftEnd.landscape, crowns: domino.leftEnd.crowns },
+        { ...other, landscape: domino.rightEnd.landscape, crowns: domino.rightEnd.crowns },
+      ]
+      : [
+        { ...other, landscape: domino.leftEnd.landscape, crowns: domino.leftEnd.crowns },
+        { ...anchor, landscape: domino.rightEnd.landscape, crowns: domino.rightEnd.crowns },
+      ];
+  }
+
+  #scoreBoard(board, extraCells = []) {
+    const tiles = new Map();
+    for (const [key, tile] of Object.entries(board ?? {})) {
+      tiles.set(key, {
+        terrain: terrainId(tile.landscape),
+        crowns: tile.crowns ?? 0,
+      });
+    }
+    for (const cell of extraCells) {
+      tiles.set(`${cell.x},${cell.y}`, {
+        terrain: terrainId(cell.landscape),
+        crowns: cell.crowns ?? 0,
+      });
+    }
+
+    const visited = new Set();
+    let total = 0;
+    for (const [key, tile] of tiles.entries()) {
+      if (visited.has(key) || tile.terrain <= TERRAIN.castle) continue;
+      const stack = [key];
+      visited.add(key);
+      let count = 0;
+      let crowns = 0;
+      while (stack.length) {
+        const currentKey = stack.pop();
+        const current = tiles.get(currentKey);
+        count += 1;
+        crowns += current.crowns ?? 0;
+        const [x, y] = currentKey.split(',').map((value) => Number.parseInt(value, 10));
+        for (const neighborKey of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
+          if (visited.has(neighborKey)) continue;
+          const neighbor = tiles.get(neighborKey);
+          if (!neighbor || neighbor.terrain !== tile.terrain) continue;
+          visited.add(neighborKey);
+          stack.push(neighborKey);
+        }
+      }
+      total += count * crowns;
+    }
+    return total;
+  }
+
+  #placementHeuristic(board, option, domino, cells) {
+    const touchScore = (cell) => {
+      let score = (cell.crowns ?? 0) * 10;
+      for (const neighbor of this.#neighborTiles(board, cell.x, cell.y)) {
+        if (terrainId(neighbor.landscape) === terrainId(cell.landscape)) {
+          score += 3 + (cell.crowns ?? 0);
+        } else if (terrainId(neighbor.landscape) === TERRAIN.castle) {
+          score += 1.5;
+        }
+      }
+      return score;
+    };
+    const compactness = -0.1 * (
+      Math.abs(cells[0].x) + Math.abs(cells[0].y) + Math.abs(cells[1].x) + Math.abs(cells[1].y)
+    );
+    return touchScore(cells[0]) + touchScore(cells[1]) + compactness - option.dominoNumber * 0.005;
+  }
+
+  #matchingTouchCount(board, cell) {
+    return this.#neighborTiles(board, cell.x, cell.y)
+      .filter((tile) => {
+        const terrain = terrainId(tile.landscape);
+        return terrain === TERRAIN.castle || terrain === terrainId(cell.landscape);
+      })
+      .length;
+  }
+
+  #neighborTiles(board, x, y) {
+    return [
+      board?.[`${x + 1},${y}`],
+      board?.[`${x - 1},${y}`],
+      board?.[`${x},${y + 1}`],
+      board?.[`${x},${y - 1}`],
+    ].filter(Boolean);
   }
 }

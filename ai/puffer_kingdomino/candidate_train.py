@@ -39,6 +39,7 @@ def train_candidate(
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     lr: float = 2.5e-4,
     opponent: str = "random",
+    expert: str = "greedy",
     native: bool = True,
     model_type: str = "dot",
 ) -> dict:
@@ -74,7 +75,7 @@ def train_candidate(
         if env.done:
             continue
 
-        target = _expert_action(env, player=0)
+        target = _expert_action(env, player=0, expert=expert)
         legal_count = _write_legal_actions(env, legal_buffer)
         if legal_count > max_candidates:
             raise ValueError(f"legal action count {legal_count} exceeds max_candidates {max_candidates}")
@@ -144,6 +145,7 @@ def train_candidate(
         "completed_games": completed_games,
         "updates": updates,
         "opponent": opponent,
+        "expert": expert,
         "native": bool(native),
         "hidden_size": hidden_size,
         "model_type": model_type,
@@ -178,7 +180,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--lr", type=float, default=2.5e-4)
-    parser.add_argument("--opponent", choices=["random", "greedy"], default="random")
+    parser.add_argument("--opponent", choices=["random", "greedy", "delta"], default="random")
+    parser.add_argument("--expert", choices=["greedy", "delta"], default="greedy")
     parser.add_argument("--python-env", action="store_true")
     parser.add_argument("--model-type", choices=["dot", "interaction"], default="dot")
     args = parser.parse_args()
@@ -191,6 +194,7 @@ def main():
         max_candidates=args.max_candidates,
         lr=args.lr,
         opponent=args.opponent,
+        expert=args.expert,
         native=not args.python_env,
         model_type=args.model_type,
     ), indent=2))

@@ -16,12 +16,15 @@ Current state:
 - PufferLib adapter smoke test for the current action/observation contract.
 - Torch checkpoint at `ai/artifacts/latest.pt`.
 - Browser-loadable exported policy at `ai/artifacts/browser_policy.json`.
+- Weighted heuristic policy at `ai/artifacts/heuristic_policy.json`.
 - Profiling benchmark for Python, native compatibility, optimized native, and
   multi-env native rollout paths.
 
-The current trainer uses imitation learning from the native greedy expert. This
-is not full PPO yet, but it is a real Torch train/eval/export path and uses the
-same observation/action-mask contract that PPO will use next.
+The Torch trainer uses imitation learning from native experts. This is not full
+PPO yet, but it is a real Torch train/eval/export path and uses the same
+observation/action-mask contract that PPO will use next. The first policy that
+beats the greedy baseline is a small weighted heuristic trained by black-box
+search over native rollout outcomes.
 
 ## Commands
 
@@ -36,6 +39,8 @@ same observation/action-mask contract that PPO will use next.
 .venv/bin/python -m ai.puffer_kingdomino.factor_eval --policy /tmp/kingdomino-factor.pt --games 200 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.factor_train --steps 200000 --seed 123 --output /tmp/kingdomino-factor-dagger.pt --roll-in mixed
 .venv/bin/python -m ai.puffer_kingdomino.imitation_eval --policy ai/artifacts/latest.pt --kind flat --states 10000 --seed 789
+.venv/bin/python -m ai.puffer_kingdomino.heuristic_train --output ai/artifacts/heuristic_policy.json --seed 123
+.venv/bin/python -m ai.puffer_kingdomino.heuristic_eval --policy ai/artifacts/heuristic_policy.json --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/latest.pt --output ai/artifacts/browser_policy.json
@@ -76,6 +81,13 @@ challenge greedy. The `imitation_eval` command measures teacher-forced agreement
 with the greedy expert, which helps separate imitation fidelity from compounding
 rollout errors.
 
+The weighted heuristic path uses exact native placement score deltas plus a few
+small draft and placement shaping features. A local search run saved
+`ai/artifacts/heuristic_policy.json` and verified it at `63%` win rate against
+the native greedy baseline over 200 games with seed `456` (`107.3` average score
+vs `98.1`). This gives us a strong non-neural target to distill from or beat
+with PPO next.
+
 For browser play against the current executable policy:
 
 ```sh
@@ -88,6 +100,9 @@ Then open:
 http://127.0.0.1:8080/?hotseat=1&seed=123&p1=Human&p2=AI&ai=1
 ```
 
+The browser runner loads `heuristic_policy.json` first, then falls back to the
+older neural `browser_policy.json` if the heuristic artifact is missing.
+
 ## Action Space
 
 - `0..3`: draft slots.
@@ -99,9 +114,10 @@ The action mask is part of every observation.
 ## Known Gaps
 
 - Full PPO is still outstanding. The current learning path is Torch imitation
-  of the native greedy expert.
+  of native heuristic experts plus a trained weighted heuristic policy.
 - The first PufferLib adapter is wired as a single learning agent against a
   random opponent.
-- The trained policy beats random play but is not yet competitive with the
-  greedy expert.
+- The Torch neural policies beat random play but are not yet competitive with
+  greedy; the saveable weighted heuristic policy is the first beating-greedy
+  milestone.
 - 3-player and 4-player modes are intentionally out of scope for this milestone.
