@@ -55,6 +55,7 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind search --policy ai/artifacts/heuristic_policy.json --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --games 200 --seed 456 --search-depth 2 --search-breadth 6
 .venv/bin/python -m ai.puffer_kingdomino.teacher_dataset --output ai/artifacts/datasets/search_teacher.npz --samples 20000 --seed 123 --teacher-kind search --teacher-policy ai/artifacts/heuristic_policy.json --search-depth 2 --search-breadth 6
 .venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_candidate.pt --head candidate --epochs 4 --batch-size 256
+.venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_candidate_rich.pt --head candidate --model-type interaction --feature-mode rich --objective hybrid --epochs 4 --batch-size 256
 .venv/bin/python -m ai.puffer_kingdomino.distill_train --dataset ai/artifacts/datasets/search_teacher.npz --output ai/artifacts/distilled_flat.pt --head flat --epochs 4 --batch-size 256
 .venv/bin/python -m ai.puffer_kingdomino.fair_eval --policy-kind candidate --policy ai/artifacts/distilled_candidate.pt --opponent-kind greedy --games 1000 --seed 456
 .venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
@@ -258,6 +259,35 @@ artifact:
   the selected placement in greedy's top three about `62%` of the time.
 - Replacing only the neural draft with greedy barely matters; replacing only the
   neural placement with greedy moves the policy back near greedy-vs-greedy.
+
+Rich candidate features are the first fix for that ceiling. The historical
+candidate head used only static action-id features: draft slot, orientation,
+coordinate, anchor end, and distance. `--feature-mode rich` adds
+state-conditioned candidate features for placement and drafting:
+
+- current phase/player/score context
+- domino terrain and crown features
+- draft-time placement mobility for each draft candidate
+- immediate placement score delta
+- local same-terrain and castle contacts
+- connected-region size and crown context
+- board expansion and distance from the castle
+
+This gives the candidate policy direct access to the placement constraints that
+should eventually influence drafting. A fresh 20k mixed depth-2 search-teacher
+probe after the canonical-action fix produced an interaction candidate policy
+with about `83%` validation top-choice accuracy. In a small 100-game diagnostic
+against greedy, placement agreement rose to about `59%`, greedy-draft plus rich
+placement won about `62%`, and the full rich policy won about `61%`. A separate
+200-game seat-swapped eval from seed `789` landed at `55%` vs greedy with a
+mean score margin of `+3.8`. That is not yet a final statistically stable
+policy, but it strongly suggests the previous plateau was representation-bound.
+
+The current rich feature builder is Python-side and computes local placement
+consequences from observations. It is good enough for proof and short PPO
+smokes, but it is slower than static features. Before a large rich PPO run, move
+the hot feature calculations into native/vectorized code or add a cached dataset
+feature path.
 
 This points to the current action representation and candidate scorer as the
 systemic bottleneck. Placement candidates only expose generic action ids

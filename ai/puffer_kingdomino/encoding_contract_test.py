@@ -13,8 +13,11 @@ from .candidate_policy import (
     ACTION_FEATURE_SIZE,
     FACTOR_LOGIT_SIZE,
     FACTOR_UNUSED,
+    RICH_ACTION_FEATURE_SIZE,
     action_feature_table,
     action_part_table,
+    candidate_feature_size,
+    candidate_features_from_observations,
 )
 from .core import (
     ACTION_COUNT,
@@ -26,6 +29,7 @@ from .core import (
     DRAFT_ACTIONS,
     PLACEMENT_ACTIONS,
     SKIP_ACTION,
+    PHASE_PLACE,
     TERRAIN_CASTLE,
     TERRAIN_MINE,
     KingdominoEnv,
@@ -192,6 +196,8 @@ def _assert_candidate_table_contract() -> None:
     features = action_feature_table()
     parts = action_part_table()
     _assert_equal("action feature table shape", features.shape, (ACTION_COUNT, ACTION_FEATURE_SIZE))
+    _assert_equal("static feature size helper", candidate_feature_size("static"), ACTION_FEATURE_SIZE)
+    _assert_equal("rich feature size helper", candidate_feature_size("rich"), RICH_ACTION_FEATURE_SIZE)
     _assert_equal("action part table shape", parts.shape[0], ACTION_COUNT)
     _assert(np.isfinite(features).all(), "action feature table contains non-finite values")
     _assert(np.all((parts == FACTOR_UNUSED) | ((parts >= 0) & (parts < FACTOR_LOGIT_SIZE))), "factorized part index out of range")
@@ -212,6 +218,36 @@ def _assert_candidate_table_contract() -> None:
         _assert_equal(f"placement {action} x feature", float(features[action, 11 + (x - COORD_MIN)]), 1.0)
         _assert_equal(f"placement {action} y feature", float(features[action, 24 + (y - COORD_MIN)]), 1.0)
         _assert_equal(f"placement {action} anchor feature", float(features[action, 37 + anchor_end]), 1.0)
+
+
+def _assert_rich_candidate_feature_contract() -> None:
+    env = KingdominoEnv(seed=123)
+    draft_actions = np.asarray(env.legal_actions(), dtype=np.int64)
+    draft_features = candidate_features_from_observations(
+        observation_vector(env),
+        draft_actions,
+        feature_mode="rich",
+    )
+    _assert_equal("rich draft feature shape", draft_features.shape, (len(draft_actions), RICH_ACTION_FEATURE_SIZE))
+    _assert(np.isfinite(draft_features).all(), "rich draft features contain non-finite values")
+    _assert(np.any(draft_features[:, 54] > 0), "rich draft mobility count should be exposed")
+
+    while env.phase != PHASE_PLACE:
+        env.step(env.legal_actions()[0], observe=False)
+    placement_actions = np.asarray(env.legal_actions(), dtype=np.int64)
+    placement_features = candidate_features_from_observations(
+        observation_vector(env),
+        placement_actions,
+        feature_mode="rich",
+    )
+    _assert_equal(
+        "rich placement feature shape",
+        placement_features.shape,
+        (len(placement_actions), RICH_ACTION_FEATURE_SIZE),
+    )
+    _assert(np.isfinite(placement_features).all(), "rich placement features contain non-finite values")
+    _assert(np.all(placement_features[:, 41] == 1.0), "rich placement phase bit should be set")
+    _assert(np.any(placement_features[:, 80] > 0), "rich placement castle contact should be exposed")
 
 
 def _assert_dataset_contract() -> None:
@@ -263,6 +299,7 @@ def _assert_dataset_contract() -> None:
 def run() -> None:
     _assert_action_encoding_contract()
     _assert_candidate_table_contract()
+    _assert_rich_candidate_feature_contract()
     for seed in (1, 123, 456, 98765):
         _assert_observation_contract(seed)
     _assert_dataset_contract()

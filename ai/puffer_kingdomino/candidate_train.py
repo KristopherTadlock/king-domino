@@ -12,7 +12,15 @@ import numpy as np
 import torch
 from torch import nn
 
-from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
+from .candidate_policy import (
+    FEATURE_MODES,
+    STATIC_FEATURE_MODE,
+    CandidateScoringPolicy,
+    InteractionCandidatePolicy,
+    action_feature_table,
+    candidate_feature_size,
+    candidate_features_from_observations,
+)
 from .policy import OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION
 from .train import _advance_opponent, _expert_action, _make_env
 
@@ -42,17 +50,19 @@ def train_candidate(
     expert: str = "greedy",
     native: bool = True,
     model_type: str = "dot",
+    feature_mode: str = STATIC_FEATURE_MODE,
 ) -> dict:
     torch.manual_seed(seed)
     rng = random.Random(seed)
     env = _make_env(seed, native=native)
+    action_feature_size = candidate_feature_size(feature_mode)
     if model_type == "interaction":
-        model = InteractionCandidatePolicy(hidden_size=hidden_size)
+        model = InteractionCandidatePolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
     else:
-        model = CandidateScoringPolicy(hidden_size=hidden_size)
+        model = CandidateScoringPolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
-    action_features = torch.from_numpy(action_feature_table())
+    action_features = torch.from_numpy(action_feature_table()) if feature_mode == STATIC_FEATURE_MODE else None
 
     batch_obs = np.empty((batch_size, OBSERVATION_SIZE), dtype=np.float32)
     batch_actions = np.zeros((batch_size, max_candidates), dtype=np.int64)
@@ -110,7 +120,16 @@ def train_candidate(
             action_tensor = torch.from_numpy(batch_actions[:, :batch_max_count])
             mask_tensor = torch.from_numpy(batch_mask[:, :batch_max_count])
             target_tensor = torch.from_numpy(batch_targets)
-            candidate_features = action_features[action_tensor]
+            candidate_features = (
+                action_features[action_tensor]
+                if action_features is not None
+                else torch.from_numpy(candidate_features_from_observations(
+                    batch_obs,
+                    batch_actions[:, :batch_max_count],
+                    feature_mode=feature_mode,
+                    legal_mask=batch_mask[:, :batch_max_count],
+                ))
+            )
             logits = model(obs_tensor, candidate_features).masked_fill(~mask_tensor, -1e9)
             loss = loss_fn(logits, target_tensor)
             optimizer.zero_grad(set_to_none=True)
@@ -127,7 +146,16 @@ def train_candidate(
         action_tensor = torch.from_numpy(batch_actions[:batch_count, :batch_max_count])
         mask_tensor = torch.from_numpy(batch_mask[:batch_count, :batch_max_count])
         target_tensor = torch.from_numpy(batch_targets[:batch_count])
-        candidate_features = action_features[action_tensor]
+        candidate_features = (
+            action_features[action_tensor]
+            if action_features is not None
+                else torch.from_numpy(candidate_features_from_observations(
+                    batch_obs[:batch_count],
+                    batch_actions[:batch_count, :batch_max_count],
+                    feature_mode=feature_mode,
+                    legal_mask=batch_mask[:batch_count, :batch_max_count],
+                ))
+            )
         logits = model(obs_tensor, candidate_features).masked_fill(~mask_tensor, -1e9)
         loss = loss_fn(logits, target_tensor)
         optimizer.zero_grad(set_to_none=True)
@@ -149,6 +177,8 @@ def train_candidate(
         "native": bool(native),
         "hidden_size": hidden_size,
         "model_type": model_type,
+        "feature_mode": feature_mode,
+        "action_feature_size": action_feature_size,
         "observation_version": OBSERVATION_VERSION,
         "seconds": elapsed,
         "steps_per_second": steps / elapsed if steps else 0.0,
@@ -163,6 +193,8 @@ def train_candidate(
             {
                 "format": "kingdomino-candidate-policy-v0",
                 "model_type": model_type,
+                "feature_mode": feature_mode,
+                "action_feature_size": action_feature_size,
                 "state_dict": model.state_dict(),
                 "metadata": result,
             },
@@ -185,6 +217,7 @@ def main():
     parser.add_argument("--expert", choices=["greedy", "delta"], default="greedy")
     parser.add_argument("--python-env", action="store_true")
     parser.add_argument("--model-type", choices=["dot", "interaction"], default="dot")
+    parser.add_argument("--feature-mode", choices=FEATURE_MODES, default=STATIC_FEATURE_MODE)
     args = parser.parse_args()
     print(json.dumps(train_candidate(
         steps=args.steps,
@@ -198,6 +231,7 @@ def main():
         expert=args.expert,
         native=not args.python_env,
         model_type=args.model_type,
+        feature_mode=args.feature_mode,
     ), indent=2))
 
 

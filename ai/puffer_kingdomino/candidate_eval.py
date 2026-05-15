@@ -10,7 +10,14 @@ import random
 import numpy as np
 import torch
 
-from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
+from .candidate_policy import (
+    STATIC_FEATURE_MODE,
+    CandidateScoringPolicy,
+    InteractionCandidatePolicy,
+    action_feature_table,
+    candidate_feature_size,
+    candidate_features_from_observations,
+)
 from .candidate_train import DEFAULT_MAX_CANDIDATES, _write_legal_actions
 from .core import KingdominoEnv, random_legal_action
 from .policy import OBSERVATION_SIZE, OBS_SCALE
@@ -42,7 +49,7 @@ def _opponent_action(env, rng: random.Random, opponent: str) -> int:
 
 
 @torch.no_grad()
-def _choose_candidate_action(model, env, action_features, legal_buffer, obs_buffer) -> int:
+def _choose_candidate_action(model, env, action_features, feature_mode, legal_buffer, obs_buffer) -> int:
     legal_count = _write_legal_actions(env, legal_buffer)
     if hasattr(env, "write_observation_vector"):
         env.write_observation_vector(obs_buffer, OBS_SCALE)
@@ -51,8 +58,18 @@ def _choose_candidate_action(model, env, action_features, legal_buffer, obs_buff
 
         obs_buffer[:] = observation_vector(env)
     obs_tensor = torch.from_numpy(obs_buffer).unsqueeze(0)
-    actions = torch.from_numpy(legal_buffer[:legal_count].astype(np.int64, copy=False)).unsqueeze(0)
-    logits = model(obs_tensor, action_features[actions])
+    action_ids = legal_buffer[:legal_count].astype(np.int64, copy=False)
+    actions = torch.from_numpy(action_ids).unsqueeze(0)
+    candidate_features = (
+        action_features[actions]
+        if action_features is not None
+        else torch.from_numpy(candidate_features_from_observations(
+            obs_buffer,
+            action_ids,
+            feature_mode=feature_mode,
+        )).unsqueeze(0)
+    )
+    logits = model(obs_tensor, candidate_features)
     index = int(torch.argmax(logits, dim=-1).item())
     return int(legal_buffer[index])
 
@@ -71,13 +88,15 @@ def evaluate(
     metadata = payload.get("metadata", {})
     hidden_size = int(metadata.get("hidden_size", 64))
     model_type = payload.get("model_type") or metadata.get("model_type", "dot")
+    feature_mode = payload.get("feature_mode") or metadata.get("feature_mode", STATIC_FEATURE_MODE)
+    action_feature_size = int(payload.get("action_feature_size") or metadata.get("action_feature_size") or candidate_feature_size(feature_mode))
     if model_type == "interaction":
-        model = InteractionCandidatePolicy(hidden_size=hidden_size)
+        model = InteractionCandidatePolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
     else:
-        model = CandidateScoringPolicy(hidden_size=hidden_size)
+        model = CandidateScoringPolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
     model.load_state_dict(payload["state_dict"])
     model.eval()
-    action_features = torch.from_numpy(action_feature_table())
+    action_features = torch.from_numpy(action_feature_table()) if feature_mode == STATIC_FEATURE_MODE else None
     legal_buffer = np.empty((max_candidates,), dtype=np.int32)
     obs_buffer = np.empty((OBSERVATION_SIZE,), dtype=np.float32)
     rng = random.Random(seed)
@@ -90,7 +109,7 @@ def evaluate(
         steps = 0
         while not env.done:
             if env.current_player == 0:
-                action = _choose_candidate_action(model, env, action_features, legal_buffer, obs_buffer)
+                action = _choose_candidate_action(model, env, action_features, feature_mode, legal_buffer, obs_buffer)
             else:
                 action = _opponent_action(env, rng, opponent)
             if hasattr(env, "step_known_legal"):
@@ -121,6 +140,7 @@ def evaluate(
         "policy": str(policy_path),
         "backend": metadata.get("backend"),
         "model_type": model_type,
+        "feature_mode": feature_mode,
         "opponent": opponent,
         "wins": wins,
         "ties": ties,

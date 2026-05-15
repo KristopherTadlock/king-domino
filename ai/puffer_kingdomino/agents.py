@@ -112,7 +112,8 @@ class FlatTorchAgent(Agent):
 @dataclass
 class CandidateTorchAgent(Agent):
     model: object
-    action_features: object
+    action_features: object | None
+    feature_mode: str
     obs_buffer: np.ndarray
     legal_buffer: np.ndarray
     name: str = "candidate"
@@ -126,8 +127,19 @@ class CandidateTorchAgent(Agent):
         else:
             self.obs_buffer[:] = observation_vector(env)
         obs_tensor = torch.from_numpy(self.obs_buffer).unsqueeze(0)
-        actions = torch.from_numpy(self.legal_buffer[:legal_count].astype(np.int64, copy=False)).unsqueeze(0)
-        logits = self.model(obs_tensor, self.action_features[actions])
+        action_ids = self.legal_buffer[:legal_count].astype(np.int64, copy=False)
+        actions = torch.from_numpy(action_ids).unsqueeze(0)
+        if self.action_features is None:
+            from .candidate_policy import candidate_features_from_observations
+
+            candidate_features = torch.from_numpy(candidate_features_from_observations(
+                self.obs_buffer,
+                action_ids,
+                feature_mode=self.feature_mode,
+            )).unsqueeze(0)
+        else:
+            candidate_features = self.action_features[actions]
+        logits = self.model(obs_tensor, candidate_features)
         index = int(torch.argmax(logits, dim=-1).item())
         return int(self.legal_buffer[index])
 
@@ -195,21 +207,34 @@ def load_agent(
             raise ValueError("candidate policy kind requires --policy")
         import torch
 
-        from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
+        from .candidate_policy import (
+            STATIC_FEATURE_MODE,
+            CandidateScoringPolicy,
+            InteractionCandidatePolicy,
+            action_feature_table,
+            candidate_feature_size,
+        )
 
         payload = torch.load(Path(policy), map_location="cpu")
         metadata = payload.get("metadata", {})
         hidden_size = int(metadata.get("hidden_size", 64))
         model_type = payload.get("model_type") or metadata.get("model_type", "dot")
-        model = InteractionCandidatePolicy(hidden_size=hidden_size) if model_type == "interaction" else CandidateScoringPolicy(hidden_size=hidden_size)
+        feature_mode = payload.get("feature_mode") or metadata.get("feature_mode", STATIC_FEATURE_MODE)
+        action_feature_size = int(payload.get("action_feature_size") or metadata.get("action_feature_size") or candidate_feature_size(feature_mode))
+        model = (
+            InteractionCandidatePolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
+            if model_type == "interaction"
+            else CandidateScoringPolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
+        )
         model.load_state_dict(payload["state_dict"])
         model.eval()
         return CandidateTorchAgent(
             model=model,
-            action_features=torch.from_numpy(action_feature_table()),
+            action_features=torch.from_numpy(action_feature_table()) if feature_mode == STATIC_FEATURE_MODE else None,
+            feature_mode=feature_mode,
             obs_buffer=np.empty((OBSERVATION_SIZE,), dtype=np.float32),
             legal_buffer=np.empty((max_candidates,), dtype=np.int32),
-            name=f"candidate-{model_type}",
+            name=f"candidate-{model_type}-{feature_mode}",
         )
     if kind in ("factor", "factorized"):
         if not policy:

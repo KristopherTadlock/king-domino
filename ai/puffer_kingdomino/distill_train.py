@@ -14,10 +14,12 @@ from torch.nn import functional as F
 
 from .candidate_policy import (
     CandidateScoringPolicy,
+    FEATURE_MODES,
     FactorizedActionPolicy,
     InteractionCandidatePolicy,
-    action_feature_table,
     action_part_table,
+    candidate_feature_size,
+    candidate_features_from_observations,
     factorized_candidate_logits,
 )
 from .core import ACTION_COUNT
@@ -59,8 +61,22 @@ def _candidate_logits(head, model, obs_tensor, legal_actions, legal_mask, action
     elif head == "factorized":
         gathered = factorized_candidate_logits(model(obs_tensor), action_parts[legal_actions])
     else:
-        gathered = model(obs_tensor, action_features[legal_actions])
+        gathered = model(obs_tensor, action_features)
     return gathered.masked_fill(~legal_mask, -1e9)
+
+
+def _candidate_feature_tensor(
+    observations: np.ndarray,
+    legal_actions: np.ndarray,
+    feature_mode: str,
+    legal_mask: np.ndarray | None = None,
+) -> torch.Tensor:
+    return torch.from_numpy(candidate_features_from_observations(
+        observations,
+        legal_actions,
+        feature_mode=feature_mode,
+        legal_mask=legal_mask,
+    ))
 
 
 def _teacher_probs(candidate_scores: torch.Tensor, legal_mask: torch.Tensor, temperature: float) -> torch.Tensor:
@@ -113,6 +129,7 @@ def train_distilled(
     teacher_temperature: float = 8.0,
     soft_weight: float = 0.5,
     model_type: str = "dot",
+    feature_mode: str = "static",
 ) -> dict:
     torch.manual_seed(seed)
     started = time.perf_counter()
@@ -136,13 +153,18 @@ def train_distilled(
     elif head == "factorized":
         model = FactorizedActionPolicy(hidden_size=hidden_size)
     elif head == "candidate":
-        model = InteractionCandidatePolicy(hidden_size=hidden_size) if model_type == "interaction" else CandidateScoringPolicy(hidden_size=hidden_size)
+        action_feature_size = candidate_feature_size(feature_mode)
+        model = (
+            InteractionCandidatePolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
+            if model_type == "interaction"
+            else CandidateScoringPolicy(hidden_size=hidden_size, action_feature_size=action_feature_size)
+        )
     else:
         raise ValueError(f"unknown head: {head}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
-    action_features = torch.from_numpy(action_feature_table()) if head == "candidate" else None
+    action_features = None
     action_parts = torch.from_numpy(action_part_table()) if head == "factorized" else None
     updates = 0
     last_loss = 0.0
@@ -156,10 +178,17 @@ def train_distilled(
         for start in range(0, len(shuffled), batch_size):
             batch = shuffled[start:start + batch_size]
             obs_tensor = torch.from_numpy(observations[batch])
-            action_tensor = torch.from_numpy(legal_actions[batch])
-            mask_tensor = torch.from_numpy(legal_mask[batch])
-            score_tensor = torch.from_numpy(candidate_scores[batch]) if candidate_scores is not None else None
+            batch_width = int(np.max(np.sum(legal_mask[batch], axis=1)))
+            batch_actions = legal_actions[batch, :batch_width]
+            action_tensor = torch.from_numpy(batch_actions)
+            mask_tensor = torch.from_numpy(legal_mask[batch, :batch_width])
+            score_tensor = torch.from_numpy(candidate_scores[batch, :batch_width]) if candidate_scores is not None else None
             target_tensor = torch.from_numpy(target_indices[batch])
+            action_features = (
+                _candidate_feature_tensor(observations[batch], batch_actions, feature_mode, legal_mask[batch, :batch_width])
+                if head == "candidate"
+                else None
+            )
             logits = _candidate_logits(head, model, obs_tensor, action_tensor, mask_tensor, action_features, action_parts)
             loss, ce_loss, soft_loss = _distill_loss(
                 logits,
@@ -189,10 +218,17 @@ def train_distilled(
             for start in range(0, len(val_indices), batch_size):
                 batch = val_indices[start:start + batch_size]
                 obs_tensor = torch.from_numpy(observations[batch])
-                action_tensor = torch.from_numpy(legal_actions[batch])
-                mask_tensor = torch.from_numpy(legal_mask[batch])
-                score_tensor = torch.from_numpy(candidate_scores[batch]) if candidate_scores is not None else None
+                batch_width = int(np.max(np.sum(legal_mask[batch], axis=1)))
+                batch_actions = legal_actions[batch, :batch_width]
+                action_tensor = torch.from_numpy(batch_actions)
+                mask_tensor = torch.from_numpy(legal_mask[batch, :batch_width])
+                score_tensor = torch.from_numpy(candidate_scores[batch, :batch_width]) if candidate_scores is not None else None
                 target_tensor = torch.from_numpy(target_indices[batch])
+                action_features = (
+                    _candidate_feature_tensor(observations[batch], batch_actions, feature_mode, legal_mask[batch, :batch_width])
+                    if head == "candidate"
+                    else None
+                )
                 logits = _candidate_logits(head, model, obs_tensor, action_tensor, mask_tensor, action_features, action_parts)
                 accuracies.append(_accuracy(logits, target_tensor))
                 if score_tensor is not None:
@@ -206,6 +242,8 @@ def train_distilled(
         "backend": f"torch-{head}-teacher-distill-v0",
         "head": head,
         "model_type": model_type if head == "candidate" else None,
+        "feature_mode": feature_mode if head == "candidate" else None,
+        "action_feature_size": candidate_feature_size(feature_mode) if head == "candidate" else None,
         "observation_version": OBSERVATION_VERSION,
         "seed": seed,
         "epochs": epochs,
@@ -246,6 +284,8 @@ def train_distilled(
             {
                 "format": "kingdomino-candidate-policy-v0",
                 "model_type": model_type,
+                "feature_mode": feature_mode,
+                "action_feature_size": candidate_feature_size(feature_mode),
                 "state_dict": model.state_dict(),
                 "metadata": metadata,
             },
@@ -268,6 +308,7 @@ def main():
     parser.add_argument("--teacher-temperature", type=float, default=8.0)
     parser.add_argument("--soft-weight", type=float, default=0.5)
     parser.add_argument("--model-type", choices=["dot", "interaction"], default="dot", help="Candidate head architecture; ignored for non-candidate heads")
+    parser.add_argument("--feature-mode", choices=FEATURE_MODES, default="static", help="Candidate feature mode; rich adds state-conditioned placement features")
     args = parser.parse_args()
     print(json.dumps(train_distilled(
         dataset=Path(args.dataset),
@@ -282,6 +323,7 @@ def main():
         teacher_temperature=args.teacher_temperature,
         soft_weight=args.soft_weight,
         model_type=args.model_type,
+        feature_mode=args.feature_mode,
     ), indent=2))
 
 

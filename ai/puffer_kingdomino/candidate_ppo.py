@@ -20,18 +20,37 @@ import torch
 from torch import nn
 
 from .agents import load_agent, make_env, step_legal
-from .candidate_policy import CandidateScoringPolicy, InteractionCandidatePolicy, action_feature_table
+from .candidate_policy import (
+    FEATURE_MODES,
+    STATIC_FEATURE_MODE,
+    CandidateScoringPolicy,
+    InteractionCandidatePolicy,
+    action_feature_table,
+    candidate_feature_size,
+    candidate_features_from_observations,
+)
 from .candidate_train import DEFAULT_MAX_CANDIDATES, _write_legal_actions
 from .fair_eval import fair_evaluate
 from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE, OBSERVATION_VERSION
 
 
 class CandidateActorCritic(nn.Module):
-    def __init__(self, hidden_size: int = DEFAULT_HIDDEN_SIZE, model_type: str = "dot"):
+    def __init__(
+        self,
+        hidden_size: int = DEFAULT_HIDDEN_SIZE,
+        model_type: str = "dot",
+        feature_mode: str = STATIC_FEATURE_MODE,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.model_type = model_type
-        self.actor = InteractionCandidatePolicy(hidden_size=hidden_size) if model_type == "interaction" else CandidateScoringPolicy(hidden_size=hidden_size)
+        self.feature_mode = feature_mode
+        self.action_feature_size = candidate_feature_size(feature_mode)
+        self.actor = (
+            InteractionCandidatePolicy(hidden_size=hidden_size, action_feature_size=self.action_feature_size)
+            if model_type == "interaction"
+            else CandidateScoringPolicy(hidden_size=hidden_size, action_feature_size=self.action_feature_size)
+        )
         self.value_input = nn.Linear(OBSERVATION_SIZE, hidden_size)
         self.value_output = nn.Linear(hidden_size, 1)
 
@@ -48,6 +67,20 @@ def _write_observation(env, out: np.ndarray) -> None:
         env.write_observation_vector(out, OBS_SCALE)
     else:
         out[:] = np.asarray(env.observe()["observation"], dtype=np.float32) / OBS_SCALE
+
+
+def _candidate_feature_tensor(
+    observations: np.ndarray,
+    actions: np.ndarray,
+    feature_mode: str,
+    legal_mask: np.ndarray | None = None,
+) -> torch.Tensor:
+    return torch.from_numpy(candidate_features_from_observations(
+        observations,
+        actions,
+        feature_mode=feature_mode,
+        legal_mask=legal_mask,
+    ))
 
 
 def _score_margin(env, learner_player: int) -> float:
@@ -108,6 +141,9 @@ def _load_actor_init(model: CandidateActorCritic, path: Path | None) -> str | No
         payload_model_type = str(payload.get("model_type") or payload.get("metadata", {}).get("model_type", "dot"))
         if payload_model_type != model.model_type:
             return f"ignored init policy {path}: model type {payload_model_type} != {model.model_type}"
+        payload_feature_mode = str(payload.get("feature_mode") or payload.get("metadata", {}).get("feature_mode", STATIC_FEATURE_MODE))
+        if payload_feature_mode != model.feature_mode:
+            return f"ignored init policy {path}: feature mode {payload_feature_mode} != {model.feature_mode}"
         model.actor.load_state_dict(payload["state_dict"])
     except Exception as exc:  # noqa: BLE001 - smoke/training CLI should report and continue.
         return f"ignored init policy {path}: {exc}"
@@ -120,6 +156,8 @@ def _save_candidate_checkpoint(model: CandidateActorCritic, output: Path, metada
         {
             "format": "kingdomino-candidate-policy-v0",
             "model_type": model.model_type,
+            "feature_mode": model.feature_mode,
+            "action_feature_size": model.action_feature_size,
             "state_dict": model.actor.state_dict(),
             "metadata": metadata,
         },
@@ -204,6 +242,7 @@ def run_candidate_ppo(
     opponent_policy: Path | None = Path("ai/artifacts/heuristic_policy.json"),
     hidden_size: int = DEFAULT_HIDDEN_SIZE,
     model_type: str = "dot",
+    feature_mode: str = STATIC_FEATURE_MODE,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     rollout_size: int = 1024,
     batch_size: int = 256,
@@ -226,7 +265,7 @@ def run_candidate_ppo(
     started = time.perf_counter()
     torch.manual_seed(seed)
     resolved_model_type = _infer_model_type(init_policy, model_type)
-    model = CandidateActorCritic(hidden_size=hidden_size, model_type=resolved_model_type)
+    model = CandidateActorCritic(hidden_size=hidden_size, model_type=resolved_model_type, feature_mode=feature_mode)
     init_status = _load_actor_init(model, init_policy)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     curriculum = list(opponent_curriculum) if opponent_curriculum else [opponent_kind]
@@ -234,7 +273,7 @@ def run_candidate_ppo(
         load_agent(kind, policy=opponent_policy if kind in ("heuristic", "search") else None, seed=seed + 10_003 + index)
         for index, kind in enumerate(curriculum)
     ]
-    action_features = torch.from_numpy(action_feature_table())
+    action_features = torch.from_numpy(action_feature_table()) if feature_mode == STATIC_FEATURE_MODE else None
     env = make_env(seed, native=native)
 
     obs_buffer = np.empty((OBSERVATION_SIZE,), dtype=np.float32)
@@ -272,8 +311,14 @@ def run_candidate_ppo(
         margin_before = _score_margin(env, learner_player)
 
         obs_tensor = torch.from_numpy(obs_buffer.copy()).unsqueeze(0)
-        action_ids = torch.from_numpy(legal_buffer[:legal_count].astype(np.int64, copy=False)).unsqueeze(0)
-        logits, value = model(obs_tensor, action_features[action_ids])
+        action_ids_np = legal_buffer[:legal_count].astype(np.int64, copy=False)
+        action_ids = torch.from_numpy(action_ids_np).unsqueeze(0)
+        candidate_features = (
+            action_features[action_ids]
+            if action_features is not None
+            else _candidate_feature_tensor(obs_buffer, action_ids_np, feature_mode).unsqueeze(0)
+        )
+        logits, value = model(obs_tensor, candidate_features)
         distribution = torch.distributions.Categorical(logits=logits)
         action_index_tensor = distribution.sample()
         action_index = int(action_index_tensor.item())
@@ -335,8 +380,21 @@ def run_candidate_ppo(
                 np.random.default_rng(seed + updates + epoch).shuffle(shuffled)
                 for start in range(0, len(shuffled), batch_size):
                     batch = shuffled[start:start + batch_size]
-                    batch_logits, batch_values = model(observations[batch], action_features[legal_actions[batch]])
-                    batch_logits = batch_logits.masked_fill(~legal_mask[batch], -1e9)
+                    batch_width = int(torch.sum(legal_mask[batch], dim=1).max().item())
+                    batch_actions = legal_actions[batch, :batch_width]
+                    batch_mask = legal_mask[batch, :batch_width]
+                    batch_features = (
+                        action_features[batch_actions]
+                        if action_features is not None
+                        else _candidate_feature_tensor(
+                            observations[batch].numpy(),
+                            batch_actions.numpy(),
+                            feature_mode,
+                            batch_mask.numpy(),
+                        )
+                    )
+                    batch_logits, batch_values = model(observations[batch], batch_features)
+                    batch_logits = batch_logits.masked_fill(~batch_mask, -1e9)
                     distribution = torch.distributions.Categorical(logits=batch_logits)
                     logprobs = distribution.log_prob(action_indices[batch])
                     entropy = distribution.entropy().mean()
@@ -405,6 +463,8 @@ def run_candidate_ppo(
         "init_status": init_status,
         "hidden_size": hidden_size,
         "model_type": resolved_model_type,
+        "feature_mode": feature_mode,
+        "action_feature_size": model.action_feature_size,
         "observation_version": OBSERVATION_VERSION,
         "max_candidates": max_candidates,
         "rollout_size": rollout_size,
@@ -450,6 +510,7 @@ def main() -> None:
     parser.add_argument("--opponent-policy", default="ai/artifacts/heuristic_policy.json")
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--model-type", choices=["dot", "interaction", "auto"], default="dot")
+    parser.add_argument("--feature-mode", choices=FEATURE_MODES, default=STATIC_FEATURE_MODE)
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--rollout-size", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -479,6 +540,7 @@ def main() -> None:
         opponent_policy=Path(args.opponent_policy) if args.opponent_policy else None,
         hidden_size=args.hidden_size,
         model_type=args.model_type,
+        feature_mode=args.feature_mode,
         max_candidates=args.max_candidates,
         rollout_size=args.rollout_size,
         batch_size=args.batch_size,
