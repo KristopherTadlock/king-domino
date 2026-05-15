@@ -8,6 +8,11 @@ import numpy as np
 import torch
 from torch import nn
 
+try:
+    from . import native as _native
+except ImportError:  # pragma: no cover - Cython extension is optional in source checkouts
+    _native = None
+
 from .core import (
     ACTION_COUNT,
     ANCHOR_LEFT,
@@ -99,6 +104,7 @@ def candidate_features_from_observations(
     *,
     feature_mode: str = STATIC_FEATURE_MODE,
     legal_mask: np.ndarray | None = None,
+    use_native: bool = True,
 ) -> np.ndarray:
     """Build candidate features from scaled observations and action ids.
 
@@ -133,6 +139,23 @@ def candidate_features_from_observations(
             raise ValueError("legal_mask must have the same shape as actions")
 
     features = np.zeros(action_array.shape + (RICH_ACTION_FEATURE_SIZE,), dtype=np.float32)
+    if use_native and _native is not None and hasattr(_native, "write_rich_candidate_features_from_observations"):
+        mask_for_native = (
+            np.ones(action_array.shape, dtype=np.uint8)
+            if mask_array is None
+            else np.ascontiguousarray(mask_array, dtype=np.uint8)
+        )
+        _native.write_rich_candidate_features_from_observations(
+            np.ascontiguousarray(obs_array, dtype=np.float32),
+            np.ascontiguousarray(action_array, dtype=np.int64),
+            features,
+            mask_for_native,
+            OBS_SCALE,
+        )
+        if squeeze_obs and squeeze_actions:
+            return features[0]
+        return features
+
     static = action_feature_table()
     features[..., :ACTION_FEATURE_SIZE] = static[np.clip(action_array, 0, ACTION_COUNT - 1)]
     raw_observations = np.rint(obs_array * OBS_SCALE).astype(np.int16, copy=False)

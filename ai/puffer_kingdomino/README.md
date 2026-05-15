@@ -25,6 +25,8 @@ Current state:
   smoke loop.
 - Observation contract v2, where empty cells are `0`, castles are visible as
   `1`, and terrain ids are shifted by one in board features.
+- Native rich-candidate feature generation for the placement-aware candidate
+  policy path.
 
 The Torch trainer uses imitation learning from native experts. This is not full
 PPO yet, but it is a real Torch train/eval/export path and uses the same
@@ -82,6 +84,15 @@ observation creation dropped from roughly half the loop to a low single-digit
 percentage; the remaining bottleneck is the Torch update over the flat
 `5413`-action head. Puffer observations also write directly into their backing
 buffer now, including the action mask.
+
+The rich candidate feature path now has a Cython writer with the Python
+implementation preserved as an executable parity oracle. A local 256-by-128
+candidate batch dropped from about `0.24s` in Python to about `0.0013s` through
+the native writer. A 50k anchored rich-candidate PPO probe from the distilled
+interaction checkpoint completed legally at about `2.4k` learner decisions/sec;
+the remaining bottleneck is now the Torch sampling/update loop rather than
+feature construction. That probe evaluated at `72.25%` vs old greedy and
+`59.5%` vs the weighted heuristic over 400 seat-swapped games.
 
 There are also two prototype compact-head trainers:
 

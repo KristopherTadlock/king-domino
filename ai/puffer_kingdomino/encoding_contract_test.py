@@ -228,8 +228,15 @@ def _assert_rich_candidate_feature_contract() -> None:
         draft_actions,
         feature_mode="rich",
     )
+    draft_reference = candidate_features_from_observations(
+        observation_vector(env),
+        draft_actions,
+        feature_mode="rich",
+        use_native=False,
+    )
     _assert_equal("rich draft feature shape", draft_features.shape, (len(draft_actions), RICH_ACTION_FEATURE_SIZE))
     _assert(np.isfinite(draft_features).all(), "rich draft features contain non-finite values")
+    _assert_close("native rich draft feature parity", draft_features, draft_reference)
     _assert(np.any(draft_features[:, 54] > 0), "rich draft mobility count should be exposed")
 
     while env.phase != PHASE_PLACE:
@@ -240,12 +247,19 @@ def _assert_rich_candidate_feature_contract() -> None:
         placement_actions,
         feature_mode="rich",
     )
+    placement_reference = candidate_features_from_observations(
+        observation_vector(env),
+        placement_actions,
+        feature_mode="rich",
+        use_native=False,
+    )
     _assert_equal(
         "rich placement feature shape",
         placement_features.shape,
         (len(placement_actions), RICH_ACTION_FEATURE_SIZE),
     )
     _assert(np.isfinite(placement_features).all(), "rich placement features contain non-finite values")
+    _assert_close("native rich placement feature parity", placement_features, placement_reference)
     _assert(np.all(placement_features[:, 41] == 1.0), "rich placement phase bit should be set")
     _assert(np.any(placement_features[:, 80] > 0), "rich placement castle contact should be exposed")
 

@@ -3,6 +3,8 @@
 # cython: wraparound=False
 # cython: initializedcheck=False
 
+import numpy as np
+
 cdef int TERRAIN_CASTLE = 0
 
 
@@ -85,6 +87,11 @@ cdef int COORD_SPAN = 13
 DEF BOARD_CELLS_CONST = 169
 DEF ACTION_COUNT_CONST = 5413
 DEF PLACEMENT_SEEN_CONST = BOARD_CELLS_CONST * BOARD_CELLS_CONST * 2
+DEF FEATURE_BOARD_OFFSET_CONST = 19
+DEF FEATURE_BOARD_VALUES_CONST = BOARD_CELLS_CONST * 2
+DEF FEATURE_ACTION_SIZE_CONST = 40
+DEF FEATURE_RICH_SIZE_CONST = 96
+DEF FEATURE_MAX_SEEN_CONST = 512
 cdef int BOARD_CELLS = BOARD_CELLS_CONST
 cdef int N_DRAFT_ACTIONS = 4
 cdef int N_PLACEMENT_ACTIONS = 4 * 4 * COORD_SPAN * COORD_SPAN * 2
@@ -172,6 +179,1092 @@ cdef inline int _encode_placement_action(int draft_index, int orientation, int x
 
 def native_action_count():
     return N_ACTION_COUNT
+
+
+cdef struct FeatureMetrics:
+    double width_after
+    double height_after
+    double width_growth
+    double height_growth
+    double distance
+    double score_delta
+    double same_touch_count
+    double castle_touch_count
+    double occupied_touch_count
+    double empty_touch_count
+    double region_size_sum
+    double region_crowns_sum
+    double left_region_size
+    double right_region_size
+    double left_region_crowns
+    double right_region_crowns
+    double left_same_touches
+    double right_same_touches
+    double left_castle_touches
+    double right_castle_touches
+    double left_neighbor_crowns
+    double right_neighbor_crowns
+    double count
+    double best_score_delta
+    double best_touch_count
+
+
+cdef struct NeighborStats:
+    double same
+    double castle
+    double occupied
+    double empty
+    double neighbor_crowns
+    double region_size
+    double region_crowns
+
+
+def write_rich_candidate_features_from_observations(
+    object observations,
+    object actions,
+    object out,
+    object legal_mask,
+    float scale=50.0,
+):
+    """Fill rich candidate features for a batch of observations/actions.
+
+    This mirrors candidate_policy.py's Python reference path but keeps the
+    board scans, draft mobility pass, and placement metrics in Cython so PPO
+    can spend time learning instead of rebuilding Python dicts and sets.
+    """
+
+    cdef float[:, ::1] obs_view = observations
+    cdef long long[:, ::1] action_view = actions
+    cdef float[:, :, ::1] out_view = out
+    cdef unsigned char[:, ::1] mask_view = legal_mask
+
+    if obs_view.shape[0] != action_view.shape[0]:
+        raise ValueError("observations and actions must have the same batch dimension")
+    if out_view.shape[0] != action_view.shape[0] or out_view.shape[1] != action_view.shape[1]:
+        raise ValueError("output must match action batch dimensions")
+    if out_view.shape[2] < FEATURE_RICH_SIZE_CONST:
+        raise ValueError("output feature width is too small")
+    if mask_view.shape[0] != action_view.shape[0] or mask_view.shape[1] != action_view.shape[1]:
+        raise ValueError("legal_mask must match action batch dimensions")
+
+    cdef Py_ssize_t row
+    for row in range(action_view.shape[0]):
+        _write_rich_candidate_feature_row(obs_view, action_view, out_view, mask_view, row, scale)
+    return out
+
+
+cdef inline int _feature_abs(int value):
+    return -value if value < 0 else value
+
+
+cdef inline int _feature_scaled_int(float value, float scale):
+    cdef float scaled = value * scale
+    if scaled >= 0:
+        return <int>(scaled + 0.5)
+    return <int>(scaled - 0.5)
+
+
+cdef inline int _feature_terrain_plus(int terrain):
+    return terrain + 1
+
+
+cdef inline bint _feature_coord_in_bounds(int x, int y):
+    return x >= COORD_MIN and x <= COORD_MAX and y >= COORD_MIN and y <= COORD_MAX
+
+
+cdef inline bint _feature_decode_placement_action(
+    int action,
+    int* draft_index,
+    int* orientation,
+    int* x,
+    int* y,
+    int* anchor_end,
+):
+    cdef int value
+    cdef int coord_x
+    cdef int coord_y
+    cdef int orientation_steps
+    if action < N_DRAFT_ACTIONS or action == N_SKIP_ACTION or action < 0 or action >= N_ACTION_COUNT:
+        return False
+    value = action - N_DRAFT_ACTIONS
+    anchor_end[0] = value % 2
+    value //= 2
+    coord_y = value % COORD_SPAN
+    value //= COORD_SPAN
+    coord_x = value % COORD_SPAN
+    value //= COORD_SPAN
+    orientation_steps = value % 4
+    draft_index[0] = value // 4
+    orientation[0] = orientation_steps * 90
+    x[0] = coord_x + COORD_MIN
+    y[0] = coord_y + COORD_MIN
+    return draft_index[0] >= 0 and draft_index[0] < N_DRAFT_ACTIONS
+
+
+cdef inline void _feature_cells_for(
+    int orientation,
+    int x,
+    int y,
+    int anchor_end,
+    int* lx,
+    int* ly,
+    int* rx,
+    int* ry,
+):
+    cdef int dx = 0
+    cdef int dy = 0
+    if orientation == 0:
+        dx = 1
+    elif orientation == 90:
+        dy = -1
+    elif orientation == 180:
+        dx = -1
+    else:
+        dy = 1
+    if anchor_end == ANCHOR_LEFT:
+        lx[0] = x
+        ly[0] = y
+        rx[0] = x + dx
+        ry[0] = y + dy
+    else:
+        rx[0] = x
+        ry[0] = y
+        lx[0] = x - dx
+        ly[0] = y - dy
+
+
+cdef void _write_rich_candidate_feature_row(
+    float[:, ::1] observations,
+    long long[:, ::1] actions,
+    float[:, :, ::1] out,
+    unsigned char[:, ::1] legal_mask,
+    Py_ssize_t row,
+    float scale,
+):
+    cdef int terrain[BOARD_CELLS_CONST]
+    cdef int crowns[BOARD_CELLS_CONST]
+    cdef int draft_num[4]
+    cdef int left_terrain_plus[4]
+    cdef int right_terrain_plus[4]
+    cdef int left_crowns[4]
+    cdef int right_crowns[4]
+    cdef int phase = _feature_scaled_int(observations[row, 0], scale)
+    cdef int current_player = _feature_scaled_int(observations[row, 1], scale)
+    cdef int player = current_player if current_player == 0 or current_player == 1 else 0
+    cdef double self_score = <double>_feature_scaled_int(observations[row, 5 + player], scale)
+    cdef double opp_score = <double>_feature_scaled_int(observations[row, 5 + (1 - player)], scale)
+    cdef int round_value = _feature_scaled_int(observations[row, 4], scale)
+    cdef int min_x
+    cdef int max_x
+    cdef int min_y
+    cdef int max_y
+    cdef int i
+    cdef int action
+    cdef int draft_index
+    cdef int orientation
+    cdef int x
+    cdef int y
+    cdef int anchor_end
+    cdef int lx
+    cdef int ly
+    cdef int rx
+    cdef int ry
+    cdef Py_ssize_t col
+    cdef FeatureMetrics metrics
+
+    _feature_parse_board(observations, row, player, scale, terrain, crowns)
+    _feature_existing_bounds(terrain, &min_x, &max_x, &min_y, &max_y)
+    for i in range(4):
+        draft_num[i] = _feature_scaled_int(observations[row, 7 + i * 3], scale)
+        if draft_num[i] >= 1 and draft_num[i] <= 48:
+            left_terrain_plus[i] = _feature_terrain_plus(<int>DECK_LEFT_TERRAIN[draft_num[i]])
+            right_terrain_plus[i] = _feature_terrain_plus(<int>DECK_RIGHT_TERRAIN[draft_num[i]])
+            left_crowns[i] = <int>DECK_LEFT_CROWNS[draft_num[i]]
+            right_crowns[i] = <int>DECK_RIGHT_CROWNS[draft_num[i]]
+        else:
+            left_terrain_plus[i] = 0
+            right_terrain_plus[i] = 0
+            left_crowns[i] = 0
+            right_crowns[i] = 0
+
+    for col in range(actions.shape[1]):
+        if not legal_mask[row, col]:
+            continue
+        action = <int>actions[row, col]
+        if action < 0 or action >= N_ACTION_COUNT:
+            continue
+
+        _feature_write_static_action(out, row, col, action)
+        out[row, col, 40] = 1.0 if phase == PHASE_DRAFT else 0.0
+        out[row, col, 41] = 1.0 if phase == PHASE_PLACE else 0.0
+        out[row, col, 42 + player] = 1.0
+        out[row, col, 44] = round_value / 12.0
+        out[row, col, 45] = self_score / 100.0
+        out[row, col, 46] = opp_score / 100.0
+        out[row, col, 47] = (self_score - opp_score) / 100.0
+
+        if action == N_SKIP_ACTION:
+            out[row, col, 95] = 1.0
+            continue
+
+        if action < N_DRAFT_ACTIONS:
+            draft_index = action
+        else:
+            if not _feature_decode_placement_action(action, &draft_index, &orientation, &x, &y, &anchor_end):
+                continue
+        if draft_index < 0 or draft_index >= N_DRAFT_ACTIONS or draft_num[draft_index] <= 0:
+            continue
+
+        _feature_write_domino_features(
+            out,
+            row,
+            col,
+            draft_num[draft_index],
+            left_terrain_plus[draft_index],
+            left_crowns[draft_index],
+            right_terrain_plus[draft_index],
+            right_crowns[draft_index],
+            draft_index,
+        )
+
+        if action < N_DRAFT_ACTIONS:
+            _feature_best_mobility_metrics(
+                terrain,
+                crowns,
+                draft_num[draft_index],
+                left_terrain_plus[draft_index],
+                left_crowns[draft_index],
+                right_terrain_plus[draft_index],
+                right_crowns[draft_index],
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                &metrics,
+            )
+            _feature_write_metric_features(out, row, col, &metrics)
+            out[row, col, 54] = 1.0 if metrics.count > 64.0 else metrics.count / 64.0
+            out[row, col, 55] = metrics.best_score_delta / 50.0
+            out[row, col, 56] = 1.0 if metrics.best_touch_count > 8.0 else metrics.best_touch_count / 8.0
+            continue
+
+        _feature_cells_for(orientation, x, y, anchor_end, &lx, &ly, &rx, &ry)
+        _feature_placement_metrics_for_cells(
+            terrain,
+            crowns,
+            left_terrain_plus[draft_index],
+            left_crowns[draft_index],
+            right_terrain_plus[draft_index],
+            right_crowns[draft_index],
+            lx,
+            ly,
+            rx,
+            ry,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            &metrics,
+        )
+        _feature_write_metric_features(out, row, col, &metrics)
+        out[row, col, 69 + anchor_end] = 1.0
+        out[row, col, 71] = x / <double>6.0
+        out[row, col, 72] = y / <double>6.0
+
+
+cdef void _feature_parse_board(
+    float[:, ::1] observations,
+    Py_ssize_t row,
+    int player,
+    float scale,
+    int* terrain,
+    int* crowns,
+):
+    cdef int start = FEATURE_BOARD_OFFSET_CONST + player * FEATURE_BOARD_VALUES_CONST
+    cdef int idx
+    cdef int offset
+    for idx in range(BOARD_CELLS_CONST):
+        offset = start + idx * 2
+        terrain[idx] = _feature_scaled_int(observations[row, offset], scale)
+        crowns[idx] = _feature_scaled_int(observations[row, offset + 1], scale)
+
+
+cdef void _feature_existing_bounds(int* terrain, int* min_x, int* max_x, int* min_y, int* max_y):
+    cdef int idx
+    cdef int x
+    cdef int y
+    cdef bint found = False
+    min_x[0] = 0
+    max_x[0] = 0
+    min_y[0] = 0
+    max_y[0] = 0
+    for idx in range(BOARD_CELLS_CONST):
+        if terrain[idx] <= 0:
+            continue
+        x = _idx_to_x(idx)
+        y = _idx_to_y(idx)
+        if not found:
+            min_x[0] = x
+            max_x[0] = x
+            min_y[0] = y
+            max_y[0] = y
+            found = True
+            continue
+        if x < min_x[0]:
+            min_x[0] = x
+        if x > max_x[0]:
+            max_x[0] = x
+        if y < min_y[0]:
+            min_y[0] = y
+        if y > max_y[0]:
+            max_y[0] = y
+
+
+cdef inline void _feature_clear_metrics(FeatureMetrics* metrics):
+    metrics.width_after = 0.0
+    metrics.height_after = 0.0
+    metrics.width_growth = 0.0
+    metrics.height_growth = 0.0
+    metrics.distance = 0.0
+    metrics.score_delta = 0.0
+    metrics.same_touch_count = 0.0
+    metrics.castle_touch_count = 0.0
+    metrics.occupied_touch_count = 0.0
+    metrics.empty_touch_count = 0.0
+    metrics.region_size_sum = 0.0
+    metrics.region_crowns_sum = 0.0
+    metrics.left_region_size = 0.0
+    metrics.right_region_size = 0.0
+    metrics.left_region_crowns = 0.0
+    metrics.right_region_crowns = 0.0
+    metrics.left_same_touches = 0.0
+    metrics.right_same_touches = 0.0
+    metrics.left_castle_touches = 0.0
+    metrics.right_castle_touches = 0.0
+    metrics.left_neighbor_crowns = 0.0
+    metrics.right_neighbor_crowns = 0.0
+    metrics.count = 0.0
+    metrics.best_score_delta = 0.0
+    metrics.best_touch_count = 0.0
+
+
+cdef inline void _feature_write_static_action(float[:, :, ::1] out, Py_ssize_t row, Py_ssize_t col, int action):
+    cdef int value
+    cdef int coord_x
+    cdef int coord_y
+    cdef int orientation_steps
+    cdef int draft_index
+    cdef int anchor_end
+    cdef int x
+    cdef int y
+    if action < N_DRAFT_ACTIONS:
+        out[row, col, 0] = 1.0
+        out[row, col, 3 + action] = 1.0
+        return
+    if action == N_SKIP_ACTION:
+        out[row, col, 2] = 1.0
+        return
+    value = action - N_DRAFT_ACTIONS
+    anchor_end = value % 2
+    value //= 2
+    coord_y = value % COORD_SPAN
+    value //= COORD_SPAN
+    coord_x = value % COORD_SPAN
+    value //= COORD_SPAN
+    orientation_steps = value % 4
+    draft_index = value // 4
+    x = coord_x + COORD_MIN
+    y = coord_y + COORD_MIN
+    out[row, col, 1] = 1.0
+    out[row, col, 3 + draft_index] = 1.0
+    out[row, col, 7 + orientation_steps] = 1.0
+    out[row, col, 11 + coord_x] = 1.0
+    out[row, col, 24 + coord_y] = 1.0
+    out[row, col, 37 + anchor_end] = 1.0
+    out[row, col, 39] = (_feature_abs(x) + _feature_abs(y)) / 12.0
+
+
+cdef inline void _feature_write_domino_features(
+    float[:, :, ::1] out,
+    Py_ssize_t row,
+    Py_ssize_t col,
+    int number,
+    int left_terrain_plus,
+    int left_crowns,
+    int right_terrain_plus,
+    int right_crowns,
+    int draft_index,
+):
+    cdef int left_terrain = left_terrain_plus - 1
+    cdef int right_terrain = right_terrain_plus - 1
+    out[row, col, 48] = number / 48.0
+    out[row, col, 49] = (left_crowns + right_crowns) / 6.0
+    out[row, col, 50] = left_crowns / 3.0
+    out[row, col, 51] = right_crowns / 3.0
+    out[row, col, 52] = 1.0 if left_terrain == right_terrain else 0.0
+    out[row, col, 53] = draft_index / 3.0
+    if left_terrain >= TERRAIN_WHEAT and left_terrain <= TERRAIN_MINE:
+        out[row, col, 57 + (left_terrain - TERRAIN_WHEAT)] = 1.0
+    if right_terrain >= TERRAIN_WHEAT and right_terrain <= TERRAIN_MINE:
+        out[row, col, 63 + (right_terrain - TERRAIN_WHEAT)] = 1.0
+
+
+cdef inline void _feature_write_metric_features(
+    float[:, :, ::1] out,
+    Py_ssize_t row,
+    Py_ssize_t col,
+    FeatureMetrics* metrics,
+):
+    out[row, col, 73] = metrics.width_after / BOARD_LIMIT
+    out[row, col, 74] = metrics.height_after / BOARD_LIMIT
+    out[row, col, 75] = metrics.width_growth / BOARD_LIMIT
+    out[row, col, 76] = metrics.height_growth / BOARD_LIMIT
+    out[row, col, 77] = metrics.distance / 12.0
+    out[row, col, 78] = metrics.score_delta / 50.0
+    out[row, col, 79] = metrics.same_touch_count / 8.0
+    out[row, col, 80] = metrics.castle_touch_count / 8.0
+    out[row, col, 81] = metrics.occupied_touch_count / 8.0
+    out[row, col, 82] = metrics.empty_touch_count / 8.0
+    out[row, col, 83] = metrics.region_size_sum / 20.0
+    out[row, col, 84] = metrics.region_crowns_sum / 8.0
+    out[row, col, 85] = metrics.left_region_size / 20.0
+    out[row, col, 86] = metrics.right_region_size / 20.0
+    out[row, col, 87] = metrics.left_region_crowns / 8.0
+    out[row, col, 88] = metrics.right_region_crowns / 8.0
+    out[row, col, 89] = metrics.left_same_touches / 4.0
+    out[row, col, 90] = metrics.right_same_touches / 4.0
+    out[row, col, 91] = metrics.left_castle_touches / 4.0
+    out[row, col, 92] = metrics.right_castle_touches / 4.0
+    out[row, col, 93] = metrics.left_neighbor_crowns / 6.0
+    out[row, col, 94] = metrics.right_neighbor_crowns / 6.0
+
+
+cdef void _feature_best_mobility_metrics(
+    int* terrain,
+    int* crowns,
+    int number,
+    int left_terrain_plus,
+    int left_crowns,
+    int right_terrain_plus,
+    int right_crowns,
+    int min_x,
+    int max_x,
+    int min_y,
+    int max_y,
+    FeatureMetrics* metrics,
+):
+    cdef int candidates_x[BOARD_CELLS_CONST]
+    cdef int candidates_y[BOARD_CELLS_CONST]
+    cdef int candidate_count
+    cdef int seen_low[FEATURE_MAX_SEEN_CONST]
+    cdef int seen_high[FEATURE_MAX_SEEN_CONST]
+    cdef int seen_assignment[FEATURE_MAX_SEEN_CONST]
+    cdef int seen_count = 0
+    cdef int orientation
+    cdef int candidate_index
+    cdef int anchor_end
+    cdef int x
+    cdef int y
+    cdef int lx
+    cdef int ly
+    cdef int rx
+    cdef int ry
+    cdef int lidx
+    cdef int ridx
+    cdef int low_idx
+    cdef int high_idx
+    cdef int assignment
+    cdef int i
+    cdef bint duplicate
+    cdef int score_delta
+    cdef double touch_count
+    cdef int best_lx = 0
+    cdef int best_ly = 0
+    cdef int best_rx = 0
+    cdef int best_ry = 0
+    cdef double best_score_delta = -1000000000.0
+    cdef double best_touch_count = -1.0
+    cdef double move_count
+    cdef bint has_best = False
+
+    _feature_clear_metrics(metrics)
+    candidate_count = _feature_candidate_anchors(terrain, candidates_x, candidates_y)
+    for orientation in (0, 90, 180, 270):
+        for candidate_index in range(candidate_count):
+            x = candidates_x[candidate_index]
+            y = candidates_y[candidate_index]
+            for anchor_end in (ANCHOR_LEFT, ANCHOR_RIGHT):
+                _feature_cells_for(orientation, x, y, anchor_end, &lx, &ly, &rx, &ry)
+                if not _feature_is_valid_placement(
+                    terrain,
+                    left_terrain_plus,
+                    right_terrain_plus,
+                    lx,
+                    ly,
+                    rx,
+                    ry,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                ):
+                    continue
+                lidx = _coord_to_idx(lx, ly)
+                ridx = _coord_to_idx(rx, ry)
+                if lidx <= ridx:
+                    low_idx = lidx
+                    high_idx = ridx
+                    assignment = 0
+                else:
+                    low_idx = ridx
+                    high_idx = lidx
+                    assignment = 1
+                if left_terrain_plus == right_terrain_plus and left_crowns == right_crowns:
+                    assignment = 0
+                duplicate = False
+                for i in range(seen_count):
+                    if seen_low[i] == low_idx and seen_high[i] == high_idx and seen_assignment[i] == assignment:
+                        duplicate = True
+                        break
+                if duplicate:
+                    continue
+                if seen_count < FEATURE_MAX_SEEN_CONST:
+                    seen_low[seen_count] = low_idx
+                    seen_high[seen_count] = high_idx
+                    seen_assignment[seen_count] = assignment
+                    seen_count += 1
+                metrics.count += 1.0
+                score_delta = _feature_score_delta_local(
+                    terrain,
+                    crowns,
+                    left_terrain_plus,
+                    left_crowns,
+                    right_terrain_plus,
+                    right_crowns,
+                    lx,
+                    ly,
+                    rx,
+                    ry,
+                )
+                touch_count = _feature_same_touch_count(terrain, left_terrain_plus, right_terrain_plus, lx, ly, rx, ry)
+                if score_delta > best_score_delta or (score_delta == best_score_delta and touch_count > best_touch_count):
+                    best_score_delta = score_delta
+                    best_touch_count = touch_count
+                    best_lx = lx
+                    best_ly = ly
+                    best_rx = rx
+                    best_ry = ry
+                    has_best = True
+
+    if has_best:
+        move_count = metrics.count
+        _feature_placement_metrics_for_cells(
+            terrain,
+            crowns,
+            left_terrain_plus,
+            left_crowns,
+            right_terrain_plus,
+            right_crowns,
+            best_lx,
+            best_ly,
+            best_rx,
+            best_ry,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            metrics,
+        )
+        metrics.count = move_count
+        metrics.best_score_delta = best_score_delta if best_score_delta > 0.0 else 0.0
+        metrics.best_touch_count = best_touch_count if best_touch_count > 0.0 else 0.0
+
+
+cdef int _feature_candidate_anchors(int* terrain, int* candidates_x, int* candidates_y):
+    cdef int seen[BOARD_CELLS_CONST]
+    cdef int idx
+    cdef int count = 0
+    cdef int x
+    cdef int y
+    cdef int nidx
+    for idx in range(BOARD_CELLS_CONST):
+        seen[idx] = 0
+    for idx in range(BOARD_CELLS_CONST):
+        if terrain[idx] <= 0:
+            continue
+        x = _idx_to_x(idx)
+        y = _idx_to_y(idx)
+        nidx = _coord_to_idx(x + 1, y)
+        if nidx >= 0 and terrain[nidx] <= 0 and not seen[nidx]:
+            seen[nidx] = 1
+            candidates_x[count] = x + 1
+            candidates_y[count] = y
+            count += 1
+        nidx = _coord_to_idx(x - 1, y)
+        if nidx >= 0 and terrain[nidx] <= 0 and not seen[nidx]:
+            seen[nidx] = 1
+            candidates_x[count] = x - 1
+            candidates_y[count] = y
+            count += 1
+        nidx = _coord_to_idx(x, y + 1)
+        if nidx >= 0 and terrain[nidx] <= 0 and not seen[nidx]:
+            seen[nidx] = 1
+            candidates_x[count] = x
+            candidates_y[count] = y + 1
+            count += 1
+        nidx = _coord_to_idx(x, y - 1)
+        if nidx >= 0 and terrain[nidx] <= 0 and not seen[nidx]:
+            seen[nidx] = 1
+            candidates_x[count] = x
+            candidates_y[count] = y - 1
+            count += 1
+    if count == 0:
+        candidates_x[0] = 0
+        candidates_y[0] = 0
+        count = 1
+    _feature_sort_candidates(candidates_x, candidates_y, count)
+    return count
+
+
+cdef void _feature_sort_candidates(int* candidates_x, int* candidates_y, int count):
+    cdef int i
+    cdef int j
+    cdef int x
+    cdef int y
+    for i in range(1, count):
+        x = candidates_x[i]
+        y = candidates_y[i]
+        j = i - 1
+        while j >= 0 and _feature_candidate_sort_after(candidates_x[j], candidates_y[j], x, y):
+            candidates_x[j + 1] = candidates_x[j]
+            candidates_y[j + 1] = candidates_y[j]
+            j -= 1
+        candidates_x[j + 1] = x
+        candidates_y[j + 1] = y
+
+
+cdef inline bint _feature_candidate_sort_after(int ax, int ay, int bx, int by):
+    cdef int ad = _feature_abs(ax) + _feature_abs(ay)
+    cdef int bd = _feature_abs(bx) + _feature_abs(by)
+    if ad != bd:
+        return ad > bd
+    if ay != by:
+        return ay > by
+    return ax > bx
+
+
+cdef inline bint _feature_is_valid_placement(
+    int* terrain,
+    int left_terrain_plus,
+    int right_terrain_plus,
+    int lx,
+    int ly,
+    int rx,
+    int ry,
+    int min_x,
+    int max_x,
+    int min_y,
+    int max_y,
+):
+    cdef int lidx
+    cdef int ridx
+    cdef int width
+    cdef int height
+    cdef int after_min_x
+    cdef int after_max_x
+    cdef int after_min_y
+    cdef int after_max_y
+    if lx == rx and ly == ry:
+        return False
+    if not _feature_coord_in_bounds(lx, ly) or not _feature_coord_in_bounds(rx, ry):
+        return False
+    lidx = _coord_to_idx(lx, ly)
+    ridx = _coord_to_idx(rx, ry)
+    if terrain[lidx] > 0 or terrain[ridx] > 0:
+        return False
+    after_min_x = min_x
+    after_max_x = max_x
+    after_min_y = min_y
+    after_max_y = max_y
+    if lx < after_min_x:
+        after_min_x = lx
+    if rx < after_min_x:
+        after_min_x = rx
+    if lx > after_max_x:
+        after_max_x = lx
+    if rx > after_max_x:
+        after_max_x = rx
+    if ly < after_min_y:
+        after_min_y = ly
+    if ry < after_min_y:
+        after_min_y = ry
+    if ly > after_max_y:
+        after_max_y = ly
+    if ry > after_max_y:
+        after_max_y = ry
+    width = after_max_x - after_min_x + 1
+    height = after_max_y - after_min_y + 1
+    if width > BOARD_LIMIT or height > BOARD_LIMIT:
+        return False
+    return (
+        _feature_has_valid_touch(terrain, lx, ly, left_terrain_plus)
+        or _feature_has_valid_touch(terrain, rx, ry, right_terrain_plus)
+    )
+
+
+cdef inline bint _feature_has_valid_touch(int* terrain, int x, int y, int terrain_plus):
+    cdef int nidx
+    nidx = _coord_to_idx(x + 1, y)
+    if nidx >= 0 and (terrain[nidx] == TERRAIN_CASTLE + 1 or terrain[nidx] == terrain_plus):
+        return True
+    nidx = _coord_to_idx(x - 1, y)
+    if nidx >= 0 and (terrain[nidx] == TERRAIN_CASTLE + 1 or terrain[nidx] == terrain_plus):
+        return True
+    nidx = _coord_to_idx(x, y + 1)
+    if nidx >= 0 and (terrain[nidx] == TERRAIN_CASTLE + 1 or terrain[nidx] == terrain_plus):
+        return True
+    nidx = _coord_to_idx(x, y - 1)
+    if nidx >= 0 and (terrain[nidx] == TERRAIN_CASTLE + 1 or terrain[nidx] == terrain_plus):
+        return True
+    return False
+
+
+cdef void _feature_placement_metrics_for_cells(
+    int* terrain,
+    int* crowns,
+    int left_terrain_plus,
+    int left_crowns,
+    int right_terrain_plus,
+    int right_crowns,
+    int lx,
+    int ly,
+    int rx,
+    int ry,
+    int min_x,
+    int max_x,
+    int min_y,
+    int max_y,
+    FeatureMetrics* metrics,
+):
+    cdef NeighborStats left_stats
+    cdef NeighborStats right_stats
+    cdef int after_min_x
+    cdef int after_max_x
+    cdef int after_min_y
+    cdef int after_max_y
+    cdef int width_before
+    cdef int height_before
+    _feature_clear_metrics(metrics)
+    if not _feature_coord_in_bounds(lx, ly) or not _feature_coord_in_bounds(rx, ry):
+        return
+    metrics.score_delta = _feature_score_delta_local(
+        terrain,
+        crowns,
+        left_terrain_plus,
+        left_crowns,
+        right_terrain_plus,
+        right_crowns,
+        lx,
+        ly,
+        rx,
+        ry,
+    )
+    after_min_x = min_x
+    after_max_x = max_x
+    after_min_y = min_y
+    after_max_y = max_y
+    if lx < after_min_x:
+        after_min_x = lx
+    if rx < after_min_x:
+        after_min_x = rx
+    if lx > after_max_x:
+        after_max_x = lx
+    if rx > after_max_x:
+        after_max_x = rx
+    if ly < after_min_y:
+        after_min_y = ly
+    if ry < after_min_y:
+        after_min_y = ry
+    if ly > after_max_y:
+        after_max_y = ly
+    if ry > after_max_y:
+        after_max_y = ry
+    metrics.width_after = after_max_x - after_min_x + 1
+    metrics.height_after = after_max_y - after_min_y + 1
+    width_before = max_x - min_x + 1
+    height_before = max_y - min_y + 1
+    metrics.width_growth = metrics.width_after - width_before
+    if metrics.width_growth < 0.0:
+        metrics.width_growth = 0.0
+    metrics.height_growth = metrics.height_after - height_before
+    if metrics.height_growth < 0.0:
+        metrics.height_growth = 0.0
+    metrics.distance = (_feature_abs(lx) + _feature_abs(ly) + _feature_abs(rx) + _feature_abs(ry)) / 2.0
+
+    _feature_neighbor_stats(terrain, crowns, lx, ly, left_terrain_plus, &left_stats)
+    _feature_neighbor_stats(terrain, crowns, rx, ry, right_terrain_plus, &right_stats)
+    metrics.same_touch_count = left_stats.same + right_stats.same
+    metrics.castle_touch_count = left_stats.castle + right_stats.castle
+    metrics.occupied_touch_count = left_stats.occupied + right_stats.occupied
+    metrics.empty_touch_count = left_stats.empty + right_stats.empty
+    metrics.region_size_sum = left_stats.region_size + right_stats.region_size
+    metrics.region_crowns_sum = left_stats.region_crowns + right_stats.region_crowns
+    metrics.left_region_size = left_stats.region_size
+    metrics.right_region_size = right_stats.region_size
+    metrics.left_region_crowns = left_stats.region_crowns
+    metrics.right_region_crowns = right_stats.region_crowns
+    metrics.left_same_touches = left_stats.same
+    metrics.right_same_touches = right_stats.same
+    metrics.left_castle_touches = left_stats.castle
+    metrics.right_castle_touches = right_stats.castle
+    metrics.left_neighbor_crowns = left_stats.neighbor_crowns
+    metrics.right_neighbor_crowns = right_stats.neighbor_crowns
+
+
+cdef int _feature_score_delta_local(
+    int* terrain,
+    int* crowns,
+    int left_terrain_plus,
+    int left_crowns,
+    int right_terrain_plus,
+    int right_crowns,
+    int lx,
+    int ly,
+    int rx,
+    int ry,
+):
+    cdef int group_size[8]
+    cdef int group_crowns[8]
+    cdef int seen_regions[BOARD_CELLS_CONST]
+    cdef int region_cells[BOARD_CELLS_CONST]
+    cdef int terrain_values[2]
+    cdef int crown_values[2]
+    cdef int xs[2]
+    cdef int ys[2]
+    cdef int i
+    cdef int j
+    cdef int nidx
+    cdef int terrain_plus
+    cdef int region_size
+    cdef int region_crowns
+    cdef int region_count
+    cdef int before_score = 0
+    cdef int after_score = 0
+    for i in range(8):
+        group_size[i] = 0
+        group_crowns[i] = 0
+    for i in range(BOARD_CELLS_CONST):
+        seen_regions[i] = 0
+    terrain_values[0] = left_terrain_plus
+    terrain_values[1] = right_terrain_plus
+    crown_values[0] = left_crowns
+    crown_values[1] = right_crowns
+    xs[0] = lx
+    xs[1] = rx
+    ys[0] = ly
+    ys[1] = ry
+    for i in range(2):
+        terrain_plus = terrain_values[i]
+        if terrain_plus <= 0 or terrain_plus >= 8:
+            continue
+        group_size[terrain_plus] += 1
+        group_crowns[terrain_plus] += crown_values[i]
+        nidx = _coord_to_idx(xs[i] + 1, ys[i])
+        if nidx >= 0 and not seen_regions[nidx] and terrain[nidx] == terrain_plus:
+            _feature_region_collect(terrain, crowns, nidx, terrain_plus, region_cells, &region_count, &region_size, &region_crowns)
+            for j in range(region_count):
+                seen_regions[region_cells[j]] = 1
+            before_score += region_size * region_crowns
+            group_size[terrain_plus] += region_size
+            group_crowns[terrain_plus] += region_crowns
+        nidx = _coord_to_idx(xs[i] - 1, ys[i])
+        if nidx >= 0 and not seen_regions[nidx] and terrain[nidx] == terrain_plus:
+            _feature_region_collect(terrain, crowns, nidx, terrain_plus, region_cells, &region_count, &region_size, &region_crowns)
+            for j in range(region_count):
+                seen_regions[region_cells[j]] = 1
+            before_score += region_size * region_crowns
+            group_size[terrain_plus] += region_size
+            group_crowns[terrain_plus] += region_crowns
+        nidx = _coord_to_idx(xs[i], ys[i] + 1)
+        if nidx >= 0 and not seen_regions[nidx] and terrain[nidx] == terrain_plus:
+            _feature_region_collect(terrain, crowns, nidx, terrain_plus, region_cells, &region_count, &region_size, &region_crowns)
+            for j in range(region_count):
+                seen_regions[region_cells[j]] = 1
+            before_score += region_size * region_crowns
+            group_size[terrain_plus] += region_size
+            group_crowns[terrain_plus] += region_crowns
+        nidx = _coord_to_idx(xs[i], ys[i] - 1)
+        if nidx >= 0 and not seen_regions[nidx] and terrain[nidx] == terrain_plus:
+            _feature_region_collect(terrain, crowns, nidx, terrain_plus, region_cells, &region_count, &region_size, &region_crowns)
+            for j in range(region_count):
+                seen_regions[region_cells[j]] = 1
+            before_score += region_size * region_crowns
+            group_size[terrain_plus] += region_size
+            group_crowns[terrain_plus] += region_crowns
+    for i in range(8):
+        after_score += group_size[i] * group_crowns[i]
+    return after_score - before_score
+
+
+cdef void _feature_region_collect(
+    int* terrain,
+    int* crowns,
+    int start_idx,
+    int terrain_plus,
+    int* region_cells,
+    int* region_count,
+    int* size,
+    int* crown_count,
+):
+    cdef int stack[BOARD_CELLS_CONST]
+    cdef int seen[BOARD_CELLS_CONST]
+    cdef int stack_count = 1
+    cdef int idx
+    cdef int next_idx
+    cdef int x
+    cdef int y
+    cdef int i
+    for i in range(BOARD_CELLS_CONST):
+        seen[i] = 0
+    stack[0] = start_idx
+    seen[start_idx] = 1
+    size[0] = 0
+    crown_count[0] = 0
+    region_count[0] = 0
+    while stack_count > 0:
+        stack_count -= 1
+        idx = stack[stack_count]
+        if terrain[idx] != terrain_plus:
+            continue
+        region_cells[region_count[0]] = idx
+        region_count[0] += 1
+        size[0] += 1
+        crown_count[0] += crowns[idx]
+        x = _idx_to_x(idx)
+        y = _idx_to_y(idx)
+        next_idx = _coord_to_idx(x + 1, y)
+        if next_idx >= 0 and not seen[next_idx] and terrain[next_idx] == terrain_plus:
+            seen[next_idx] = 1
+            stack[stack_count] = next_idx
+            stack_count += 1
+        next_idx = _coord_to_idx(x - 1, y)
+        if next_idx >= 0 and not seen[next_idx] and terrain[next_idx] == terrain_plus:
+            seen[next_idx] = 1
+            stack[stack_count] = next_idx
+            stack_count += 1
+        next_idx = _coord_to_idx(x, y + 1)
+        if next_idx >= 0 and not seen[next_idx] and terrain[next_idx] == terrain_plus:
+            seen[next_idx] = 1
+            stack[stack_count] = next_idx
+            stack_count += 1
+        next_idx = _coord_to_idx(x, y - 1)
+        if next_idx >= 0 and not seen[next_idx] and terrain[next_idx] == terrain_plus:
+            seen[next_idx] = 1
+            stack[stack_count] = next_idx
+            stack_count += 1
+
+
+cdef double _feature_same_touch_count(
+    int* terrain,
+    int left_terrain_plus,
+    int right_terrain_plus,
+    int lx,
+    int ly,
+    int rx,
+    int ry,
+):
+    cdef double count = 0.0
+    cdef int nidx
+    nidx = _coord_to_idx(lx + 1, ly)
+    if nidx >= 0 and terrain[nidx] == left_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(lx - 1, ly)
+    if nidx >= 0 and terrain[nidx] == left_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(lx, ly + 1)
+    if nidx >= 0 and terrain[nidx] == left_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(lx, ly - 1)
+    if nidx >= 0 and terrain[nidx] == left_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(rx + 1, ry)
+    if nidx >= 0 and terrain[nidx] == right_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(rx - 1, ry)
+    if nidx >= 0 and terrain[nidx] == right_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(rx, ry + 1)
+    if nidx >= 0 and terrain[nidx] == right_terrain_plus:
+        count += 1.0
+    nidx = _coord_to_idx(rx, ry - 1)
+    if nidx >= 0 and terrain[nidx] == right_terrain_plus:
+        count += 1.0
+    return count
+
+
+cdef void _feature_neighbor_stats(
+    int* terrain,
+    int* crowns,
+    int x,
+    int y,
+    int terrain_plus,
+    NeighborStats* stats,
+):
+    cdef int visited_regions[BOARD_CELLS_CONST]
+    cdef int region_cells[BOARD_CELLS_CONST]
+    cdef int region_count
+    cdef int region_size
+    cdef int region_crowns
+    cdef int i
+    stats.same = 0.0
+    stats.castle = 0.0
+    stats.occupied = 0.0
+    stats.empty = 0.0
+    stats.neighbor_crowns = 0.0
+    stats.region_size = 0.0
+    stats.region_crowns = 0.0
+    for i in range(BOARD_CELLS_CONST):
+        visited_regions[i] = 0
+    _feature_neighbor_stats_one(terrain, crowns, x + 1, y, terrain_plus, stats, visited_regions, region_cells, &region_count, &region_size, &region_crowns)
+    _feature_neighbor_stats_one(terrain, crowns, x - 1, y, terrain_plus, stats, visited_regions, region_cells, &region_count, &region_size, &region_crowns)
+    _feature_neighbor_stats_one(terrain, crowns, x, y + 1, terrain_plus, stats, visited_regions, region_cells, &region_count, &region_size, &region_crowns)
+    _feature_neighbor_stats_one(terrain, crowns, x, y - 1, terrain_plus, stats, visited_regions, region_cells, &region_count, &region_size, &region_crowns)
+
+
+cdef void _feature_neighbor_stats_one(
+    int* terrain,
+    int* crowns,
+    int x,
+    int y,
+    int terrain_plus,
+    NeighborStats* stats,
+    int* visited_regions,
+    int* region_cells,
+    int* region_count,
+    int* region_size,
+    int* region_crowns,
+):
+    cdef int idx
+    cdef int i
+    if not _feature_coord_in_bounds(x, y):
+        stats.empty += 1.0
+        return
+    idx = _coord_to_idx(x, y)
+    if terrain[idx] <= 0:
+        stats.empty += 1.0
+        return
+    stats.occupied += 1.0
+    stats.neighbor_crowns += crowns[idx]
+    if terrain[idx] == TERRAIN_CASTLE + 1:
+        stats.castle += 1.0
+    if terrain[idx] == terrain_plus:
+        stats.same += 1.0
+        if not visited_regions[idx]:
+            _feature_region_collect(terrain, crowns, idx, terrain_plus, region_cells, region_count, region_size, region_crowns)
+            for i in range(region_count[0]):
+                visited_regions[region_cells[i]] = 1
+            stats.region_size += region_size[0]
+            stats.region_crowns += region_crowns[0]
 
 
 cdef class NativeKingdominoEnv:
