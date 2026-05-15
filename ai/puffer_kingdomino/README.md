@@ -57,7 +57,8 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.ppo_smoke --steps 10000 --seed 123 --init-policy ai/artifacts/distilled_flat.pt --output ai/artifacts/ppo_smoke.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_report.json --rollout mixed --objective hybrid
-.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_300k.json
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_100k_candidate_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_1m.json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -188,6 +189,9 @@ competitive with greedy:
   locally, around `4.9k` learner decisions/sec in the 300k reference run, but
   the first 300k continuation did not improve over distillation (`6.9%` vs
   greedy, `79.3%` vs random).
+- Candidate PPO now supports GAE, value-only warmup, linear opponent
+  curriculum, periodic fair-eval checkpoints, best-checkpoint saving, and JSON
+  run reports. This is the shape we want before spending on a 1M-step run.
 
 The practical takeaway: plain hard-label behavioral cloning from a search
 teacher is enough to learn "reasonable random-beating play", but not enough to

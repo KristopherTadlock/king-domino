@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import time
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -20,6 +22,7 @@ from torch import nn
 from .agents import load_agent, make_env, step_legal
 from .candidate_policy import CandidateScoringPolicy, action_feature_table
 from .candidate_train import DEFAULT_MAX_CANDIDATES, _write_legal_actions
+from .fair_eval import fair_evaluate
 from .policy import DEFAULT_HIDDEN_SIZE, OBSERVATION_SIZE, OBS_SCALE
 
 
@@ -105,6 +108,72 @@ def _save_candidate_checkpoint(model: CandidateActorCritic, output: Path, metada
     )
 
 
+def _select_opponent(opponents: Sequence[object], sample_index: int, total_steps: int):
+    if len(opponents) == 1:
+        return opponents[0]
+    stage = int((sample_index / max(1, total_steps)) * len(opponents))
+    return opponents[min(len(opponents) - 1, max(0, stage))]
+
+
+def _bootstrap_value(
+    model: CandidateActorCritic,
+    env,
+    learner_player: int,
+    obs_buffer: np.ndarray,
+) -> float:
+    if env.done or env.current_player is None or int(env.current_player) != learner_player:
+        return 0.0
+    _write_observation(env, obs_buffer)
+    with torch.no_grad():
+        return float(model.value(torch.from_numpy(obs_buffer.copy()).unsqueeze(0)).item())
+
+
+def _gae_returns(
+    samples: list[dict],
+    *,
+    bootstrap_value: float,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    rewards = [sample["reward"] for sample in samples]
+    dones = [sample["done"] for sample in samples]
+    values = np.asarray([sample["value"] for sample in samples], dtype=np.float32)
+    advantages = np.zeros((len(samples),), dtype=np.float32)
+    last_gae = 0.0
+    next_value = bootstrap_value
+    for index in range(len(samples) - 1, -1, -1):
+        nonterminal = 0.0 if dones[index] else 1.0
+        delta = rewards[index] + gamma * next_value * nonterminal - values[index]
+        last_gae = delta + gamma * gae_lambda * nonterminal * last_gae
+        advantages[index] = last_gae
+        next_value = float(values[index])
+    returns = advantages + values
+    if len(advantages) > 1:
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    return returns.astype(np.float32), advantages.astype(np.float32)
+
+
+def _evaluate_checkpoint(
+    policy_path: Path,
+    *,
+    eval_games: int,
+    eval_seed: int,
+    eval_opponents: Sequence[str],
+    opponent_policy: Path | None,
+) -> dict:
+    evaluations = {}
+    for opponent in eval_opponents:
+        evaluations[opponent] = fair_evaluate(
+            policy_kind="candidate",
+            policy=policy_path,
+            opponent_kind=opponent,
+            opponent_policy=opponent_policy if opponent in ("heuristic", "search") else None,
+            pairs=max(0, eval_games // 2),
+            seed=eval_seed,
+        )
+    return evaluations
+
+
 def run_candidate_ppo(
     *,
     steps: int,
@@ -112,6 +181,7 @@ def run_candidate_ppo(
     output: Path,
     init_policy: Path | None = None,
     opponent_kind: str = "heuristic",
+    opponent_curriculum: Sequence[str] | None = None,
     opponent_policy: Path | None = Path("ai/artifacts/heuristic_policy.json"),
     hidden_size: int = DEFAULT_HIDDEN_SIZE,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
@@ -120,9 +190,17 @@ def run_candidate_ppo(
     epochs: int = 2,
     lr: float = 1.0e-4,
     gamma: float = 0.99,
+    gae_lambda: float = 0.95,
     clip_range: float = 0.2,
     entropy_coef: float = 0.005,
     value_coef: float = 0.5,
+    value_warmup_steps: int = 0,
+    eval_every: int = 0,
+    eval_games: int = 200,
+    eval_seed: int = 456,
+    eval_opponents: Sequence[str] = ("random", "greedy"),
+    best_output: Path | None = None,
+    report: Path | None = None,
     native: bool = True,
 ) -> dict:
     started = time.perf_counter()
@@ -130,7 +208,11 @@ def run_candidate_ppo(
     model = CandidateActorCritic(hidden_size=hidden_size)
     init_status = _load_actor_init(model, init_policy)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    opponent = load_agent(opponent_kind, policy=opponent_policy, seed=seed + 10_003)
+    curriculum = list(opponent_curriculum) if opponent_curriculum else [opponent_kind]
+    opponents = [
+        load_agent(kind, policy=opponent_policy if kind in ("heuristic", "search") else None, seed=seed + 10_003 + index)
+        for index, kind in enumerate(curriculum)
+    ]
     action_features = torch.from_numpy(action_feature_table())
     env = make_env(seed, native=native)
 
@@ -143,12 +225,19 @@ def run_candidate_ppo(
     illegal_actions = 0
     opponent_steps = 0
     learner_player = 0
+    next_eval = eval_every if eval_every > 0 else None
+    eval_history = []
+    best_metric = -1_000_000_000.0
+    best_result = None
+    if best_output is None:
+        best_output = output.with_name(f"{output.stem}_best{output.suffix}")
 
     while collected_samples < max(0, steps):
         if env.done:
             completed_games += 1
             env = make_env((seed + completed_games) & 0xFFFFFFFF, native=native)
 
+        opponent = _select_opponent(opponents, collected_samples, steps)
         opponent_steps += _advance_to_learner(env, opponent, learner_player)
         if env.done or env.current_player is None:
             continue
@@ -202,19 +291,13 @@ def run_candidate_ppo(
             env = make_env((seed + completed_games) & 0xFFFFFFFF, native=native)
 
         if len(samples) >= rollout_size or collected_samples >= steps:
-            rewards = [sample["reward"] for sample in samples]
-            dones = [sample["done"] for sample in samples]
-            returns = np.zeros((len(samples),), dtype=np.float32)
-            running = 0.0
-            for index in range(len(samples) - 1, -1, -1):
-                if dones[index]:
-                    running = 0.0
-                running = rewards[index] + gamma * running
-                returns[index] = running
-            values = np.asarray([sample["value"] for sample in samples], dtype=np.float32)
-            advantages = returns - values
-            if len(advantages) > 1:
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            bootstrap = _bootstrap_value(model, env, learner_player, obs_buffer)
+            returns, advantages = _gae_returns(
+                samples,
+                bootstrap_value=bootstrap,
+                gamma=gamma,
+                gae_lambda=gae_lambda,
+            )
 
             observations = torch.from_numpy(np.stack([sample["obs"] for sample in samples]).astype(np.float32))
             legal_actions = torch.from_numpy(np.stack([sample["legal_actions"] for sample in samples]).astype(np.int64))
@@ -223,6 +306,7 @@ def run_candidate_ppo(
             old_logprobs = torch.tensor([sample["old_logprob"] for sample in samples], dtype=torch.float32)
             returns_tensor = torch.from_numpy(returns)
             advantages_tensor = torch.from_numpy(advantages.astype(np.float32))
+            value_only = collected_samples <= value_warmup_steps
 
             indices = np.arange(len(samples))
             for epoch in range(max(1, epochs)):
@@ -240,13 +324,49 @@ def run_candidate_ppo(
                     clipped = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantages_tensor[batch]
                     policy_loss = -torch.min(unclipped, clipped).mean()
                     value_loss = torch.nn.functional.mse_loss(batch_values, returns_tensor[batch])
-                    loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
+                    loss = value_loss if value_only else policy_loss + value_coef * value_loss - entropy_coef * entropy
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
                     updates += 1
             samples.clear()
+
+            if next_eval is not None and collected_samples >= next_eval:
+                eval_metadata = {
+                    "sampled_steps": collected_samples,
+                    "updates": updates,
+                    "completed_games": completed_games,
+                    "opponent_curriculum": curriculum,
+                }
+                _save_candidate_checkpoint(model, output, eval_metadata)
+                evaluations = _evaluate_checkpoint(
+                    output,
+                    eval_games=eval_games,
+                    eval_seed=eval_seed,
+                    eval_opponents=eval_opponents,
+                    opponent_policy=opponent_policy,
+                )
+                greedy = evaluations.get("greedy")
+                if greedy is not None:
+                    metric = float(greedy["win_rate"]) * 1000.0 + float(greedy["score_margin"]["mean"])
+                else:
+                    first = next(iter(evaluations.values()))
+                    metric = float(first["win_rate"]) * 1000.0 + float(first["score_margin"]["mean"])
+                entry = {
+                    "sampled_steps": collected_samples,
+                    "updates": updates,
+                    "completed_games": completed_games,
+                    "metric": metric,
+                    "evaluations": evaluations,
+                }
+                eval_history.append(entry)
+                if metric > best_metric:
+                    best_metric = metric
+                    best_result = entry
+                    shutil.copyfile(output, best_output)
+                while next_eval is not None and next_eval <= collected_samples:
+                    next_eval += eval_every
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     metadata = {
@@ -258,6 +378,7 @@ def run_candidate_ppo(
         "updates": updates,
         "opponent_steps": opponent_steps,
         "opponent_kind": opponent_kind,
+        "opponent_curriculum": curriculum,
         "opponent_policy": str(opponent_policy) if opponent_policy else None,
         "init_policy": str(init_policy) if init_policy else None,
         "init_status": init_status,
@@ -268,9 +389,17 @@ def run_candidate_ppo(
         "epochs": epochs,
         "lr": lr,
         "gamma": gamma,
+        "gae_lambda": gae_lambda,
         "clip_range": clip_range,
         "entropy_coef": entropy_coef,
         "value_coef": value_coef,
+        "value_warmup_steps": value_warmup_steps,
+        "eval_every": eval_every,
+        "eval_games": eval_games,
+        "eval_seed": eval_seed,
+        "eval_opponents": list(eval_opponents),
+        "best_output": str(best_output),
+        "best_result": best_result,
         "native": bool(native),
         "illegal_actions": illegal_actions,
         "seconds": elapsed,
@@ -278,7 +407,13 @@ def run_candidate_ppo(
         "created_at": int(time.time()),
     }
     _save_candidate_checkpoint(model, output, metadata)
-    return {"policy": str(output), **metadata}
+    if best_result is None:
+        shutil.copyfile(output, best_output)
+    result = {"policy": str(output), "eval_history": eval_history, **metadata}
+    if report is not None:
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
 
 
 def main() -> None:
@@ -288,6 +423,7 @@ def main() -> None:
     parser.add_argument("--output", default="ai/artifacts/ppo_candidate.pt")
     parser.add_argument("--init-policy")
     parser.add_argument("--opponent-kind", default="heuristic", choices=["random", "greedy", "delta", "heuristic", "search"])
+    parser.add_argument("--opponent-curriculum", nargs="+", choices=["random", "greedy", "delta", "heuristic", "search"])
     parser.add_argument("--opponent-policy", default="ai/artifacts/heuristic_policy.json")
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
@@ -296,9 +432,17 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1.0e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip-range", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.005)
     parser.add_argument("--value-coef", type=float, default=0.5)
+    parser.add_argument("--value-warmup-steps", type=int, default=0)
+    parser.add_argument("--eval-every", type=int, default=0)
+    parser.add_argument("--eval-games", type=int, default=200)
+    parser.add_argument("--eval-seed", type=int, default=456)
+    parser.add_argument("--eval-opponents", nargs="+", choices=["random", "greedy", "delta", "heuristic"], default=["random", "greedy"])
+    parser.add_argument("--best-output")
+    parser.add_argument("--report")
     parser.add_argument("--python-env", action="store_true")
     args = parser.parse_args()
     print(json.dumps(run_candidate_ppo(
@@ -307,6 +451,7 @@ def main() -> None:
         output=Path(args.output),
         init_policy=Path(args.init_policy) if args.init_policy else None,
         opponent_kind=args.opponent_kind,
+        opponent_curriculum=args.opponent_curriculum,
         opponent_policy=Path(args.opponent_policy) if args.opponent_policy else None,
         hidden_size=args.hidden_size,
         max_candidates=args.max_candidates,
@@ -315,9 +460,17 @@ def main() -> None:
         epochs=args.epochs,
         lr=args.lr,
         gamma=args.gamma,
+        gae_lambda=args.gae_lambda,
         clip_range=args.clip_range,
         entropy_coef=args.entropy_coef,
         value_coef=args.value_coef,
+        value_warmup_steps=args.value_warmup_steps,
+        eval_every=args.eval_every,
+        eval_games=args.eval_games,
+        eval_seed=args.eval_seed,
+        eval_opponents=args.eval_opponents,
+        best_output=Path(args.best_output) if args.best_output else None,
+        report=Path(args.report) if args.report else None,
         native=not args.python_env,
     ), indent=2))
 
