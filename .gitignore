@@ -1,2 +1,8 @@
 node_modules/*
 .env
+.venv/
+*.egg-info/
+build/
+*.so
+ai/puffer_kingdomino/native.c
+resources

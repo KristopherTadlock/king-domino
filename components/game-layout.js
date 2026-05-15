@@ -9,6 +9,7 @@ import { WebGameManager } from '../classes/web-game-manager.js';
 import { MultiplayerClient } from '../classes/multiplayer-client.js';
 import { DominoPoolManager } from '../classes/domino-pool-manager.js';
 import { GameAdvisor } from '../classes/game-advisor.js';
+import { AIPolicyRunner } from '../classes/ai-policy-runner.js';
 import { randomSeed } from '../classes/utils/rng.js';
 
 const LANDSCAPE_COLORS = Object.freeze({
@@ -1132,6 +1133,15 @@ export class GameLayout extends HTMLElement {
   /** @type {GameAdvisor} */
   #advisor = new GameAdvisor();
 
+  /** @type {AIPolicyRunner} */
+  #aiPolicy = new AIPolicyRunner();
+
+  /** @type {Set<number>} */
+  #aiPlayerIndices = new Set();
+
+  /** @type {number | null} */
+  #aiActionTimer = null;
+
   /** @type {MultiplayerClient | null} */
   #mp = null;
 
@@ -2052,6 +2062,8 @@ export class GameLayout extends HTMLElement {
     this.#safeInitThree();
     if (this.#threeOk) this.#wireEvents();
     this.#initMultiplayer();
+    this.#configureAiFromUrl(urlParams);
+    void this.#loadAiPolicy();
     this.#refreshHud();
     if (this.#threeOk) {
       this.#renderBoard();
@@ -2073,6 +2085,7 @@ export class GameLayout extends HTMLElement {
     globalThis.visualViewport?.removeEventListener('resize', this.#onResize);
     this.#resizeObserver?.disconnect();
     this.#mp?.disconnect();
+    if (this.#aiActionTimer != null) clearTimeout(this.#aiActionTimer);
   }
 
   #safeInitThree() {
@@ -4527,9 +4540,9 @@ export class GameLayout extends HTMLElement {
     return true;
   }
 
-  #startHotseatGame(name, playerCount = this.#playerCount) {
+  #startHotseatGame(name, playerCount = this.#playerCount, { aiOpponent = false } = {}) {
     const cleanName = this.#savePlayerName(name);
-    const count = this.#normalizePlayerCount(playerCount, this.#playerCount);
+    const count = aiOpponent ? 2 : this.#normalizePlayerCount(playerCount, this.#playerCount);
     const seed = randomSeed();
     const url = new URL(location.href);
     url.search = '';
@@ -4537,6 +4550,11 @@ export class GameLayout extends HTMLElement {
     url.searchParams.set('seed', String(seed));
     url.searchParams.set('players', String(count));
     const playerNames = this.#defaultPlayerNames(cleanName, count);
+    if (aiOpponent) {
+      playerNames[1] = 'AI';
+      url.searchParams.set('ai', '1');
+      url.searchParams.set('aiPlayers', 'p2');
+    }
     playerNames.forEach((playerName, index) => {
       url.searchParams.set(`p${index + 1}`, playerName);
     });
@@ -4552,12 +4570,18 @@ export class GameLayout extends HTMLElement {
     this.#pendingUndoRequest = null;
     this.#lobbyNotice = null;
     this.#actionHistory = [];
+    if (this.#aiActionTimer != null) {
+      clearTimeout(this.#aiActionTimer);
+      this.#aiActionTimer = null;
+    }
     this.#initGame(seed, playerNames, count);
     this.#syncHotseatPlayerIndex();
+    this.#configureAiFromUrl(url.searchParams);
     this.#mp = {
       sendAction: (type, payload = {}) => this.#applyLocalAction({ type, payload }),
       disconnect: () => {},
     };
+    void this.#loadAiPolicy();
     this.#ensureMiniMaps();
     this.#refreshHud();
     this.#renderBoard();
@@ -4608,6 +4632,61 @@ export class GameLayout extends HTMLElement {
     this.#connectOnlineRoom(room, name, Number.isFinite(proposedSeed) ? proposedSeed : null, playerCount);
   }
 
+  #configureAiFromUrl(params) {
+    this.#aiPlayerIndices.clear();
+    const aiEnabled = params.get('ai') === '1' || params.get('ai') === 'true';
+    const rawPlayers = params.get('aiPlayers') || params.get('aiPlayer') || '';
+
+    if (rawPlayers.trim()) {
+      for (const part of rawPlayers.split(',')) {
+        const token = part.trim().toLowerCase();
+        const match = token.match(/^p?([1-4])$/);
+        if (!match) continue;
+        const playerIndex = Number(match[1]) - 1;
+        if (playerIndex >= 0 && playerIndex < this.#playerCount) this.#aiPlayerIndices.add(playerIndex);
+      }
+      return;
+    }
+
+    if (!aiEnabled) return;
+    for (let playerIndex = 1; playerIndex < this.#playerCount; playerIndex++) {
+      this.#aiPlayerIndices.add(playerIndex);
+    }
+  }
+
+  async #loadAiPolicy() {
+    if (!this.#aiPlayerIndices.size) return;
+    try {
+      await this.#aiPolicy.load();
+      this.#scheduleAiAction(250);
+    } catch (error) {
+      this.#flashError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  #isAiControlledPlayer(playerIndex) {
+    return this.#hotseat && playerIndex != null && this.#aiPlayerIndices.has(playerIndex);
+  }
+
+  #scheduleAiAction(delay = 450) {
+    if (!this.#hotseat || !this.#aiPlayerIndices.size || !this.#aiPolicy.ready) return;
+    if (this.#aiActionTimer != null) return;
+    this.#aiActionTimer = window.setTimeout(() => {
+      this.#aiActionTimer = null;
+      this.#runAiAction();
+    }, delay);
+  }
+
+  #runAiAction() {
+    if (!this.#hotseat || !this.#game || this.#game.isGameOver || this.#pendingUndoRequest) return;
+    const activePlayerIndex = this.#activePlayerIndex();
+    if (!this.#isAiControlledPlayer(activePlayerIndex)) return;
+    const action = this.#aiPolicy.chooseAction(this.#game, activePlayerIndex);
+    if (!action) return;
+    this.#mp?.sendAction(action.type, action.payload);
+    this.#scheduleAiAction(650);
+  }
+
   #syncHotseatPlayerIndex() {
     if (!this.#hotseat || !this.#game?.players?.length) return;
     if (this.#pendingUndoRequest) {
@@ -4655,6 +4734,7 @@ export class GameLayout extends HTMLElement {
       this.#cancelCameraTransition();
     }
     this.#autoResolveForcedDraft();
+    this.#scheduleAiAction();
   }
 
   #autoResolveForcedDraft() {
@@ -8458,11 +8538,15 @@ export class GameLayout extends HTMLElement {
       hotseat.type = 'button';
       hotseat.className = 'startSecondary';
       hotseat.textContent = 'Play Hotseat';
+      const aiHotseat = document.createElement('button');
+      aiHotseat.type = 'button';
+      aiHotseat.className = 'startSecondary';
+      aiHotseat.textContent = 'Play vs AI';
       const highScores = document.createElement('button');
       highScores.type = 'button';
       highScores.className = 'startSecondary';
       highScores.textContent = 'High Scores';
-      hotseatActions.append(hotseat, highScores);
+      hotseatActions.append(hotseat, aiHotseat, highScores);
 
       const joinRoom = () => {
         const room = this.#roomCodeFromInput(roomInput.value);
@@ -8494,6 +8578,9 @@ export class GameLayout extends HTMLElement {
       });
       hotseat.addEventListener('click', () => {
         this.#startHotseatGame(nameInput.value, Number.parseInt(playersInput.value, 10));
+      });
+      aiHotseat.addEventListener('click', () => {
+        this.#startHotseatGame(nameInput.value, 2, { aiOpponent: true });
       });
       highScores.addEventListener('click', () => {
         this.#openScoreHistory();

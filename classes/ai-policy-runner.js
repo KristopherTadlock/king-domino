@@ -1,0 +1,266 @@
+import { GameState } from './enums/game-state.js';
+import { DominoEnd } from './enums/domino-end.js';
+import { GameAdvisor } from './game-advisor.js';
+
+const COORD_MIN = -6;
+const COORD_MAX = 6;
+const COORD_SPAN = COORD_MAX - COORD_MIN + 1;
+const DRAFT_ACTIONS = 4;
+const SKIP_ACTION = DRAFT_ACTIONS + 4 * 4 * COORD_SPAN * COORD_SPAN * 2;
+const TERRAIN = Object.freeze({
+  castle: 0,
+  wheat: 1,
+  pasture: 2,
+  water: 3,
+  bog: 4,
+  forest: 5,
+  mine: 6,
+});
+
+function terrainId(landscape) {
+  return TERRAIN[landscape?.description ?? String(landscape)] ?? 0;
+}
+
+export class AIPolicyRunner {
+  #advisor = new GameAdvisor();
+  #artifact = null;
+
+  get ready() {
+    return Boolean(this.#artifact);
+  }
+
+  get backend() {
+    return this.#artifact?.backend ?? 'unloaded';
+  }
+
+  async load(url = 'ai/artifacts/browser_policy.json') {
+    let response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok && url !== 'ai/artifacts/latest.pt') {
+      response = await fetch('ai/artifacts/latest.pt', { cache: 'no-store' });
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to load AI policy: ${response.status}`);
+    }
+    this.#artifact = await response.json();
+    return this.#artifact;
+  }
+
+  chooseAction(game, playerIndex) {
+    if (!this.ready || !game || game.isGameOver || playerIndex == null) return null;
+    if (this.#artifact?.policy?.type === 'masked_mlp_v0') {
+      const action = this.#chooseModelAction(game, playerIndex);
+      if (action) return action;
+    }
+    if (game.state === GameState.DRAFT) return this.#chooseDraftAction(game, playerIndex);
+    if (game.state === GameState.PLACE) return this.#choosePlacementAction(game, playerIndex);
+    return null;
+  }
+
+  #chooseModelAction(game, playerIndex) {
+    const policy = this.#artifact?.policy;
+    const { legalActions, mask } = this.#legalActionsAndMask(game, playerIndex, policy.actionCount);
+    if (!legalActions.length) return null;
+    const obs = this.#observationVector(game, playerIndex, policy.obsScale || 50);
+    if (!obs || obs.length !== policy.obsSize) return null;
+    let bestAction = legalActions[0];
+    let bestScore = -Infinity;
+    const hidden = this.#hidden(policy, obs);
+    for (const action of legalActions) {
+      if (!mask[action]) continue;
+      const score = this.#outputScore(policy, hidden, action);
+      if (score > bestScore) {
+        bestScore = score;
+        bestAction = action;
+      }
+    }
+    return this.#toGameAction(game, bestAction);
+  }
+
+  #hidden(policy, obs) {
+    const { inputWeight, inputBias } = policy.weights;
+    const hidden = new Array(policy.hiddenSize).fill(0);
+    for (let h = 0; h < policy.hiddenSize; h += 1) {
+      const weights = inputWeight[h];
+      let sum = inputBias[h] ?? 0;
+      for (let i = 0; i < obs.length; i += 1) {
+        sum += weights[i] * obs[i];
+      }
+      hidden[h] = Math.tanh(sum);
+    }
+    return hidden;
+  }
+
+  #outputScore(policy, hidden, action) {
+    const weights = policy.weights.outputWeight[action];
+    if (!weights) return -Infinity;
+    let sum = policy.weights.outputBias[action] ?? 0;
+    for (let h = 0; h < hidden.length; h += 1) {
+      sum += weights[h] * hidden[h];
+    }
+    return sum;
+  }
+
+  #legalActionsAndMask(game, playerIndex, actionCount = SKIP_ACTION + 1) {
+    const mask = new Array(actionCount).fill(false);
+    const legalActions = [];
+    const add = (action) => {
+      if (action == null || action < 0 || action >= actionCount || mask[action]) return;
+      mask[action] = true;
+      legalActions.push(action);
+    };
+
+    if (game.state === GameState.DRAFT && game.currentPickingPlayerIndex === playerIndex) {
+      (game.currentDraft ?? []).forEach((slot, index) => {
+        if (slot?.player == null && !slot?.placed) add(index);
+      });
+      return { legalActions, mask };
+    }
+
+    if (game.state !== GameState.PLACE) return { legalActions, mask };
+    const options = game.getCurrentPlacementOptionsForPlayer?.(playerIndex) ?? [];
+    for (const option of options) {
+      const draftIndex = (game.currentDraft ?? []).findIndex((slot) =>
+        slot?.player === playerIndex
+        && !slot?.placed
+        && slot?.domino?.number === option.dominoNumber
+      );
+      add(this.#encodePlacementAction(draftIndex, option.orientation, option.x, option.y, option.anchorEnd));
+    }
+    if (!legalActions.length && game.canSkipPlacementForPlayer?.(playerIndex)) {
+      add(SKIP_ACTION);
+    }
+    return { legalActions, mask };
+  }
+
+  #encodePlacementAction(draftIndex, orientation, x, y, anchorEnd) {
+    if (draftIndex < 0 || draftIndex >= 4) return null;
+    const normalized = ((Number(orientation) % 360) + 360) % 360;
+    if (![0, 90, 180, 270].includes(normalized)) return null;
+    if (x < COORD_MIN || x > COORD_MAX || y < COORD_MIN || y > COORD_MAX) return null;
+    const anchor = anchorEnd === DominoEnd.RIGHT || anchorEnd?.description === 'right' || anchorEnd === 'RIGHT' ? 1 : 0;
+    const orientationSteps = normalized / 90;
+    const coordX = x - COORD_MIN;
+    const coordY = y - COORD_MIN;
+    const encoded = (((draftIndex * 4 + orientationSteps) * COORD_SPAN + coordX) * COORD_SPAN + coordY) * 2 + anchor;
+    return DRAFT_ACTIONS + encoded;
+  }
+
+  #toGameAction(game, action) {
+    if (action < DRAFT_ACTIONS) {
+      return { type: 'pickDraft', payload: { index: action, ai: true } };
+    }
+    if (action === SKIP_ACTION) {
+      return { type: 'skip', payload: { ai: true } };
+    }
+    const decoded = this.#decodePlacementAction(action);
+    if (!decoded) return null;
+    const slot = game.currentDraft?.[decoded.draftIndex];
+    if (!slot?.domino) return null;
+    return {
+      type: 'place',
+      payload: {
+        ai: true,
+        dominoNumber: slot.domino.number,
+        orientation: decoded.orientation,
+        x: decoded.x,
+        y: decoded.y,
+        anchorEnd: decoded.anchorEnd ? 'RIGHT' : 'LEFT',
+        placeId: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    };
+  }
+
+  #decodePlacementAction(action) {
+    if (action < DRAFT_ACTIONS || action >= SKIP_ACTION) return null;
+    let value = action - DRAFT_ACTIONS;
+    const anchorEnd = value % 2;
+    value = Math.floor(value / 2);
+    const coordY = value % COORD_SPAN;
+    value = Math.floor(value / COORD_SPAN);
+    const coordX = value % COORD_SPAN;
+    value = Math.floor(value / COORD_SPAN);
+    const orientationSteps = value % 4;
+    const draftIndex = Math.floor(value / 4);
+    return {
+      draftIndex,
+      orientation: orientationSteps * 90,
+      x: coordX + COORD_MIN,
+      y: coordY + COORD_MIN,
+      anchorEnd,
+    };
+  }
+
+  #observationVector(game, playerIndex, scale) {
+    const phase = game.state === GameState.DRAFT ? 0 : 1;
+    const currentPlayer = game.state === GameState.DRAFT
+      ? game.currentPickingPlayerIndex
+      : playerIndex;
+    const scores = (game.players ?? []).map((player) => player?.board?.score ?? 0);
+    const values = [
+      phase,
+      currentPlayer ?? -1,
+      game.pickCursor ?? 0,
+      game.placeCursor ?? 0,
+      game.round ?? 0,
+      scores[0] ?? 0,
+      scores[1] ?? 0,
+    ];
+
+    for (let i = 0; i < 4; i += 1) {
+      const slot = game.currentDraft?.[i];
+      values.push(
+        slot?.domino?.number ?? 0,
+        slot?.player == null ? -1 : slot.player,
+        slot?.placed ? 1 : 0,
+      );
+    }
+
+    for (let player = 0; player < 2; player += 1) {
+      const board = game.players?.[player]?.board?.board ?? {};
+      for (let y = COORD_MIN; y <= COORD_MAX; y += 1) {
+        for (let x = COORD_MIN; x <= COORD_MAX; x += 1) {
+          const tile = board[`${x},${y}`];
+          values.push(tile ? terrainId(tile.landscape) : 0);
+          values.push(tile?.crowns ?? 0);
+        }
+      }
+    }
+
+    return values.map((value) => value / scale);
+  }
+
+  #chooseDraftAction(game, playerIndex) {
+    if (game.currentPickingPlayerIndex !== playerIndex) return null;
+    const suggested = this.#advisor.suggestDraftMove(game, playerIndex);
+    const index = suggested?.index ?? game.currentDraft.findIndex((slot) => slot.player == null && !slot.placed);
+    if (index == null || index < 0) return null;
+    return { type: 'pickDraft', payload: { index, ai: true } };
+  }
+
+  #choosePlacementAction(game, playerIndex) {
+    const choices = game.getCurrentPlacingChoicesForPlayer?.(playerIndex) ?? [];
+    if (!choices.length) return null;
+
+    const suggested = this.#advisor.suggestPlacementMove(game, playerIndex);
+    if (suggested) {
+      return {
+        type: 'place',
+        payload: {
+          ai: true,
+          dominoNumber: suggested.dominoNumber,
+          orientation: suggested.orientation,
+          x: suggested.x,
+          y: suggested.y,
+          anchorEnd: suggested.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT',
+          placeId: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        },
+      };
+    }
+
+    if (game.canSkipPlacementForPlayer?.(playerIndex)) {
+      return { type: 'skip', payload: { ai: true } };
+    }
+
+    return null;
+  }
+}

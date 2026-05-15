@@ -188,6 +188,10 @@ export class WebGameManager {
     return [...this.#placeOrder];
   }
 
+  get placeCursor() {
+    return this.#placeCursor;
+  }
+
   get currentPlacingPlayerIndex() {
     return this.#placeOrder[this.#placeCursor];
   }
