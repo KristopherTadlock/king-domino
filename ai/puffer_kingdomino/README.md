@@ -64,6 +64,7 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.distill_bakeoff --samples 100000 --games 1000 --seed 123 --epochs 4 --dataset ai/artifacts/datasets/search_teacher_scores_mixed_obs_v2_100k.npz --report ai/artifacts/distill_bakeoff_scores_mixed_obs_v2_report.json --rollout mixed --objective hybrid
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_obs_v2_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_obs_v2_300k.json
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_obs_v2_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_obs_v2_1m.json
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 25000 --seed 654 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_canon_50k_candidate_interaction_rich_hybrid.pt --output ai/artifacts/ppo_candidate_rich_anchor_25k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --model-type auto --feature-mode rich --hidden-size 128 --lr 0.00002 --entropy-coef 0.001 --anchor-kl-coef 0.05 --eval-every 0
 .venv/bin/python -m ai.puffer_kingdomino.policy_diagnostic --policy-kind candidate --policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --reference-kind greedy --opponent-kind greedy --games 1000 --seed 456
 ```
 
@@ -294,6 +295,15 @@ A 50k-sample rich interaction candidate run strengthened that signal:
 - 200 seat-swapped games vs the weighted heuristic, seed `789`: `51%` win rate
   but mean margin `-1.4`, so this is not yet a proven replacement for the
   browser fallback
+- A non-anchored 25k rich PPO continuation against the weighted heuristic
+  regressed to `58.5%` vs old greedy and `46.5%` vs the weighted heuristic,
+  showing the actor can drift away from the useful distilled policy quickly.
+- Candidate PPO now saves enough checkpoint metadata for interim 128-wide rich
+  checkpoints to reload correctly during periodic evals.
+- Anchored rich PPO adds `--anchor-kl-coef`, defaulting the anchor policy to the
+  init policy when enabled. A conservative 25k run with `--anchor-kl-coef 0.05`
+  preserved the greedy result at `64.5%` over 400 games and reached `52%` vs the
+  weighted heuristic over 200 games with an essentially flat `+0.1` margin.
 
 The current rich feature builder is Python-side and computes local placement
 consequences from observations. It is good enough for proof and short PPO

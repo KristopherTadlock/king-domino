@@ -150,16 +150,48 @@ def _load_actor_init(model: CandidateActorCritic, path: Path | None) -> str | No
     return f"initialized actor from {path}"
 
 
+def _load_anchor_model(
+    *,
+    path: Path | None,
+    hidden_size: int,
+    model_type: str,
+    feature_mode: str,
+) -> tuple[CandidateActorCritic | None, str | None]:
+    if path is None:
+        return None, None
+    anchor = CandidateActorCritic(
+        hidden_size=hidden_size,
+        model_type=model_type,
+        feature_mode=feature_mode,
+    )
+    status = _load_actor_init(anchor, path)
+    if not status or not status.startswith("initialized actor from "):
+        raise ValueError(f"anchor policy could not be loaded: {status}")
+    anchor.eval()
+    for parameter in anchor.parameters():
+        parameter.requires_grad_(False)
+    return anchor, status
+
+
 def _save_candidate_checkpoint(model: CandidateActorCritic, output: Path, metadata: dict) -> None:
+    checkpoint_metadata = {
+        **metadata,
+        "hidden_size": model.hidden_size,
+        "model_type": model.model_type,
+        "feature_mode": model.feature_mode,
+        "action_feature_size": model.action_feature_size,
+        "observation_version": OBSERVATION_VERSION,
+    }
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "format": "kingdomino-candidate-policy-v0",
+            "hidden_size": model.hidden_size,
             "model_type": model.model_type,
             "feature_mode": model.feature_mode,
             "action_feature_size": model.action_feature_size,
             "state_dict": model.actor.state_dict(),
-            "metadata": metadata,
+            "metadata": checkpoint_metadata,
         },
         output,
     )
@@ -253,6 +285,8 @@ def run_candidate_ppo(
     clip_range: float = 0.2,
     entropy_coef: float = 0.005,
     value_coef: float = 0.5,
+    anchor_policy: Path | None = None,
+    anchor_kl_coef: float = 0.0,
     value_warmup_steps: int = 0,
     eval_every: int = 0,
     eval_games: int = 200,
@@ -267,6 +301,13 @@ def run_candidate_ppo(
     resolved_model_type = _infer_model_type(init_policy, model_type)
     model = CandidateActorCritic(hidden_size=hidden_size, model_type=resolved_model_type, feature_mode=feature_mode)
     init_status = _load_actor_init(model, init_policy)
+    resolved_anchor_policy = anchor_policy if anchor_policy is not None else init_policy
+    anchor_model, anchor_status = _load_anchor_model(
+        path=resolved_anchor_policy if anchor_kl_coef > 0 else None,
+        hidden_size=hidden_size,
+        model_type=resolved_model_type,
+        feature_mode=feature_mode,
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     curriculum = list(opponent_curriculum) if opponent_curriculum else [opponent_kind]
     opponents = [
@@ -403,7 +444,16 @@ def run_candidate_ppo(
                     clipped = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantages_tensor[batch]
                     policy_loss = -torch.min(unclipped, clipped).mean()
                     value_loss = torch.nn.functional.mse_loss(batch_values, returns_tensor[batch])
+                    anchor_kl = torch.tensor(0.0)
+                    if anchor_model is not None and anchor_kl_coef > 0:
+                        with torch.no_grad():
+                            anchor_logits, _anchor_values = anchor_model(observations[batch], batch_features)
+                            anchor_logits = anchor_logits.masked_fill(~batch_mask, -1e9)
+                            anchor_distribution = torch.distributions.Categorical(logits=anchor_logits)
+                        anchor_kl = torch.distributions.kl_divergence(distribution, anchor_distribution).mean()
                     loss = value_loss if value_only else policy_loss + value_coef * value_loss - entropy_coef * entropy
+                    if not value_only and anchor_kl_coef > 0:
+                        loss = loss + anchor_kl_coef * anchor_kl
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -461,6 +511,9 @@ def run_candidate_ppo(
         "opponent_policy": str(opponent_policy) if opponent_policy else None,
         "init_policy": str(init_policy) if init_policy else None,
         "init_status": init_status,
+        "anchor_policy": str(resolved_anchor_policy) if anchor_kl_coef > 0 and resolved_anchor_policy else None,
+        "anchor_status": anchor_status,
+        "anchor_kl_coef": anchor_kl_coef,
         "hidden_size": hidden_size,
         "model_type": resolved_model_type,
         "feature_mode": feature_mode,
@@ -521,6 +574,8 @@ def main() -> None:
     parser.add_argument("--clip-range", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.005)
     parser.add_argument("--value-coef", type=float, default=0.5)
+    parser.add_argument("--anchor-policy")
+    parser.add_argument("--anchor-kl-coef", type=float, default=0.0)
     parser.add_argument("--value-warmup-steps", type=int, default=0)
     parser.add_argument("--eval-every", type=int, default=0)
     parser.add_argument("--eval-games", type=int, default=200)
@@ -551,6 +606,8 @@ def main() -> None:
         clip_range=args.clip_range,
         entropy_coef=args.entropy_coef,
         value_coef=args.value_coef,
+        anchor_policy=Path(args.anchor_policy) if args.anchor_policy else None,
+        anchor_kl_coef=args.anchor_kl_coef,
         value_warmup_steps=args.value_warmup_steps,
         eval_every=args.eval_every,
         eval_games=args.eval_games,

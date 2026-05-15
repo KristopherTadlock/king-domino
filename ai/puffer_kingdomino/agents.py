@@ -217,7 +217,7 @@ def load_agent(
 
         payload = torch.load(Path(policy), map_location="cpu")
         metadata = payload.get("metadata", {})
-        hidden_size = int(metadata.get("hidden_size", 64))
+        hidden_size = int(payload.get("hidden_size") or metadata.get("hidden_size", 64))
         model_type = payload.get("model_type") or metadata.get("model_type", "dot")
         feature_mode = payload.get("feature_mode") or metadata.get("feature_mode", STATIC_FEATURE_MODE)
         action_feature_size = int(payload.get("action_feature_size") or metadata.get("action_feature_size") or candidate_feature_size(feature_mode))
