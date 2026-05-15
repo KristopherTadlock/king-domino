@@ -12,6 +12,30 @@ const ORIENTATIONS = [0, 90, 180, 270];
 const ANCHOR_LEFT = 0;
 const ANCHOR_RIGHT = 1;
 const RICH_ACTION_FEATURE_SIZE = 96;
+const DEFAULT_DIFFICULTY = 'challenger';
+const DIFFICULTY_PROFILES = Object.freeze({
+  casual: Object.freeze({
+    mode: 'advisor',
+    draftPressureScale: 0,
+    draftPressureCap: 0,
+    placementBonusScale: 0,
+    placementBonusCap: 0,
+  }),
+  challenger: Object.freeze({
+    mode: 'model',
+    draftPressureScale: 0.04,
+    draftPressureCap: 0.75,
+    placementBonusScale: 0,
+    placementBonusCap: 0,
+  }),
+  sharp: Object.freeze({
+    mode: 'model',
+    draftPressureScale: 0.065,
+    draftPressureCap: 1.15,
+    placementBonusScale: 0.018,
+    placementBonusCap: 0.55,
+  }),
+});
 const TERRAIN = Object.freeze({
   castle: 0,
   wheat: 1,
@@ -30,9 +54,15 @@ function terrainKey(landscape) {
   return landscape?.description ?? String(landscape);
 }
 
+function normalizeDifficulty(difficulty) {
+  const key = String(difficulty ?? '').trim().toLowerCase();
+  return DIFFICULTY_PROFILES[key] ? key : DEFAULT_DIFFICULTY;
+}
+
 export class AIPolicyRunner {
   #advisor = new GameAdvisor();
   #artifact = null;
+  #difficulty = DEFAULT_DIFFICULTY;
 
   get ready() {
     return Boolean(this.#artifact);
@@ -40,6 +70,15 @@ export class AIPolicyRunner {
 
   get backend() {
     return this.#artifact?.metadata?.backend ?? this.#artifact?.backend ?? 'unloaded';
+  }
+
+  get difficulty() {
+    return this.#difficulty;
+  }
+
+  setDifficulty(difficulty) {
+    this.#difficulty = normalizeDifficulty(difficulty);
+    return this.#difficulty;
   }
 
   async load(url = 'ai/artifacts/browser_policy.json') {
@@ -59,6 +98,11 @@ export class AIPolicyRunner {
 
   chooseAction(game, playerIndex) {
     if (!this.ready || !game || game.isGameOver || playerIndex == null) return null;
+    if (this.#difficultyProfile().mode === 'advisor') {
+      if (game.state === GameState.DRAFT) return this.#chooseDraftAction(game, playerIndex);
+      if (game.state === GameState.PLACE) return this.#choosePlacementAction(game, playerIndex);
+      return null;
+    }
     if (this.#artifact?.format === 'kingdomino-weighted-heuristic-v0') {
       return this.#chooseHeuristicAction(game, playerIndex);
     }
@@ -126,11 +170,22 @@ export class AIPolicyRunner {
   }
 
   #candidateActionAdjustment(game, playerIndex, action) {
-    if (game.state !== GameState.DRAFT || action < 0 || action >= DRAFT_ACTIONS) return 0;
-    return this.#draftOpponentPressureBonus(game, playerIndex, action);
+    if (game.state === GameState.DRAFT && action >= 0 && action < DRAFT_ACTIONS) {
+      return this.#draftOpponentPressureBonus(game, playerIndex, action);
+    }
+    if (game.state === GameState.PLACE && action >= DRAFT_ACTIONS && action !== SKIP_ACTION) {
+      return this.#placementTieBreakBonus(game, playerIndex, action);
+    }
+    return 0;
+  }
+
+  #difficultyProfile() {
+    return DIFFICULTY_PROFILES[this.#difficulty] ?? DIFFICULTY_PROFILES[DEFAULT_DIFFICULTY];
   }
 
   #draftOpponentPressureBonus(game, playerIndex, draftIndex) {
+    const profile = this.#difficultyProfile();
+    if (!profile.draftPressureScale) return 0;
     if (game.currentPickingPlayerIndex !== playerIndex) return 0;
     const domino = game.currentDraft?.[draftIndex]?.domino;
     if (!domino) return 0;
@@ -144,7 +199,26 @@ export class AIPolicyRunner {
 
     const pressure = opponentValue - ownValue * 0.7;
     if (pressure <= 0) return 0;
-    return Math.min(0.75, pressure * 0.04);
+    return Math.min(profile.draftPressureCap, pressure * profile.draftPressureScale);
+  }
+
+  #placementTieBreakBonus(game, playerIndex, action) {
+    const profile = this.#difficultyProfile();
+    if (!profile.placementBonusScale) return 0;
+    const decoded = this.#decodePlacementAction(action);
+    if (!decoded) return 0;
+    const domino = game.currentDraft?.[decoded.draftIndex]?.domino;
+    if (!domino) return 0;
+    const boardState = this.#boardFeatureState(game, playerIndex);
+    const cells = this.#cellsForPlacement(domino, decoded.orientation, decoded.x, decoded.y, decoded.anchorEnd);
+    const metrics = this.#placementMetricsForCells(boardState, cells.left, cells.right);
+    const raw = Math.max(0, metrics.scoreDelta)
+      + metrics.sameTouchCount * 1.5
+      + metrics.regionCrownsSum * 0.8
+      - Math.max(0, metrics.widthAfter - 5) * 0.5
+      - Math.max(0, metrics.heightAfter - 5) * 0.5;
+    if (raw <= 0) return 0;
+    return Math.min(profile.placementBonusCap, raw * profile.placementBonusScale);
   }
 
   #draftOpportunityScore(game, playerIndex, domino) {

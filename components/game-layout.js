@@ -79,11 +79,22 @@ const SCORE_HISTORY_STORAGE_KEY = 'kd.completedGames.v1';
 const SCORE_HISTORY_LIMIT = 50;
 const ADVISOR_VISIBILITY_STORAGE_KEY = 'kd.showAdvisor';
 const HOTSEAT_SAVE_STORAGE_KEY = 'kd.hotseatGame.v1';
+const DEFAULT_AI_DIFFICULTY = 'challenger';
+const AI_DIFFICULTY_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'casual', label: 'Casual', description: 'Friendly' }),
+  Object.freeze({ value: 'challenger', label: 'Challenger', description: 'Trained' }),
+  Object.freeze({ value: 'sharp', label: 'Sharp', description: 'Tactical' }),
+]);
 
 const LANDSCAPE_COLOR_BY_KEY = Object.freeze(Object.fromEntries(
   Object.getOwnPropertySymbols(LANDSCAPE_COLORS)
     .map((landscape) => [landscapeKey(landscape), LANDSCAPE_COLORS[landscape]])
 ));
+
+function normalizeAiDifficulty(value) {
+  const key = String(value ?? '').trim().toLowerCase();
+  return AI_DIFFICULTY_OPTIONS.some((option) => option.value === key) ? key : DEFAULT_AI_DIFFICULTY;
+}
 
 function landscapeLabel(landscape) {
   switch (landscape) {
@@ -1139,6 +1150,9 @@ export class GameLayout extends HTMLElement {
 
   /** @type {Set<number>} */
   #aiPlayerIndices = new Set();
+
+  /** @type {string} */
+  #aiDifficulty = DEFAULT_AI_DIFFICULTY;
 
   /** @type {number | null} */
   #aiActionTimer = null;
@@ -3807,12 +3821,13 @@ export class GameLayout extends HTMLElement {
     return [...this.#aiPlayerIndices].filter((index) => Number.isInteger(index)).sort((a, b) => a - b);
   }
 
-  #hotseatSaveSignature(seed, playerNames, playerCount, aiPlayers = this.#hotseatAiPlayers()) {
+  #hotseatSaveSignature(seed, playerNames, playerCount, aiPlayers = this.#hotseatAiPlayers(), aiDifficulty = this.#aiDifficulty) {
     return {
       seed: Number(seed) >>> 0,
       playerCount: this.#normalizePlayerCount(playerCount, this.#playerCount),
       playerNames: (playerNames ?? []).slice(0, playerCount).map((name) => String(name ?? '')),
       aiPlayers: [...aiPlayers].sort((a, b) => a - b),
+      aiDifficulty: normalizeAiDifficulty(aiDifficulty),
     };
   }
 
@@ -3823,7 +3838,8 @@ export class GameLayout extends HTMLElement {
       save.seed,
       Array.isArray(save.playerNames) ? save.playerNames : [],
       save.playerCount,
-      Array.isArray(save.aiPlayers) ? save.aiPlayers : []
+      Array.isArray(save.aiPlayers) ? save.aiPlayers : [],
+      save.aiDifficulty
     );
     return JSON.stringify(actual) === JSON.stringify(expected);
   }
@@ -4616,7 +4632,7 @@ export class GameLayout extends HTMLElement {
     return true;
   }
 
-  #startHotseatGame(name, playerCount = this.#playerCount, { aiOpponent = false } = {}) {
+  #startHotseatGame(name, playerCount = this.#playerCount, { aiOpponent = false, aiDifficulty = this.#aiDifficulty } = {}) {
     const cleanName = this.#savePlayerName(name);
     const count = aiOpponent ? 2 : this.#normalizePlayerCount(playerCount, this.#playerCount);
     const seed = randomSeed();
@@ -4630,6 +4646,7 @@ export class GameLayout extends HTMLElement {
       playerNames[1] = 'AI';
       url.searchParams.set('ai', '1');
       url.searchParams.set('aiPlayers', 'p2');
+      url.searchParams.set('aiDifficulty', normalizeAiDifficulty(aiDifficulty));
     }
     playerNames.forEach((playerName, index) => {
       url.searchParams.set(`p${index + 1}`, playerName);
@@ -4715,6 +4732,8 @@ export class GameLayout extends HTMLElement {
 
   #configureAiFromUrl(params) {
     this.#aiPlayerIndices.clear();
+    this.#aiDifficulty = normalizeAiDifficulty(params.get('aiDifficulty') || params.get('difficulty') || this.#aiDifficulty);
+    this.#aiPolicy.setDifficulty(this.#aiDifficulty);
     const aiEnabled = params.get('ai') === '1' || params.get('ai') === 'true';
     const rawPlayers = params.get('aiPlayers') || params.get('aiPlayer') || '';
 
@@ -8614,6 +8633,22 @@ export class GameLayout extends HTMLElement {
       joinDifferent.textContent = 'Join Room Code';
       fallbackActions.append(fallbackCreate, joinDifferent);
 
+      const aiField = document.createElement('div');
+      aiField.className = 'startField';
+      const aiLabel = document.createElement('label');
+      aiLabel.textContent = 'AI difficulty';
+      const aiDifficultyInput = document.createElement('select');
+      aiDifficultyInput.id = 'kd-start-ai-difficulty';
+      aiLabel.htmlFor = aiDifficultyInput.id;
+      for (const optionConfig of AI_DIFFICULTY_OPTIONS) {
+        const option = document.createElement('option');
+        option.value = optionConfig.value;
+        option.textContent = `${optionConfig.label} - ${optionConfig.description}`;
+        option.selected = optionConfig.value === this.#aiDifficulty;
+        aiDifficultyInput.append(option);
+      }
+      aiField.append(aiLabel, aiDifficultyInput);
+
       const hotseatActions = document.createElement('div');
       hotseatActions.className = 'startActions single';
       const hotseat = document.createElement('button');
@@ -8662,7 +8697,10 @@ export class GameLayout extends HTMLElement {
         this.#startHotseatGame(nameInput.value, Number.parseInt(playersInput.value, 10));
       });
       aiHotseat.addEventListener('click', () => {
-        this.#startHotseatGame(nameInput.value, 2, { aiOpponent: true });
+        this.#startHotseatGame(nameInput.value, 2, {
+          aiOpponent: true,
+          aiDifficulty: aiDifficultyInput.value,
+        });
       });
       highScores.addEventListener('click', () => {
         this.#openScoreHistory();
@@ -8671,10 +8709,10 @@ export class GameLayout extends HTMLElement {
       if (isInviteJoin) {
         form.append(nameField, inviteSummary, actions, moreOptions);
         if (this.#showInviteOptions) {
-          form.append(roomField, playersField, fallbackActions, hotseatActions);
+          form.append(roomField, playersField, fallbackActions, aiField, hotseatActions);
         }
       } else {
-        form.append(nameField, roomField, playersField, actions, hotseatActions);
+        form.append(nameField, roomField, playersField, actions, aiField, hotseatActions);
       }
       card.append(kicker, title, copy, form);
       this.#startOverlay.append(card);

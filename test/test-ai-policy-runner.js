@@ -20,32 +20,33 @@ globalThis.fetch = async (url) => {
 const runner = new AIPolicyRunner();
 await runner.load();
 
-it('browser AI policy should complete a legal two-player hotseat game', () => {
-  const game = new WebGameManager(new GameConfiguration(2, false, true), 123);
-  game.setGroupedPlacementTurns(true);
-  game.start(['Blue', 'Green']);
+function runBrowserAiGame(seed, difficulty = 'challenger') {
+  runner.setDifficulty(difficulty);
+  const seededGame = new WebGameManager(new GameConfiguration(2, false, true), seed);
+  seededGame.setGroupedPlacementTurns(true);
+  seededGame.start(['Blue', 'Green']);
 
   let steps = 0;
-  while (!game.isGameOver && steps < 300) {
-    const activePlayer = game.state === GameState.DRAFT
-      ? game.currentPickingPlayerIndex
-      : game.currentPlacingPlayerIndex;
-    const action = runner.chooseAction(game, activePlayer);
+  while (!seededGame.isGameOver && steps < 300) {
+    const activePlayer = seededGame.state === GameState.DRAFT
+      ? seededGame.currentPickingPlayerIndex
+      : seededGame.currentPlacingPlayerIndex;
+    const action = runner.chooseAction(seededGame, activePlayer);
     assert(Boolean(action));
 
     if (action.type === 'pickDraft') {
-      game.pickDraft(action.payload.index);
+      seededGame.pickDraft(action.payload.index);
     } else if (action.type === 'skip') {
-      const result = game.skipPlacementForPlayer(activePlayer);
+      const result = seededGame.skipPlacementForPlayer(activePlayer);
       assert(result.ok);
     } else if (action.type === 'place') {
-      const selected = game.setPlacementSelectionForPlayer(
+      const selected = seededGame.setPlacementSelectionForPlayer(
         activePlayer,
         action.payload.dominoNumber,
         action.payload.orientation,
       );
       assert(selected.ok);
-      const result = game.tryPlaceDominoAtForPlayer(
+      const result = seededGame.tryPlaceDominoAtForPlayer(
         activePlayer,
         action.payload.x,
         action.payload.y,
@@ -59,7 +60,22 @@ it('browser AI policy should complete a legal two-player hotseat game', () => {
     steps += 1;
   }
 
+  return { game: seededGame, steps };
+}
+
+it('browser AI policy should complete a legal two-player hotseat game', () => {
+  const { game, steps } = runBrowserAiGame(123);
   assert(game.isGameOver);
   assert(steps === 96);
   assert(game.players.every((player) => player.board.score >= 0));
+});
+
+it('browser AI difficulty modes should each complete legal games', () => {
+  for (const difficulty of ['casual', 'challenger', 'sharp']) {
+    const { game, steps } = runBrowserAiGame(124, difficulty);
+    assert(runner.difficulty === difficulty);
+    assert(game.isGameOver);
+    assert(steps === 96);
+    assert(game.players.every((player) => player.board.score >= 0));
+  }
 });
