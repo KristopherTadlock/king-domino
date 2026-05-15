@@ -7,19 +7,33 @@ import random
 
 from .core import KingdominoEnv, random_legal_action
 
+try:
+    from .native import NativeKingdominoEnv
+except ImportError:  # pragma: no cover - extension intentionally optional
+    NativeKingdominoEnv = None
 
-def run_games(games: int, seed: int) -> dict:
+
+def _make_env(seed: int, native: bool = True):
+    if native and NativeKingdominoEnv is not None:
+        return NativeKingdominoEnv(seed=seed)
+    return KingdominoEnv(seed=seed)
+
+
+def run_games(games: int, seed: int, native: bool = True) -> dict:
     rng = random.Random(seed)
     wins = [0, 0]
     ties = 0
     total_steps = 0
 
     for game_index in range(games):
-        env = KingdominoEnv(seed=(seed + game_index) & 0xFFFFFFFF)
+        env = _make_env((seed + game_index) & 0xFFFFFFFF, native=native)
         steps = 0
         while not env.done:
-            action = random_legal_action(env, rng)
-            _obs, _reward, done, info = env.step(action, observe=False)
+            if hasattr(env, "step_random_legal"):
+                _obs, _reward, done, info = env.step_random_legal(rng, observe=False)
+            else:
+                action = random_legal_action(env, rng)
+                _obs, _reward, done, info = env.step(action, observe=False)
             steps += 1
             if "error" in info:
                 raise RuntimeError(f"illegal rollout state in game {game_index}: {info['error']}")
@@ -42,6 +56,7 @@ def run_games(games: int, seed: int) -> dict:
         "wins": wins,
         "ties": ties,
         "avg_steps": total_steps / games if games else 0,
+        "native": bool(native and NativeKingdominoEnv is not None),
     }
 
 
@@ -49,8 +64,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--python-env", action="store_true")
     args = parser.parse_args()
-    result = run_games(args.games, args.seed)
+    result = run_games(args.games, args.seed, native=not args.python_env)
     print(result)
 
 

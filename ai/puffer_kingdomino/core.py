@@ -627,6 +627,8 @@ class KingdominoEnv:
 
 
 def random_legal_action(env: KingdominoEnv, rng: random.Random) -> int:
+    if hasattr(env, "sample_legal_action"):
+        return int(env.sample_legal_action(rng))
     legal = env.legal_actions()
     if not legal:
         raise RuntimeError("no legal actions available")

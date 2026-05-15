@@ -83,6 +83,8 @@ cdef int COORD_MIN = -6
 cdef int COORD_MAX = 6
 cdef int COORD_SPAN = 13
 DEF BOARD_CELLS_CONST = 169
+DEF ACTION_COUNT_CONST = 5413
+DEF PLACEMENT_SEEN_CONST = BOARD_CELLS_CONST * BOARD_CELLS_CONST * 2
 cdef int BOARD_CELLS = BOARD_CELLS_CONST
 cdef int N_DRAFT_ACTIONS = 4
 cdef int N_PLACEMENT_ACTIONS = 4 * 4 * COORD_SPAN * COORD_SPAN * 2
@@ -185,12 +187,18 @@ cdef class NativeKingdominoEnv:
     cdef int crowns[2][BOARD_CELLS_CONST]
     cdef int domino_num[2][BOARD_CELLS_CONST]
     cdef int domino_end[2][BOARD_CELLS_CONST]
+    cdef int board_x_min[2]
+    cdef int board_x_max[2]
+    cdef int board_y_min[2]
+    cdef int board_y_max[2]
     cdef int current_draft_num[4]
     cdef int draft_player[4]
     cdef int draft_placed[4]
     cdef int pick_order_values[4]
     cdef int place_order_values[4]
     cdef int place_count
+    cdef unsigned int placement_seen[PLACEMENT_SEEN_CONST]
+    cdef unsigned int placement_seen_stamp
 
     def __init__(self, int seed=1):
         self.reset(seed)
@@ -251,6 +259,11 @@ cdef class NativeKingdominoEnv:
         i = _coord_to_idx(0, 0)
         self.terrain[0][i] = TERRAIN_CASTLE
         self.terrain[1][i] = TERRAIN_CASTLE
+        for i in range(2):
+            self.board_x_min[i] = 0
+            self.board_x_max[i] = 0
+            self.board_y_min[i] = 0
+            self.board_y_max[i] = 0
 
         base0 = 0
         base1 = 1
@@ -299,10 +312,28 @@ cdef class NativeKingdominoEnv:
 
     def action_mask(self):
         cdef list mask = [0] * N_ACTION_COUNT
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
         cdef int action
-        for action in self.legal_actions():
+        count = self._fill_legal_actions_fast(actions)
+        for i in range(count):
+            action = actions[i]
             mask[action] = 1
         return mask
+
+    def legal_action_count(self):
+        cdef int actions[ACTION_COUNT_CONST]
+        return self._fill_legal_actions_fast(actions)
+
+    def sample_legal_action(self, object rng):
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count = self._fill_legal_actions_fast(actions)
+        cdef int index
+        if count <= 0:
+            raise RuntimeError("no legal actions available")
+        index = <int>rng.randrange(count)
+        return actions[index]
 
     def observe(self):
         cdef tuple scores = self.scores()
@@ -335,23 +366,44 @@ cdef class NativeKingdominoEnv:
         }
 
     def step(self, int action, bint observe=True):
+        if self.done_flag:
+            return self._step_observation(observe), 0.0, True, {"error": "game already done"}
+
+        if not self._is_legal_action_fast(action):
+            self.done_flag = 1
+            self.phase = PHASE_DONE
+            return self._step_observation(observe), -1.0, True, {"error": f"illegal action {action}"}
+
+        return self._step_after_legal(action, observe)
+
+    def step_known_legal(self, int action, bint observe=False):
+        if self.done_flag:
+            return self._step_observation(observe), 0.0, True, {"error": "game already done"}
+        return self._step_after_legal(action, observe)
+
+    def step_random_legal(self, object rng, bint observe=False):
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int action
+        if self.done_flag:
+            return self._step_observation(observe), 0.0, True, {"error": "game already done"}
+        count = self._fill_legal_actions_fast(actions)
+        if count <= 0:
+            self.done_flag = 1
+            self.phase = PHASE_DONE
+            return self._step_observation(observe), -1.0, True, {"error": "no legal actions available"}
+        action = actions[<int>rng.randrange(count)]
+        return self._step_after_legal(action, observe)
+
+    cdef object _step_after_legal(self, int action, bint observe):
         cdef int player_before
         cdef tuple scores_before
         cdef tuple scores_after
         cdef double reward
         cdef dict info
-        cdef list legal
-
-        if self.done_flag:
-            return self._step_observation(observe), 0.0, True, {"error": "game already done"}
 
         player_before = self._current_player()
         scores_before = self.scores()
-        legal = self.legal_actions()
-        if action not in legal:
-            self.done_flag = 1
-            self.phase = PHASE_DONE
-            return self._step_observation(observe), -1.0, True, {"error": f"illegal action {action}"}
 
         if self.phase == PHASE_DRAFT:
             self._pick_draft(action)
@@ -425,6 +477,152 @@ cdef class NativeKingdominoEnv:
         if observe:
             return self.observe()
         return None
+
+    cdef int _fill_legal_actions_fast(self, int* actions):
+        cdef int i
+        cdef int count = 0
+        cdef int player
+        if self.done_flag:
+            return 0
+        if self.phase == PHASE_DRAFT:
+            for i in range(4):
+                if self.draft_player[i] < 0 and not self.draft_placed[i]:
+                    actions[count] = i
+                    count += 1
+            return count
+        if self.phase == PHASE_PLACE:
+            player = self._current_player()
+            count = self._fill_placement_actions_fast(player, actions)
+            if count == 0:
+                actions[0] = N_SKIP_ACTION
+                return 1
+            return count
+        return 0
+
+    cdef bint _is_legal_action_fast(self, int action):
+        cdef int actions[ACTION_COUNT_CONST]
+        cdef int count
+        cdef int i
+        count = self._fill_legal_actions_fast(actions)
+        for i in range(count):
+            if actions[i] == action:
+                return True
+        return False
+
+    cdef int _fill_placement_actions_fast(self, int player, int* actions):
+        cdef int candidates_x[BOARD_CELLS_CONST]
+        cdef int candidates_y[BOARD_CELLS_CONST]
+        cdef int candidate_seen[BOARD_CELLS_CONST]
+        cdef int candidate_count = 0
+        cdef int action_count = 0
+        cdef int idx
+        cdef int seen_index
+        cdef unsigned int stamp
+        cdef int draft_index
+        cdef int orientation_steps
+        cdef int orientation
+        cdef int candidate_index
+        cdef int x
+        cdef int y
+        cdef int anchor_end
+        cdef int number
+        cdef int lx
+        cdef int ly
+        cdef int rx
+        cdef int ry
+        cdef int lidx
+        cdef int ridx
+        cdef int low_idx
+        cdef int high_idx
+        cdef int assignment
+        cdef int lt
+        cdef int lc
+        cdef int rt
+        cdef int rc
+
+        if self.phase != PHASE_PLACE or player < 0:
+            return 0
+
+        for idx in range(BOARD_CELLS):
+            candidate_seen[idx] = 0
+
+        for idx in range(BOARD_CELLS):
+            if self.terrain[player][idx] == TERRAIN_EMPTY:
+                continue
+            x = _idx_to_x(idx)
+            y = _idx_to_y(idx)
+            self._add_candidate_fast(player, x + 1, y, candidate_seen, candidates_x, candidates_y, &candidate_count)
+            self._add_candidate_fast(player, x - 1, y, candidate_seen, candidates_x, candidates_y, &candidate_count)
+            self._add_candidate_fast(player, x, y + 1, candidate_seen, candidates_x, candidates_y, &candidate_count)
+            self._add_candidate_fast(player, x, y - 1, candidate_seen, candidates_x, candidates_y, &candidate_count)
+
+        if candidate_count == 0:
+            candidates_x[0] = 0
+            candidates_y[0] = 0
+            candidate_count = 1
+
+        for draft_index in range(4):
+            if self.draft_player[draft_index] != player or self.draft_placed[draft_index]:
+                continue
+            self.placement_seen_stamp += 1
+            if self.placement_seen_stamp == 0:
+                for seen_index in range(PLACEMENT_SEEN_CONST):
+                    self.placement_seen[seen_index] = 0
+                self.placement_seen_stamp = 1
+            stamp = self.placement_seen_stamp
+            number = self.current_draft_num[draft_index]
+            lt = <int>DECK_LEFT_TERRAIN[number]
+            lc = <int>DECK_LEFT_CROWNS[number]
+            rt = <int>DECK_RIGHT_TERRAIN[number]
+            rc = <int>DECK_RIGHT_CROWNS[number]
+            for orientation_steps in range(4):
+                orientation = orientation_steps * 90
+                for candidate_index in range(candidate_count):
+                    x = candidates_x[candidate_index]
+                    y = candidates_y[candidate_index]
+                    anchor_end = self._feedback_anchor_end(player, number, orientation, x, y)
+                    if anchor_end < 0:
+                        continue
+
+                    self._cells_for(orientation, x, y, anchor_end, &lx, &ly, &rx, &ry)
+                    lidx = _coord_to_idx(lx, ly)
+                    ridx = _coord_to_idx(rx, ry)
+                    if lidx <= ridx:
+                        low_idx = lidx
+                        high_idx = ridx
+                        assignment = 0
+                    else:
+                        low_idx = ridx
+                        high_idx = lidx
+                        assignment = 1
+                    if lt == rt and lc == rc:
+                        assignment = 0
+                    seen_index = ((low_idx * BOARD_CELLS + high_idx) * 2) + assignment
+                    if self.placement_seen[seen_index] == stamp:
+                        continue
+                    self.placement_seen[seen_index] = stamp
+                    actions[action_count] = _encode_placement_action(draft_index, orientation, x, y, anchor_end)
+                    action_count += 1
+
+        return action_count
+
+    cdef void _add_candidate_fast(
+        self,
+        int player,
+        int x,
+        int y,
+        int* candidate_seen,
+        int* candidates_x,
+        int* candidates_y,
+        int* candidate_count,
+    ):
+        cdef int idx = _coord_to_idx(x, y)
+        if idx < 0 or self.terrain[player][idx] != TERRAIN_EMPTY or candidate_seen[idx]:
+            return
+        candidate_seen[idx] = 1
+        candidates_x[candidate_count[0]] = x
+        candidates_y[candidate_count[0]] = y
+        candidate_count[0] += 1
 
     cdef int _current_player(self):
         if self.done_flag:
@@ -559,6 +757,8 @@ cdef class NativeKingdominoEnv:
         self.crowns[player][ridx] = <int>DECK_RIGHT_CROWNS[number]
         self.domino_num[player][ridx] = number
         self.domino_end[player][ridx] = ANCHOR_RIGHT
+        self._expand_board_bounds(player, lx, ly)
+        self._expand_board_bounds(player, rx, ry)
         self.draft_placed[draft_index] = 1
         self._advance_placement()
 
@@ -739,27 +939,37 @@ cdef class NativeKingdominoEnv:
         return (number, rx, ry, rt, rc, lx, ly, lt, lc)
 
     cdef bint _within_board_limit(self, int player, int lx, int ly, int rx, int ry):
-        cdef int idx
-        cdef int x
-        cdef int y
-        cdef int x_min = lx if lx < rx else rx
-        cdef int x_max = lx if lx > rx else rx
-        cdef int y_min = ly if ly < ry else ry
-        cdef int y_max = ly if ly > ry else ry
-        for idx in range(BOARD_CELLS):
-            if self.terrain[player][idx] == TERRAIN_EMPTY:
-                continue
-            x = _idx_to_x(idx)
-            y = _idx_to_y(idx)
-            if x < x_min:
-                x_min = x
-            if x > x_max:
-                x_max = x
-            if y < y_min:
-                y_min = y
-            if y > y_max:
-                y_max = y
+        cdef int x_min = self.board_x_min[player]
+        cdef int x_max = self.board_x_max[player]
+        cdef int y_min = self.board_y_min[player]
+        cdef int y_max = self.board_y_max[player]
+        if lx < x_min:
+            x_min = lx
+        if rx < x_min:
+            x_min = rx
+        if lx > x_max:
+            x_max = lx
+        if rx > x_max:
+            x_max = rx
+        if ly < y_min:
+            y_min = ly
+        if ry < y_min:
+            y_min = ry
+        if ly > y_max:
+            y_max = ly
+        if ry > y_max:
+            y_max = ry
         return (x_max - x_min + 1) <= BOARD_LIMIT and (y_max - y_min + 1) <= BOARD_LIMIT
+
+    cdef void _expand_board_bounds(self, int player, int x, int y):
+        if x < self.board_x_min[player]:
+            self.board_x_min[player] = x
+        if x > self.board_x_max[player]:
+            self.board_x_max[player] = x
+        if y < self.board_y_min[player]:
+            self.board_y_min[player] = y
+        if y > self.board_y_max[player]:
+            self.board_y_max[player] = y
 
     cdef bint _has_any_neighbor(self, int player, int x, int y):
         return (

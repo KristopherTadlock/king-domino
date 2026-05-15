@@ -16,6 +16,8 @@ Current state:
 - PufferLib adapter smoke test for the current action/observation contract.
 - Torch checkpoint at `ai/artifacts/latest.pt`.
 - Browser-loadable exported policy at `ai/artifacts/browser_policy.json`.
+- Profiling benchmark for Python, native compatibility, optimized native, and
+  multi-env native rollout paths.
 
 The current trainer uses imitation learning from the native greedy expert. This
 is not full PPO yet, but it is a real Torch train/eval/export path and uses the
@@ -33,6 +35,19 @@ same observation/action-mask contract that PPO will use next.
 .venv/bin/python -m ai.puffer_kingdomino.eval --policy ai/artifacts/latest.pt --games 200 --seed 456 --opponent greedy
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/latest.pt --output ai/artifacts/browser_policy.json
 ```
+
+The benchmark reports a recorded pre-optimization native baseline and the
+current optimized rollout path. On the local reference run for this pass:
+
+- recorded native baseline: about `31k` steps/sec
+- native compatibility path: about `139k` steps/sec
+- optimized native rollout: about `224k` steps/sec
+- 64-env native rollout loop: about `212k` steps/sec
+
+The current bottlenecks are now observation/action-mask generation and policy
+forward speed, not board scoring or the 7x7 bounds check. That points the next
+PPO-oriented optimization at reusable observation buffers, reusable action-mask
+buffers, and eventually a smaller or factorized action head.
 
 For browser play against the current executable policy:
 

@@ -46,9 +46,15 @@ def _advance_opponent(env, rng: random.Random, opponent: str) -> None:
     while not env.done and env.current_player == 1 and guard < 128:
         if opponent == "greedy":
             action = _expert_action(env, player=1)
+            if hasattr(env, "step_known_legal"):
+                _obs, _reward, _done, info = env.step_known_legal(action, observe=False)
+            else:
+                _obs, _reward, _done, info = env.step(action, observe=False)
+        elif hasattr(env, "step_random_legal"):
+            _obs, _reward, _done, info = env.step_random_legal(rng, observe=False)
         else:
             action = random_legal_action(env, rng)
-        _obs, _reward, _done, info = env.step(action, observe=False)
+            _obs, _reward, _done, info = env.step(action, observe=False)
         if "error" in info:
             raise RuntimeError(info["error"])
         guard += 1
@@ -91,7 +97,10 @@ def train(
         batch_obs.append(observation_vector(env))
         batch_targets.append(target)
 
-        _obs, _reward, _done, info = env.step(target, observe=False)
+        if hasattr(env, "step_known_legal"):
+            _obs, _reward, _done, info = env.step_known_legal(target, observe=False)
+        else:
+            _obs, _reward, _done, info = env.step(target, observe=False)
         if "error" in info:
             raise RuntimeError(info["error"])
 

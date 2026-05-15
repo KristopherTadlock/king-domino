@@ -67,8 +67,11 @@ class PufferKingdominoEnv(pufferlib.PufferEnv):
     def _play_until_learning_turn(self):
         guard = 0
         while not self.env.done and self.env.current_player == 1 and guard < 128:
-            action = random_legal_action(self.env, self.rng)
-            self.env.step(action, observe=False)
+            if hasattr(self.env, "step_random_legal"):
+                self.env.step_random_legal(self.rng, observe=False)
+            else:
+                action = random_legal_action(self.env, self.rng)
+                self.env.step(action, observe=False)
             guard += 1
         if guard >= 128:
             raise RuntimeError("opponent rollout exceeded guard")
