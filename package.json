@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "node test/test-runner.js",
+    "ai:eval": "node tools/ai-fair-eval.mjs",
     "perf": "node tools/perf-harness.mjs",
     "test:ws": "node tools/ws-smoke.mjs",
     "start": "http-server &",

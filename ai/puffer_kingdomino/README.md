@@ -28,6 +28,8 @@ Current state:
   `1`, and terrain ids are shifted by one in board features.
 - Native rich-candidate feature generation and browser export for the
   placement-aware candidate policy path.
+- Browser-side difficulty profiles with optional structured decision traces,
+  opponent-aware draft shaping, and placement-quality tie breaks.
 
 The Torch trainer uses imitation learning from native experts. This is not full
 PPO yet, but it is a real Torch train/eval/export path and uses the same
@@ -71,6 +73,8 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 321 --output ai/artifacts/ppo_candidate_rich_anchor_1m_native.pt --best-output ai/artifacts/ppo_candidate_rich_anchor_1m_native_best.pt --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_canon_50k_candidate_interaction_rich_hybrid.pt --hidden-size 128 --model-type interaction --feature-mode rich --opponent-curriculum greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --anchor-kl-coef 0.05 --eval-every 100000 --eval-games 400 --eval-seed 456 --eval-opponents greedy heuristic --report ai/artifacts/ppo_candidate_rich_anchor_1m_native.json
 .venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/ppo_candidate_rich_anchor_1m_native.pt --output ai/artifacts/browser_policy.json
 .venv/bin/python -m ai.puffer_kingdomino.policy_diagnostic --policy-kind candidate --policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --reference-kind greedy --opponent-kind greedy --games 1000 --seed 456
+npm run ai:eval -- --policy=sharp --opponent=challenger --games=500 --seed=123
+npm run ai:eval -- --policy=sharp --opponent=random --games=500 --seed=123 --json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -357,6 +361,46 @@ http://127.0.0.1:8080/?hotseat=1&seed=123&p1=Human&p2=AI&ai=1
 The browser runner loads `browser_policy.json` first. That artifact is now the
 exported rich candidate PPO policy; `heuristic_policy.json` remains the fallback
 if the browser neural artifact is missing.
+
+## Browser Difficulty And Tracing
+
+The browser AI has three lobby profiles:
+
+- `casual`: uses the existing advisor for a readable, lower-pressure opponent.
+- `challenger`: uses the browser policy plus small tactical shaping.
+- `sharp`: uses the same browser policy with stronger opponent-aware draft
+  denial and richer placement-quality shaping.
+
+Draft shaping considers the domino's value on the AI board, the best opponent
+value for that same domino, how hard it is to place, terrain affinity, crowns,
+and future mobility. Placement shaping adds immediate score delta, same-terrain
+contacts, crown-region context, expansion space, board growth, isolated-crown
+penalties, crowded mismatches, distance, and late 7x7 pressure.
+
+For browser inspection, add `aiTrace=1` to the URL and call:
+
+```js
+kingdominoAiTrace()
+kingdominoAiTraces()
+```
+
+Use `aiDebug=1` to also print each structured trace as it happens. Normal play
+does not show any debug UI. Each trace records the source policy, phase,
+difficulty, chosen action, top candidates, model score, heuristic adjustment,
+score components, and a short reason such as `Blocks opponent`, `Immediate
+points`, or `Keeps space`.
+
+`npm run ai:eval` is the browser-runner fair evaluation harness. It plays each
+seed twice with seats swapped and reports win rate, ties, average scores,
+average margin, illegal/crash count, and an approximate 95% confidence interval.
+Local reference checks for this browser-side pass:
+
+- `sharp` vs `challenger`, 500 seat-swapped games, seed `123`: `50.8%` win
+  rate, `1.2%` ties, average score `121.1` vs `119.7`, mean margin `+1.4`,
+  zero illegal/crash count. This is a small edge rather than a new strategic
+  tier, but it confirms the sharper tactical layer is legal and measurable.
+- `sharp` vs `random`, 200 seat-swapped games, seed `123`: `100%` win rate,
+  average score `138.9` vs `44.8`, zero illegal/crash count.
 
 ## Action Space
 

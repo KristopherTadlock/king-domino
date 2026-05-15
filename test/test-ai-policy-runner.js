@@ -79,3 +79,30 @@ it('browser AI difficulty modes should each complete legal games', () => {
     assert(game.players.every((player) => player.board.score >= 0));
   }
 });
+
+it('browser AI decision trace explains draft and placement choices when enabled', () => {
+  runner.setDifficulty('sharp');
+  runner.setTraceEnabled(true);
+  const game = new WebGameManager(new GameConfiguration(2, false, true), 125);
+  game.setGroupedPlacementTurns(true);
+  game.start(['Blue', 'Green']);
+
+  const draftAction = runner.chooseAction(game, game.currentPickingPlayerIndex);
+  assert(draftAction?.type === 'pickDraft');
+  assert(runner.lastDecisionTrace?.phase === 'draft');
+  assert(runner.lastDecisionTrace?.candidates?.length > 0);
+  game.pickDraft(draftAction.payload.index);
+  while (game.state === GameState.DRAFT) {
+    const playerIndex = game.currentPickingPlayerIndex;
+    const action = runner.chooseAction(game, playerIndex);
+    game.pickDraft(action.payload.index);
+  }
+
+  const playerIndex = game.currentPlacingPlayerIndex;
+  const placeAction = runner.chooseAction(game, playerIndex);
+  assert(placeAction?.type === 'place' || placeAction?.type === 'skip');
+  assert(runner.lastDecisionTrace?.phase === 'place');
+  assert(runner.lastDecisionTrace?.chosen?.type === placeAction.type);
+  assert(runner.drainDecisionTraces().length >= 2);
+  runner.setTraceEnabled(false);
+});

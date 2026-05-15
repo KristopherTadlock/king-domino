@@ -4758,6 +4758,18 @@ export class GameLayout extends HTMLElement {
     this.#aiPlayerIndices.clear();
     this.#aiDifficulty = normalizeAiDifficulty(params.get('aiDifficulty') || params.get('difficulty') || this.#aiDifficulty);
     this.#aiPolicy.setDifficulty(this.#aiDifficulty);
+    const aiTraceEnabled = params.get('aiDebug') === '1' || params.get('aiTrace') === '1';
+    this.#aiPolicy.setTraceEnabled(aiTraceEnabled);
+    if (typeof window !== 'undefined') {
+      window.KINGDOMINO_AI_DEBUG = params.get('aiDebug') === '1';
+      if (aiTraceEnabled) {
+        window.kingdominoAiTrace = () => this.#aiPolicy.lastDecisionTrace;
+        window.kingdominoAiTraces = () => this.#aiPolicy.drainDecisionTraces();
+      } else {
+        delete window.kingdominoAiTrace;
+        delete window.kingdominoAiTraces;
+      }
+    }
     const aiEnabled = params.get('ai') === '1' || params.get('ai') === 'true';
     const rawPlayers = params.get('aiPlayers') || params.get('aiPlayer') || '';
 

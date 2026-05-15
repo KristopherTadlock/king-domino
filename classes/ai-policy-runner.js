@@ -18,22 +18,28 @@ const DIFFICULTY_PROFILES = Object.freeze({
     mode: 'advisor',
     draftPressureScale: 0,
     draftPressureCap: 0,
+    draftOwnScale: 0,
+    draftPlaceabilityScale: 0,
     placementBonusScale: 0,
     placementBonusCap: 0,
   }),
   challenger: Object.freeze({
     mode: 'model',
-    draftPressureScale: 0.04,
-    draftPressureCap: 0.75,
-    placementBonusScale: 0,
-    placementBonusCap: 0,
+    draftPressureScale: 0.015,
+    draftPressureCap: 0.25,
+    draftOwnScale: 0.002,
+    draftPlaceabilityScale: 0.006,
+    placementBonusScale: 0.004,
+    placementBonusCap: 0.15,
   }),
   sharp: Object.freeze({
     mode: 'model',
-    draftPressureScale: 0.065,
-    draftPressureCap: 1.15,
-    placementBonusScale: 0.018,
-    placementBonusCap: 0.55,
+    draftPressureScale: 0.18,
+    draftPressureCap: 3.2,
+    draftOwnScale: 0.052,
+    draftPlaceabilityScale: 0.105,
+    placementBonusScale: 0.11,
+    placementBonusCap: 4.8,
   }),
 });
 const TERRAIN = Object.freeze({
@@ -63,6 +69,9 @@ export class AIPolicyRunner {
   #advisor = new GameAdvisor();
   #artifact = null;
   #difficulty = DEFAULT_DIFFICULTY;
+  #traceEnabled = false;
+  #lastDecisionTrace = null;
+  #decisionTraces = [];
 
   get ready() {
     return Boolean(this.#artifact);
@@ -76,9 +85,25 @@ export class AIPolicyRunner {
     return this.#difficulty;
   }
 
+  get lastDecisionTrace() {
+    return this.#lastDecisionTrace;
+  }
+
   setDifficulty(difficulty) {
     this.#difficulty = normalizeDifficulty(difficulty);
     return this.#difficulty;
+  }
+
+  setTraceEnabled(enabled = true) {
+    this.#traceEnabled = Boolean(enabled);
+    if (!this.#traceEnabled) this.#decisionTraces = [];
+    return this.#traceEnabled;
+  }
+
+  drainDecisionTraces() {
+    const traces = this.#decisionTraces;
+    this.#decisionTraces = [];
+    return traces;
   }
 
   async load(url = 'ai/artifacts/browser_policy.json') {
@@ -129,17 +154,37 @@ export class AIPolicyRunner {
     const state = this.#linearTanh(policy.weights.obsWeight, policy.weights.obsBias, obs);
     let bestAction = legalActions[0];
     let bestScore = -Infinity;
+    const traceCandidates = this.#traceEnabled ? [] : null;
     for (const action of legalActions) {
       const features = this.#candidateFeatures(game, playerIndex, action, policy.featureMode);
       if (!features) continue;
-      const score = this.#candidatePolicyScore(policy, state, features)
-        + this.#candidateActionAdjustment(game, playerIndex, action);
+      const modelScore = this.#candidatePolicyScore(policy, state, features);
+      const adjustment = this.#candidateActionAdjustmentBreakdown(game, playerIndex, action);
+      const score = modelScore + adjustment.score;
+      if (traceCandidates) {
+        traceCandidates.push({
+          action: this.#describeEncodedAction(game, action),
+          modelScore,
+          adjustment: adjustment.score,
+          totalScore: score,
+          reason: adjustment.reason,
+          components: adjustment.components,
+        });
+      }
       if (score > bestScore) {
         bestScore = score;
         bestAction = action;
       }
     }
-    return this.#toGameAction(game, bestAction);
+    const gameAction = this.#toGameAction(game, bestAction);
+    this.#recordDecisionTrace({
+      source: 'candidate-policy',
+      phase: game.state?.description ?? String(game.state),
+      playerIndex,
+      chosen: this.#describeEncodedAction(game, bestAction),
+      candidates: this.#topTraceCandidates(traceCandidates),
+    });
+    return gameAction;
   }
 
   #candidatePolicyScore(policy, state, features) {
@@ -170,13 +215,17 @@ export class AIPolicyRunner {
   }
 
   #candidateActionAdjustment(game, playerIndex, action) {
+    return this.#candidateActionAdjustmentBreakdown(game, playerIndex, action).score;
+  }
+
+  #candidateActionAdjustmentBreakdown(game, playerIndex, action) {
     if (game.state === GameState.DRAFT && action >= 0 && action < DRAFT_ACTIONS) {
-      return this.#draftOpponentPressureBonus(game, playerIndex, action);
+      return this.#draftScoreBreakdown(game, playerIndex, action);
     }
     if (game.state === GameState.PLACE && action >= DRAFT_ACTIONS && action !== SKIP_ACTION) {
-      return this.#placementTieBreakBonus(game, playerIndex, action);
+      return this.#placementTieBreakBreakdown(game, playerIndex, action);
     }
-    return 0;
+    return { score: 0, reason: 'Policy score only', components: {} };
   }
 
   #difficultyProfile() {
@@ -184,53 +233,178 @@ export class AIPolicyRunner {
   }
 
   #draftOpponentPressureBonus(game, playerIndex, draftIndex) {
-    const profile = this.#difficultyProfile();
-    if (!profile.draftPressureScale) return 0;
-    if (game.currentPickingPlayerIndex !== playerIndex) return 0;
-    const domino = game.currentDraft?.[draftIndex]?.domino;
-    if (!domino) return 0;
+    return this.#draftScoreBreakdown(game, playerIndex, draftIndex).score;
+  }
 
-    const ownValue = this.#draftOpportunityScore(game, playerIndex, domino);
-    let opponentValue = 0;
+  #draftScoreBreakdown(game, playerIndex, draftIndex) {
+    const profile = this.#difficultyProfile();
+    const empty = { score: 0, reason: 'No draft adjustment', components: {} };
+    if (game.currentPickingPlayerIndex !== playerIndex) return empty;
+    const domino = game.currentDraft?.[draftIndex]?.domino;
+    if (!domino) return empty;
+
+    const own = this.#draftOpportunityBreakdown(game, playerIndex, domino);
+    let bestOpponent = null;
     for (let opponentIndex = 0; opponentIndex < (game.players?.length ?? 0); opponentIndex += 1) {
       if (opponentIndex === playerIndex) continue;
-      opponentValue = Math.max(opponentValue, this.#draftOpportunityScore(game, opponentIndex, domino));
+      const opponent = this.#draftOpportunityBreakdown(game, opponentIndex, domino);
+      if (!bestOpponent || opponent.score > bestOpponent.score) {
+        bestOpponent = { playerIndex: opponentIndex, ...opponent };
+      }
     }
 
-    const pressure = opponentValue - ownValue * 0.7;
-    if (pressure <= 0) return 0;
-    return Math.min(profile.draftPressureCap, pressure * profile.draftPressureScale);
+    const opponentValue = bestOpponent?.score ?? 0;
+    const denialPressure = Math.max(0, opponentValue - own.score * 0.65);
+    const ownBonus = own.score * (profile.draftOwnScale ?? 0);
+    const denialBonus = denialPressure * (profile.draftPressureScale ?? 0);
+    const placeabilityBonus = Math.log1p(Math.max(0, own.mobilityCount)) * (profile.draftPlaceabilityScale ?? 0);
+    const cap = profile.draftPressureCap ?? 0;
+    const total = ownBonus + denialBonus + placeabilityBonus;
+    const score = cap > 0 ? Math.max(-cap, Math.min(cap, total)) : total;
+    let reason = 'Flexible draft';
+    if (denialBonus > Math.abs(ownBonus) && denialBonus > placeabilityBonus) {
+      reason = 'Blocks opponent';
+    } else if (own.bestScoreDelta > 0) {
+      reason = 'Future score';
+    } else if (own.mobilityCount <= 2) {
+      reason = 'Hard to place';
+    } else if (own.terrainAffinity > 0) {
+      reason = 'Fits board';
+    }
+    return {
+      score,
+      reason,
+      components: {
+        ownValue: own.score,
+        bestOpponentValue: opponentValue,
+        bestOpponentIndex: bestOpponent?.playerIndex ?? null,
+        denialPressure,
+        ownBonus,
+        denialBonus,
+        placeabilityBonus,
+        own,
+        bestOpponent,
+      },
+    };
   }
 
   #placementTieBreakBonus(game, playerIndex, action) {
+    return this.#placementTieBreakBreakdown(game, playerIndex, action).score;
+  }
+
+  #placementTieBreakBreakdown(game, playerIndex, action) {
     const profile = this.#difficultyProfile();
-    if (!profile.placementBonusScale) return 0;
     const decoded = this.#decodePlacementAction(action);
-    if (!decoded) return 0;
+    if (!decoded) return { score: 0, reason: 'No placement adjustment', components: {} };
     const domino = game.currentDraft?.[decoded.draftIndex]?.domino;
-    if (!domino) return 0;
+    if (!domino) return { score: 0, reason: 'No placement adjustment', components: {} };
     const boardState = this.#boardFeatureState(game, playerIndex);
     const cells = this.#cellsForPlacement(domino, decoded.orientation, decoded.x, decoded.y, decoded.anchorEnd);
-    const metrics = this.#placementMetricsForCells(boardState, cells.left, cells.right);
-    const raw = Math.max(0, metrics.scoreDelta)
-      + metrics.sameTouchCount * 1.5
-      + metrics.regionCrownsSum * 0.8
-      - Math.max(0, metrics.widthAfter - 5) * 0.5
-      - Math.max(0, metrics.heightAfter - 5) * 0.5;
-    if (raw <= 0) return 0;
-    return Math.min(profile.placementBonusCap, raw * profile.placementBonusScale);
+    return this.#placementScoreBreakdown(boardState, cells, profile);
   }
 
   #draftOpportunityScore(game, playerIndex, domino) {
+    return this.#draftOpportunityBreakdown(game, playerIndex, domino).score;
+  }
+
+  #draftOpportunityBreakdown(game, playerIndex, domino) {
     const boardState = this.#boardFeatureState(game, playerIndex);
     const metrics = this.#bestMobilityMetrics(boardState, domino);
     const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
     const diversity = terrainKey(domino.leftEnd?.landscape) === terrainKey(domino.rightEnd?.landscape) ? 0 : 1;
-    return metrics.bestScoreDelta
+    const terrainAffinity = this.#dominoTerrainAffinity(boardState, domino);
+    const score = metrics.bestScoreDelta
       + metrics.bestTouchCount * 0.75
       + Math.min(24, metrics.count) * 0.12
       + crowns * 1.25
-      + diversity * 0.4;
+      + diversity * 0.4
+      + terrainAffinity * 0.45
+      + Math.log1p(Math.max(0, metrics.count)) * 0.35
+      - (metrics.count ? 0 : 4);
+    return {
+      score,
+      mobilityCount: metrics.count,
+      bestScoreDelta: metrics.bestScoreDelta,
+      bestTouchCount: metrics.bestTouchCount,
+      crowns,
+      diversity,
+      terrainAffinity,
+    };
+  }
+
+  #placementScoreBreakdown(boardState, cells, profile = this.#difficultyProfile()) {
+    const metrics = this.#placementMetricsForCells(boardState, cells.left, cells.right);
+    const leftIsIsolatedCrown = cells.left.crowns > 0
+      && metrics.leftSameTouches === 0
+      && metrics.leftCastleTouches === 0;
+    const rightIsIsolatedCrown = cells.right.crowns > 0
+      && metrics.rightSameTouches === 0
+      && metrics.rightCastleTouches === 0;
+    const isolatedCrownPenalty = (leftIsIsolatedCrown ? cells.left.crowns : 0)
+      + (rightIsIsolatedCrown ? cells.right.crowns : 0);
+    const growthPenalty = metrics.widthGrowth + metrics.heightGrowth;
+    const constraintPressure = Math.max(0, metrics.widthAfter - 5) + Math.max(0, metrics.heightAfter - 5);
+    const crowdedMismatch = Math.max(0, metrics.occupiedTouchCount - metrics.sameTouchCount - metrics.castleTouchCount);
+    const futureSpace = metrics.emptyTouchCount
+      + Math.min(8, metrics.regionSizeSum) * 0.25
+      + Math.min(6, metrics.regionCrownsSum) * 0.5;
+    const raw = Math.max(0, metrics.scoreDelta) * 1.35
+      + metrics.sameTouchCount * 1.25
+      + metrics.castleTouchCount * 0.2
+      + futureSpace * 0.28
+      - growthPenalty * 1.05
+      - constraintPressure * 1.2
+      - isolatedCrownPenalty * 2.0
+      - crowdedMismatch * 0.45
+      - metrics.distance * 0.045;
+    const cap = profile.placementBonusCap ?? 0;
+    const scaled = raw * (profile.placementBonusScale ?? 0);
+    const score = cap > 0 ? Math.max(-cap, Math.min(cap, scaled)) : scaled;
+    let reason = 'Board shape';
+    if (metrics.scoreDelta > 0) reason = 'Immediate points';
+    else if (metrics.regionCrownsSum > 0 || metrics.sameTouchCount > 1) reason = 'Builds region';
+    else if (futureSpace >= 4) reason = 'Keeps space';
+    else if (isolatedCrownPenalty > 0) reason = 'Avoids isolated crown';
+    return {
+      score,
+      reason,
+      components: {
+        raw,
+        scoreDelta: metrics.scoreDelta,
+        sameTouchCount: metrics.sameTouchCount,
+        castleTouchCount: metrics.castleTouchCount,
+        regionSizeSum: metrics.regionSizeSum,
+        regionCrownsSum: metrics.regionCrownsSum,
+        emptyTouchCount: metrics.emptyTouchCount,
+        growthPenalty,
+        constraintPressure,
+        isolatedCrownPenalty,
+        crowdedMismatch,
+        distance: metrics.distance,
+      },
+    };
+  }
+
+  #dominoTerrainAffinity(boardState, domino) {
+    const ends = [domino.leftEnd, domino.rightEnd];
+    const terrainStats = new Map();
+    for (const tile of boardState.tiles.values()) {
+      if (tile.terrainPlus <= TERRAIN.castle + 1) continue;
+      const stats = terrainStats.get(tile.terrainPlus) ?? { count: 0, crowns: 0 };
+      stats.count += 1;
+      stats.crowns += tile.crowns ?? 0;
+      terrainStats.set(tile.terrainPlus, stats);
+    }
+    let affinity = 0;
+    for (const end of ends) {
+      const terrainPlus = terrainId(end?.landscape) + 1;
+      const stats = terrainStats.get(terrainPlus) ?? { count: 0, crowns: 0 };
+      const crowns = end?.crowns ?? 0;
+      affinity += Math.min(8, stats.count) * 0.18;
+      affinity += Math.min(6, stats.crowns) * 0.35;
+      affinity += crowns * Math.min(8, stats.count) * 0.34;
+    }
+    return affinity;
   }
 
   #linearTanh(weight, bias, input) {
@@ -253,15 +427,34 @@ export class AIPolicyRunner {
     let bestAction = legalActions[0];
     let bestScore = -Infinity;
     const hidden = this.#hidden(policy, obs);
+    const traceCandidates = this.#traceEnabled ? [] : null;
     for (const action of legalActions) {
       if (!mask[action]) continue;
       const score = this.#outputScore(policy, hidden, action);
+      if (traceCandidates) {
+        traceCandidates.push({
+          action: this.#describeEncodedAction(game, action),
+          modelScore: score,
+          adjustment: 0,
+          totalScore: score,
+          reason: 'Masked MLP score',
+          components: {},
+        });
+      }
       if (score > bestScore) {
         bestScore = score;
         bestAction = action;
       }
     }
-    return this.#toGameAction(game, bestAction);
+    const gameAction = this.#toGameAction(game, bestAction);
+    this.#recordDecisionTrace({
+      source: 'masked-mlp',
+      phase: game.state?.description ?? String(game.state),
+      playerIndex,
+      chosen: this.#describeEncodedAction(game, bestAction),
+      candidates: this.#topTraceCandidates(traceCandidates),
+    });
+    return gameAction;
   }
 
   #hidden(policy, obs) {
@@ -855,7 +1048,20 @@ export class AIPolicyRunner {
     const suggested = this.#advisor.suggestDraftMove(game, playerIndex);
     const index = suggested?.index ?? game.currentDraft.findIndex((slot) => slot.player == null && !slot.placed);
     if (index == null || index < 0) return null;
-    return { type: 'pickDraft', payload: { index, ai: true } };
+    const action = { type: 'pickDraft', payload: { index, ai: true } };
+    this.#recordDecisionTrace({
+      source: 'advisor',
+      phase: game.state?.description ?? String(game.state),
+      playerIndex,
+      chosen: this.#describeGameAction(game, action),
+      candidates: [{
+        action: this.#describeGameAction(game, action),
+        totalScore: suggested?.score ?? null,
+        reason: suggested?.reason ?? 'Advisor draft',
+        components: suggested ?? {},
+      }],
+    });
+    return action;
   }
 
   #choosePlacementAction(game, playerIndex) {
@@ -864,7 +1070,7 @@ export class AIPolicyRunner {
 
     const suggested = this.#advisor.suggestPlacementMove(game, playerIndex);
     if (suggested) {
-      return {
+      const action = {
         type: 'place',
         payload: {
           ai: true,
@@ -876,10 +1082,31 @@ export class AIPolicyRunner {
           placeId: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         },
       };
+      this.#recordDecisionTrace({
+        source: 'advisor',
+        phase: game.state?.description ?? String(game.state),
+        playerIndex,
+        chosen: this.#describeGameAction(game, action),
+        candidates: [{
+          action: this.#describeGameAction(game, action),
+          totalScore: suggested.score ?? null,
+          reason: suggested.reason ?? 'Advisor placement',
+          components: suggested,
+        }],
+      });
+      return action;
     }
 
     if (game.canSkipPlacementForPlayer?.(playerIndex)) {
-      return { type: 'skip', payload: { ai: true } };
+      const action = { type: 'skip', payload: { ai: true } };
+      this.#recordDecisionTrace({
+        source: 'advisor',
+        phase: game.state?.description ?? String(game.state),
+        playerIndex,
+        chosen: this.#describeGameAction(game, action),
+        candidates: [{ action: this.#describeGameAction(game, action), totalScore: 0, reason: 'No legal placement', components: {} }],
+      });
+      return action;
     }
 
     return null;
@@ -897,19 +1124,40 @@ export class AIPolicyRunner {
     if (game.currentPickingPlayerIndex !== playerIndex) return null;
     let bestIndex = -1;
     let bestScore = -Infinity;
+    const traceCandidates = this.#traceEnabled ? [] : null;
     (game.currentDraft ?? []).forEach((slot, index) => {
       if (slot?.player != null || slot?.placed || !slot?.domino) return;
       const domino = slot.domino;
       const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
       const diversity = terrainKey(domino.leftEnd?.landscape) === terrainKey(domino.rightEnd?.landscape) ? 0 : 1;
-      const score = crowns * weights[0] + domino.number * weights[1] + diversity * weights[2];
+      const adjustment = this.#draftScoreBreakdown(game, playerIndex, index);
+      const baseScore = crowns * weights[0] + domino.number * weights[1] + diversity * weights[2];
+      const score = baseScore + adjustment.score * 8;
+      if (traceCandidates) {
+        traceCandidates.push({
+          action: this.#describeEncodedAction(game, index),
+          modelScore: baseScore,
+          adjustment: adjustment.score * 8,
+          totalScore: score,
+          reason: adjustment.reason,
+          components: adjustment.components,
+        });
+      }
       if (score > bestScore) {
         bestScore = score;
         bestIndex = index;
       }
     });
     if (bestIndex < 0) return null;
-    return { type: 'pickDraft', payload: { index: bestIndex, ai: true } };
+    const action = { type: 'pickDraft', payload: { index: bestIndex, ai: true } };
+    this.#recordDecisionTrace({
+      source: 'weighted-heuristic',
+      phase: game.state?.description ?? String(game.state),
+      playerIndex,
+      chosen: this.#describeGameAction(game, action),
+      candidates: this.#topTraceCandidates(traceCandidates),
+    });
+    return action;
   }
 
   #chooseHeuristicPlacementAction(game, playerIndex, weights) {
@@ -921,15 +1169,44 @@ export class AIPolicyRunner {
 
     let best = null;
     let bestScore = -Infinity;
+    const traceCandidates = this.#traceEnabled ? [] : null;
     for (const option of options) {
       const score = this.#weightedPlacementScore(game, playerIndex, option, weights);
+      if (traceCandidates) {
+        const domino = this.#dominoForOption(game, playerIndex, option);
+        const quality = domino
+          ? this.#placementScoreBreakdown(
+            this.#boardFeatureState(game, playerIndex),
+            this.#cellsForPlacement(
+              domino,
+              option.orientation,
+              option.x,
+              option.y,
+              option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT,
+            ),
+          )
+          : { score: 0, reason: 'Unknown domino', components: {} };
+        traceCandidates.push({
+          action: {
+            type: 'place',
+            dominoNumber: option.dominoNumber,
+            orientation: option.orientation,
+            x: option.x,
+            y: option.y,
+            anchorEnd: option.anchorEnd === DominoEnd.RIGHT ? 'RIGHT' : 'LEFT',
+          },
+          totalScore: score,
+          reason: quality.reason,
+          components: quality.components,
+        });
+      }
       if (score > bestScore) {
         bestScore = score;
         best = option;
       }
     }
     if (!best) return null;
-    return {
+    const action = {
       type: 'place',
       payload: {
         ai: true,
@@ -941,6 +1218,14 @@ export class AIPolicyRunner {
         placeId: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       },
     };
+    this.#recordDecisionTrace({
+      source: 'weighted-heuristic',
+      phase: game.state?.description ?? String(game.state),
+      playerIndex,
+      chosen: this.#describeGameAction(game, action),
+      candidates: this.#topTraceCandidates(traceCandidates),
+    });
+    return action;
   }
 
   #weightedPlacementScore(game, playerIndex, option, weights) {
@@ -973,13 +1258,18 @@ export class AIPolicyRunner {
     ];
     const newArea = (Math.max(...xs) - Math.min(...xs) + 1) * (Math.max(...ys) - Math.min(...ys) + 1);
     const touches = this.#matchingTouchCount(board, cells[0]) + this.#matchingTouchCount(board, cells[1]);
+    const boardState = this.#boardFeatureState(game, playerIndex);
+    const anchorEnd = option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT;
+    const qualityCells = this.#cellsForPlacement(domino, option.orientation, option.x, option.y, anchorEnd);
+    const quality = this.#placementScoreBreakdown(boardState, qualityCells);
     return scoreDelta * weights[3]
       + placementHeuristic * weights[4]
       + crowns * weights[5]
       - compactness * weights[6]
       - option.dominoNumber * weights[7]
       - (newArea - oldArea) * weights[8]
-      + touches * weights[9];
+      + touches * weights[9]
+      + quality.components.raw * 0.45;
   }
 
   #dominoForOption(game, playerIndex, option) {
@@ -1085,5 +1375,84 @@ export class AIPolicyRunner {
       board?.[`${x},${y + 1}`],
       board?.[`${x},${y - 1}`],
     ].filter(Boolean);
+  }
+
+  #recordDecisionTrace(trace) {
+    if (!this.#traceEnabled || !trace) return;
+    const normalized = {
+      at: Date.now(),
+      difficulty: this.#difficulty,
+      backend: this.backend,
+      ...trace,
+    };
+    this.#lastDecisionTrace = normalized;
+    this.#decisionTraces.push(normalized);
+    if (this.#decisionTraces.length > 100) this.#decisionTraces.shift();
+    if (globalThis.KINGDOMINO_AI_DEBUG === true) {
+      console.debug('[kingdomino-ai]', normalized);
+    }
+  }
+
+  #topTraceCandidates(candidates, limit = 5) {
+    if (!Array.isArray(candidates)) return [];
+    return [...candidates]
+      .sort((a, b) => (b.totalScore ?? -Infinity) - (a.totalScore ?? -Infinity))
+      .slice(0, limit)
+      .map((candidate, index) => ({
+        rank: index + 1,
+        ...this.#roundTraceNumbers(candidate),
+      }));
+  }
+
+  #roundTraceNumbers(value) {
+    if (typeof value === 'number') return Math.round(value * 1000) / 1000;
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map((item) => this.#roundTraceNumbers(item));
+    const rounded = {};
+    for (const [key, child] of Object.entries(value)) {
+      rounded[key] = this.#roundTraceNumbers(child);
+    }
+    return rounded;
+  }
+
+  #describeEncodedAction(game, action) {
+    if (action < DRAFT_ACTIONS) {
+      const domino = game.currentDraft?.[action]?.domino;
+      return {
+        type: 'pickDraft',
+        index: action,
+        dominoNumber: domino?.number ?? null,
+        left: terrainKey(domino?.leftEnd?.landscape),
+        right: terrainKey(domino?.rightEnd?.landscape),
+      };
+    }
+    if (action === SKIP_ACTION) return { type: 'skip' };
+    const decoded = this.#decodePlacementAction(action);
+    const domino = game.currentDraft?.[decoded?.draftIndex]?.domino;
+    return {
+      type: 'place',
+      draftIndex: decoded?.draftIndex ?? null,
+      dominoNumber: domino?.number ?? null,
+      orientation: decoded?.orientation ?? null,
+      x: decoded?.x ?? null,
+      y: decoded?.y ?? null,
+      anchorEnd: decoded?.anchorEnd ? 'RIGHT' : 'LEFT',
+    };
+  }
+
+  #describeGameAction(game, action) {
+    if (!action) return null;
+    if (action.type === 'pickDraft') {
+      return this.#describeEncodedAction(game, action.payload?.index ?? -1);
+    }
+    if (action.type === 'skip') return { type: 'skip' };
+    return {
+      type: action.type,
+      dominoNumber: action.payload?.dominoNumber ?? null,
+      orientation: action.payload?.orientation ?? null,
+      x: action.payload?.x ?? null,
+      y: action.payload?.y ?? null,
+      anchorEnd: action.payload?.anchorEnd ?? null,
+    };
   }
 }
