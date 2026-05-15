@@ -15,7 +15,8 @@ Current state:
 - Cython native environment with compact board/deck/draft arrays.
 - PufferLib adapter smoke test for the current action/observation contract.
 - Torch checkpoint at `ai/artifacts/latest.pt`.
-- Browser-loadable exported policy at `ai/artifacts/browser_policy.json`.
+- Browser-loadable rich candidate PPO policy at
+  `ai/artifacts/browser_policy.json`.
 - Weighted heuristic policy at `ai/artifacts/heuristic_policy.json`.
 - Profiling benchmark for Python, native compatibility, optimized native, and
   multi-env native rollout paths.
@@ -25,8 +26,8 @@ Current state:
   smoke loop.
 - Observation contract v2, where empty cells are `0`, castles are visible as
   `1`, and terrain ids are shifted by one in board features.
-- Native rich-candidate feature generation for the placement-aware candidate
-  policy path.
+- Native rich-candidate feature generation and browser export for the
+  placement-aware candidate policy path.
 
 The Torch trainer uses imitation learning from native experts. This is not full
 PPO yet, but it is a real Torch train/eval/export path and uses the same
@@ -67,6 +68,8 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 300000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_mixed_obs_v2_300k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --eval-every 50000 --eval-games 200 --report ai/artifacts/ppo_candidate_mixed_obs_v2_300k.json
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 123 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --output ai/artifacts/ppo_candidate_obs_v2_1m.pt --opponent-curriculum random greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --value-warmup-steps 50000 --eval-every 50000 --eval-games 200 --eval-opponents random greedy heuristic --report ai/artifacts/ppo_candidate_obs_v2_1m.json
 .venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 25000 --seed 654 --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_canon_50k_candidate_interaction_rich_hybrid.pt --output ai/artifacts/ppo_candidate_rich_anchor_25k.pt --opponent-kind heuristic --opponent-policy ai/artifacts/heuristic_policy.json --model-type auto --feature-mode rich --hidden-size 128 --lr 0.00002 --entropy-coef 0.001 --anchor-kl-coef 0.05 --eval-every 0
+.venv/bin/python -m ai.puffer_kingdomino.candidate_ppo --steps 1000000 --seed 321 --output ai/artifacts/ppo_candidate_rich_anchor_1m_native.pt --best-output ai/artifacts/ppo_candidate_rich_anchor_1m_native_best.pt --init-policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_canon_50k_candidate_interaction_rich_hybrid.pt --hidden-size 128 --model-type interaction --feature-mode rich --opponent-curriculum greedy heuristic --opponent-policy ai/artifacts/heuristic_policy.json --anchor-kl-coef 0.05 --eval-every 100000 --eval-games 400 --eval-seed 456 --eval-opponents greedy heuristic --report ai/artifacts/ppo_candidate_rich_anchor_1m_native.json
+.venv/bin/python -m ai.puffer_kingdomino.export_policy --policy ai/artifacts/ppo_candidate_rich_anchor_1m_native.pt --output ai/artifacts/browser_policy.json
 .venv/bin/python -m ai.puffer_kingdomino.policy_diagnostic --policy-kind candidate --policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --reference-kind greedy --opponent-kind greedy --games 1000 --seed 456
 ```
 
@@ -93,6 +96,14 @@ interaction checkpoint completed legally at about `2.4k` learner decisions/sec;
 the remaining bottleneck is now the Torch sampling/update loop rather than
 feature construction. That probe evaluated at `72.25%` vs old greedy and
 `59.5%` vs the weighted heuristic over 400 seat-swapped games.
+
+A 1M-step anchored rich-candidate PPO run then produced the first browser-ready
+neural policy that clearly beats both earlier baselines. It completed with zero
+illegal actions. On a fresh 1000-game seat-swapped eval with seed `789`, the
+final checkpoint reached `97.5%` win rate vs old greedy with mean margin
+`+59.4`, and `96.5%` win rate vs the weighted heuristic with mean margin
+`+51.2`. `export_policy` now supports this candidate checkpoint format and
+writes the browser artifact consumed by the hotseat AI.
 
 There are also two prototype compact-head trainers:
 
@@ -343,8 +354,9 @@ Then open:
 http://127.0.0.1:8080/?hotseat=1&seed=123&p1=Human&p2=AI&ai=1
 ```
 
-The browser runner loads `heuristic_policy.json` first, then falls back to the
-older neural `browser_policy.json` if the heuristic artifact is missing.
+The browser runner loads `browser_policy.json` first. That artifact is now the
+exported rich candidate PPO policy; `heuristic_policy.json` remains the fallback
+if the browser neural artifact is missing.
 
 ## Action Space
 
@@ -356,11 +368,8 @@ The action mask is part of every observation.
 
 ## Known Gaps
 
-- Serious PPO is still outstanding. The current PPO path is a smoke trainer for
-  legality and checkpoint flow, not a tuned RL trainer.
-- The first PufferLib adapter is wired as a single learning agent against a
-  random opponent.
-- The Torch neural policies beat random play but are not yet competitive with
-  greedy; the saveable weighted heuristic policy is the first beating-greedy
-  milestone.
+- The browser export currently supports the rich candidate policy for 2-player
+  hotseat AI only.
+- The first PufferLib adapter is still wired as a single learning agent against
+  a random opponent.
 - 3-player and 4-player modes are intentionally out of scope for this milestone.

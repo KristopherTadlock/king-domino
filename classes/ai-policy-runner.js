@@ -6,7 +6,12 @@ const COORD_MIN = -6;
 const COORD_MAX = 6;
 const COORD_SPAN = COORD_MAX - COORD_MIN + 1;
 const DRAFT_ACTIONS = 4;
+const BOARD_LIMIT = 7;
 const SKIP_ACTION = DRAFT_ACTIONS + 4 * 4 * COORD_SPAN * COORD_SPAN * 2;
+const ORIENTATIONS = [0, 90, 180, 270];
+const ANCHOR_LEFT = 0;
+const ANCHOR_RIGHT = 1;
+const RICH_ACTION_FEATURE_SIZE = 96;
 const TERRAIN = Object.freeze({
   castle: 0,
   wheat: 1,
@@ -37,10 +42,10 @@ export class AIPolicyRunner {
     return this.#artifact?.metadata?.backend ?? this.#artifact?.backend ?? 'unloaded';
   }
 
-  async load(url = 'ai/artifacts/heuristic_policy.json') {
+  async load(url = 'ai/artifacts/browser_policy.json') {
     let response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok && url !== 'ai/artifacts/browser_policy.json') {
-      response = await fetch('ai/artifacts/browser_policy.json', { cache: 'no-store' });
+    if (!response.ok && url !== 'ai/artifacts/heuristic_policy.json') {
+      response = await fetch('ai/artifacts/heuristic_policy.json', { cache: 'no-store' });
     }
     if (!response.ok && url !== 'ai/artifacts/latest.pt') {
       response = await fetch('ai/artifacts/latest.pt', { cache: 'no-store' });
@@ -57,6 +62,10 @@ export class AIPolicyRunner {
     if (this.#artifact?.format === 'kingdomino-weighted-heuristic-v0') {
       return this.#chooseHeuristicAction(game, playerIndex);
     }
+    if (this.#artifact?.policy?.type === 'candidate_policy_v0') {
+      const action = this.#chooseCandidateModelAction(game, playerIndex);
+      if (action) return action;
+    }
     if (this.#artifact?.policy?.type === 'masked_mlp_v0') {
       const action = this.#chooseModelAction(game, playerIndex);
       if (action) return action;
@@ -64,6 +73,66 @@ export class AIPolicyRunner {
     if (game.state === GameState.DRAFT) return this.#chooseDraftAction(game, playerIndex);
     if (game.state === GameState.PLACE) return this.#choosePlacementAction(game, playerIndex);
     return null;
+  }
+
+  #chooseCandidateModelAction(game, playerIndex) {
+    const policy = this.#artifact?.policy;
+    const { legalActions } = this.#legalActionsAndMask(game, playerIndex, policy.actionCount);
+    if (!legalActions.length) return null;
+    const obs = this.#observationVector(game, playerIndex, policy.obsScale || 50);
+    if (!obs || obs.length !== policy.obsSize) return null;
+
+    const state = this.#linearTanh(policy.weights.obsWeight, policy.weights.obsBias, obs);
+    let bestAction = legalActions[0];
+    let bestScore = -Infinity;
+    for (const action of legalActions) {
+      const features = this.#candidateFeatures(game, playerIndex, action, policy.featureMode);
+      if (!features) continue;
+      const score = this.#candidatePolicyScore(policy, state, features);
+      if (score > bestScore) {
+        bestScore = score;
+        bestAction = action;
+      }
+    }
+    return this.#toGameAction(game, bestAction);
+  }
+
+  #candidatePolicyScore(policy, state, features) {
+    const action = this.#linearTanh(policy.weights.actionWeight, policy.weights.actionBias, features);
+    if (policy.modelType === 'interaction') {
+      const jointInput = new Array(state.length * 3);
+      for (let i = 0; i < state.length; i += 1) {
+        jointInput[i] = state[i];
+        jointInput[i + state.length] = action[i];
+        jointInput[i + state.length * 2] = state[i] * action[i];
+      }
+      const joint = this.#linearTanh(policy.weights.jointWeight, policy.weights.jointBias, jointInput);
+      let sum = policy.weights.outputBias ?? 0;
+      for (let i = 0; i < joint.length; i += 1) {
+        sum += (policy.weights.outputWeight[i] ?? 0) * joint[i];
+      }
+      return sum;
+    }
+
+    let score = 0;
+    for (let i = 0; i < state.length; i += 1) score += state[i] * action[i];
+    score /= Math.sqrt(state.length);
+    let bias = policy.weights.actionBiasBias ?? 0;
+    for (let i = 0; i < features.length; i += 1) {
+      bias += (policy.weights.actionBiasWeight?.[i] ?? 0) * features[i];
+    }
+    return score + bias;
+  }
+
+  #linearTanh(weight, bias, input) {
+    const output = new Array(weight.length);
+    for (let row = 0; row < weight.length; row += 1) {
+      const weights = weight[row];
+      let sum = bias[row] ?? 0;
+      for (let i = 0; i < input.length; i += 1) sum += (weights[i] ?? 0) * input[i];
+      output[row] = Math.tanh(sum);
+    }
+    return output;
   }
 
   #chooseModelAction(game, playerIndex) {
@@ -230,13 +299,446 @@ export class AIPolicyRunner {
       for (let y = COORD_MIN; y <= COORD_MAX; y += 1) {
         for (let x = COORD_MIN; x <= COORD_MAX; x += 1) {
           const tile = board[`${x},${y}`];
-          values.push(tile ? terrainId(tile.landscape) : 0);
+          values.push(tile ? terrainId(tile.landscape) + 1 : 0);
           values.push(tile?.crowns ?? 0);
         }
       }
     }
 
     return values.map((value) => value / scale);
+  }
+
+  #candidateFeatures(game, playerIndex, action, featureMode = 'static') {
+    if (featureMode !== 'rich') {
+      const features = new Array(40).fill(0);
+      this.#writeStaticActionFeatures(features, action);
+      return features;
+    }
+
+    const features = new Array(RICH_ACTION_FEATURE_SIZE).fill(0);
+    this.#writeStaticActionFeatures(features, action);
+
+    const phase = game.state === GameState.DRAFT ? 0 : 1;
+    const player = playerIndex === 0 || playerIndex === 1 ? playerIndex : 0;
+    const scores = (game.players ?? []).map((p) => p?.board?.score ?? 0);
+    features[40] = phase === 0 ? 1 : 0;
+    features[41] = phase === 1 ? 1 : 0;
+    features[42 + player] = 1;
+    features[44] = (game.round ?? 0) / 12;
+    features[45] = (scores[player] ?? 0) / 100;
+    features[46] = (scores[1 - player] ?? 0) / 100;
+    features[47] = ((scores[player] ?? 0) - (scores[1 - player] ?? 0)) / 100;
+
+    if (action === SKIP_ACTION) {
+      features[95] = 1;
+      return features;
+    }
+
+    const decoded = this.#decodePlacementAction(action);
+    const draftIndex = action < DRAFT_ACTIONS ? action : decoded?.draftIndex ?? -1;
+    if (draftIndex < 0 || draftIndex >= DRAFT_ACTIONS) return features;
+    const domino = game.currentDraft?.[draftIndex]?.domino;
+    if (!domino) return features;
+
+    const boardState = this.#boardFeatureState(game, player);
+    this.#writeDominoFeatures(features, domino, draftIndex);
+
+    if (action < DRAFT_ACTIONS) {
+      const metrics = this.#bestMobilityMetrics(boardState, domino);
+      this.#writeMetricFeatures(features, metrics);
+      features[54] = Math.min(1, metrics.count / 64);
+      features[55] = metrics.bestScoreDelta / 50;
+      features[56] = Math.min(1, metrics.bestTouchCount / 8);
+      return features;
+    }
+
+    if (!decoded) return features;
+    const cells = this.#cellsForPlacement(domino, decoded.orientation, decoded.x, decoded.y, decoded.anchorEnd);
+    const metrics = this.#placementMetricsForCells(boardState, cells.left, cells.right);
+    this.#writeMetricFeatures(features, metrics);
+    features[69 + decoded.anchorEnd] = 1;
+    features[71] = decoded.x / 6;
+    features[72] = decoded.y / 6;
+    return features;
+  }
+
+  #writeStaticActionFeatures(features, action) {
+    if (action < DRAFT_ACTIONS) {
+      features[0] = 1;
+      features[3 + action] = 1;
+      return;
+    }
+    if (action === SKIP_ACTION) {
+      features[2] = 1;
+      return;
+    }
+    const decoded = this.#decodePlacementAction(action);
+    if (!decoded) return;
+    features[1] = 1;
+    features[3 + decoded.draftIndex] = 1;
+    features[7 + decoded.orientation / 90] = 1;
+    features[11 + (decoded.x - COORD_MIN)] = 1;
+    features[24 + (decoded.y - COORD_MIN)] = 1;
+    features[37 + decoded.anchorEnd] = 1;
+    features[39] = (Math.abs(decoded.x) + Math.abs(decoded.y)) / 12;
+  }
+
+  #writeDominoFeatures(features, domino, draftIndex) {
+    const leftTerrain = terrainId(domino.leftEnd?.landscape);
+    const rightTerrain = terrainId(domino.rightEnd?.landscape);
+    const leftCrowns = domino.leftEnd?.crowns ?? 0;
+    const rightCrowns = domino.rightEnd?.crowns ?? 0;
+    features[48] = (domino.number ?? 0) / 48;
+    features[49] = (leftCrowns + rightCrowns) / 6;
+    features[50] = leftCrowns / 3;
+    features[51] = rightCrowns / 3;
+    features[52] = leftTerrain === rightTerrain ? 1 : 0;
+    features[53] = draftIndex / 3;
+    if (leftTerrain >= TERRAIN.wheat && leftTerrain <= TERRAIN.mine) {
+      features[57 + (leftTerrain - TERRAIN.wheat)] = 1;
+    }
+    if (rightTerrain >= TERRAIN.wheat && rightTerrain <= TERRAIN.mine) {
+      features[63 + (rightTerrain - TERRAIN.wheat)] = 1;
+    }
+  }
+
+  #writeMetricFeatures(features, metrics) {
+    features[73] = metrics.widthAfter / BOARD_LIMIT;
+    features[74] = metrics.heightAfter / BOARD_LIMIT;
+    features[75] = metrics.widthGrowth / BOARD_LIMIT;
+    features[76] = metrics.heightGrowth / BOARD_LIMIT;
+    features[77] = metrics.distance / 12;
+    features[78] = metrics.scoreDelta / 50;
+    features[79] = metrics.sameTouchCount / 8;
+    features[80] = metrics.castleTouchCount / 8;
+    features[81] = metrics.occupiedTouchCount / 8;
+    features[82] = metrics.emptyTouchCount / 8;
+    features[83] = metrics.regionSizeSum / 20;
+    features[84] = metrics.regionCrownsSum / 8;
+    features[85] = metrics.leftRegionSize / 20;
+    features[86] = metrics.rightRegionSize / 20;
+    features[87] = metrics.leftRegionCrowns / 8;
+    features[88] = metrics.rightRegionCrowns / 8;
+    features[89] = metrics.leftSameTouches / 4;
+    features[90] = metrics.rightSameTouches / 4;
+    features[91] = metrics.leftCastleTouches / 4;
+    features[92] = metrics.rightCastleTouches / 4;
+    features[93] = metrics.leftNeighborCrowns / 6;
+    features[94] = metrics.rightNeighborCrowns / 6;
+  }
+
+  #boardFeatureState(game, playerIndex) {
+    const tiles = new Map();
+    const board = game.players?.[playerIndex]?.board?.board ?? {};
+    let minX = 0;
+    let maxX = 0;
+    let minY = 0;
+    let maxY = 0;
+    let found = false;
+    for (const [key, tile] of Object.entries(board)) {
+      const [x, y] = key.split(',').map((value) => Number.parseInt(value, 10));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      tiles.set(key, { x, y, terrainPlus: terrainId(tile.landscape) + 1, crowns: tile.crowns ?? 0 });
+      if (!found) {
+        minX = maxX = x;
+        minY = maxY = y;
+        found = true;
+      } else {
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    return { tiles, minX, maxX, minY, maxY };
+  }
+
+  #emptyMetrics() {
+    return {
+      count: 0,
+      bestScoreDelta: 0,
+      bestTouchCount: 0,
+      widthAfter: 0,
+      heightAfter: 0,
+      widthGrowth: 0,
+      heightGrowth: 0,
+      distance: 0,
+      scoreDelta: 0,
+      sameTouchCount: 0,
+      castleTouchCount: 0,
+      occupiedTouchCount: 0,
+      emptyTouchCount: 0,
+      regionSizeSum: 0,
+      regionCrownsSum: 0,
+      leftRegionSize: 0,
+      rightRegionSize: 0,
+      leftRegionCrowns: 0,
+      rightRegionCrowns: 0,
+      leftSameTouches: 0,
+      rightSameTouches: 0,
+      leftCastleTouches: 0,
+      rightCastleTouches: 0,
+      leftNeighborCrowns: 0,
+      rightNeighborCrowns: 0,
+    };
+  }
+
+  #bestMobilityMetrics(boardState, domino) {
+    const anchors = this.#candidateAnchors(boardState);
+    const seen = new Set();
+    let bestScoreDelta = -Infinity;
+    let bestTouchCount = -1;
+    let bestCells = null;
+    let count = 0;
+    for (const orientation of ORIENTATIONS) {
+      for (const anchor of anchors) {
+        for (const anchorEnd of [ANCHOR_LEFT, ANCHOR_RIGHT]) {
+          const cells = this.#cellsForPlacement(domino, orientation, anchor.x, anchor.y, anchorEnd);
+          if (!this.#isValidPlacement(boardState, cells.left, cells.right)) continue;
+          const key = this.#placementKey(domino, cells.left, cells.right);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          count += 1;
+          const scoreDelta = this.#scoreDeltaLocal(boardState, cells.left, cells.right);
+          const touchCount = this.#sameTouchCount(boardState, cells.left, cells.right);
+          if (scoreDelta > bestScoreDelta || (scoreDelta === bestScoreDelta && touchCount > bestTouchCount)) {
+            bestScoreDelta = scoreDelta;
+            bestTouchCount = touchCount;
+            bestCells = cells;
+          }
+        }
+      }
+    }
+    const metrics = bestCells
+      ? this.#placementMetricsForCells(boardState, bestCells.left, bestCells.right)
+      : this.#emptyMetrics();
+    metrics.count = count;
+    metrics.bestScoreDelta = Math.max(0, bestScoreDelta);
+    metrics.bestTouchCount = Math.max(0, bestTouchCount);
+    return metrics;
+  }
+
+  #placementMetricsForCells(boardState, left, right) {
+    const metrics = this.#emptyMetrics();
+    if (!this.#coordInBounds(left.x, left.y) || !this.#coordInBounds(right.x, right.y)) return metrics;
+    metrics.scoreDelta = this.#scoreDeltaLocal(boardState, left, right);
+
+    const xs = [boardState.minX, boardState.maxX, left.x, right.x];
+    const ys = [boardState.minY, boardState.maxY, left.y, right.y];
+    metrics.widthAfter = Math.max(...xs) - Math.min(...xs) + 1;
+    metrics.heightAfter = Math.max(...ys) - Math.min(...ys) + 1;
+    metrics.widthGrowth = Math.max(0, metrics.widthAfter - (boardState.maxX - boardState.minX + 1));
+    metrics.heightGrowth = Math.max(0, metrics.heightAfter - (boardState.maxY - boardState.minY + 1));
+    metrics.distance = (Math.abs(left.x) + Math.abs(left.y) + Math.abs(right.x) + Math.abs(right.y)) / 2;
+
+    const leftStats = this.#neighborStats(boardState, left);
+    const rightStats = this.#neighborStats(boardState, right);
+    metrics.sameTouchCount = leftStats.same + rightStats.same;
+    metrics.castleTouchCount = leftStats.castle + rightStats.castle;
+    metrics.occupiedTouchCount = leftStats.occupied + rightStats.occupied;
+    metrics.emptyTouchCount = leftStats.empty + rightStats.empty;
+    metrics.regionSizeSum = leftStats.regionSize + rightStats.regionSize;
+    metrics.regionCrownsSum = leftStats.regionCrowns + rightStats.regionCrowns;
+    metrics.leftRegionSize = leftStats.regionSize;
+    metrics.rightRegionSize = rightStats.regionSize;
+    metrics.leftRegionCrowns = leftStats.regionCrowns;
+    metrics.rightRegionCrowns = rightStats.regionCrowns;
+    metrics.leftSameTouches = leftStats.same;
+    metrics.rightSameTouches = rightStats.same;
+    metrics.leftCastleTouches = leftStats.castle;
+    metrics.rightCastleTouches = rightStats.castle;
+    metrics.leftNeighborCrowns = leftStats.neighborCrowns;
+    metrics.rightNeighborCrowns = rightStats.neighborCrowns;
+    return metrics;
+  }
+
+  #cellsForPlacement(domino, orientation, x, y, anchorEnd) {
+    const offsets = {
+      0: { x: 1, y: 0 },
+      90: { x: 0, y: -1 },
+      180: { x: -1, y: 0 },
+      270: { x: 0, y: 1 },
+    };
+    const normalized = ((Number(orientation) % 360) + 360) % 360;
+    const offset = offsets[normalized] ?? offsets[0];
+    const leftEnd = {
+      terrainPlus: terrainId(domino.leftEnd?.landscape) + 1,
+      crowns: domino.leftEnd?.crowns ?? 0,
+    };
+    const rightEnd = {
+      terrainPlus: terrainId(domino.rightEnd?.landscape) + 1,
+      crowns: domino.rightEnd?.crowns ?? 0,
+    };
+    if (anchorEnd === ANCHOR_LEFT) {
+      return {
+        left: { x, y, ...leftEnd },
+        right: { x: x + offset.x, y: y + offset.y, ...rightEnd },
+      };
+    }
+    return {
+      left: { x: x - offset.x, y: y - offset.y, ...leftEnd },
+      right: { x, y, ...rightEnd },
+    };
+  }
+
+  #candidateAnchors(boardState) {
+    const candidates = new Map();
+    for (const tile of boardState.tiles.values()) {
+      for (const neighbor of this.#neighbors(tile.x, tile.y)) {
+        if (!this.#coordInBounds(neighbor.x, neighbor.y)) continue;
+        if (this.#tileAt(boardState, neighbor.x, neighbor.y)) continue;
+        candidates.set(`${neighbor.x},${neighbor.y}`, neighbor);
+      }
+    }
+    if (!candidates.size) candidates.set('0,0', { x: 0, y: 0 });
+    return [...candidates.values()].sort((a, b) => {
+      const ad = Math.abs(a.x) + Math.abs(a.y);
+      const bd = Math.abs(b.x) + Math.abs(b.y);
+      if (ad !== bd) return ad - bd;
+      if (a.y !== b.y) return a.y - b.y;
+      return a.x - b.x;
+    });
+  }
+
+  #isValidPlacement(boardState, left, right) {
+    if (left.x === right.x && left.y === right.y) return false;
+    if (!this.#coordInBounds(left.x, left.y) || !this.#coordInBounds(right.x, right.y)) return false;
+    if (this.#tileAt(boardState, left.x, left.y) || this.#tileAt(boardState, right.x, right.y)) return false;
+    const xs = [boardState.minX, boardState.maxX, left.x, right.x];
+    const ys = [boardState.minY, boardState.maxY, left.y, right.y];
+    if (Math.max(...xs) - Math.min(...xs) + 1 > BOARD_LIMIT) return false;
+    if (Math.max(...ys) - Math.min(...ys) + 1 > BOARD_LIMIT) return false;
+    return this.#hasValidTouch(boardState, left) || this.#hasValidTouch(boardState, right);
+  }
+
+  #hasValidTouch(boardState, cell) {
+    return this.#neighbors(cell.x, cell.y).some((neighbor) => {
+      const tile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+      return tile && (tile.terrainPlus === TERRAIN.castle + 1 || tile.terrainPlus === cell.terrainPlus);
+    });
+  }
+
+  #scoreDeltaLocal(boardState, left, right) {
+    const groups = new Map();
+    const seenRegions = new Set();
+    let beforeScore = 0;
+    for (const cell of [left, right]) {
+      const group = groups.get(cell.terrainPlus) ?? { size: 0, crowns: 0 };
+      group.size += 1;
+      group.crowns += cell.crowns;
+      groups.set(cell.terrainPlus, group);
+      for (const neighbor of this.#neighbors(cell.x, cell.y)) {
+        const neighborKey = `${neighbor.x},${neighbor.y}`;
+        if (!this.#coordInBounds(neighbor.x, neighbor.y) || seenRegions.has(neighborKey)) continue;
+        const tile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+        if (!tile || tile.terrainPlus !== cell.terrainPlus) continue;
+        const region = this.#regionStats(boardState, neighbor.x, neighbor.y, cell.terrainPlus);
+        for (const key of region.seen) seenRegions.add(key);
+        beforeScore += region.size * region.crowns;
+        group.size += region.size;
+        group.crowns += region.crowns;
+      }
+    }
+    let afterScore = 0;
+    for (const group of groups.values()) afterScore += group.size * group.crowns;
+    return afterScore - beforeScore;
+  }
+
+  #sameTouchCount(boardState, left, right) {
+    let count = 0;
+    for (const cell of [left, right]) {
+      for (const neighbor of this.#neighbors(cell.x, cell.y)) {
+        const tile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+        if (tile?.terrainPlus === cell.terrainPlus) count += 1;
+      }
+    }
+    return count;
+  }
+
+  #neighborStats(boardState, cell) {
+    const stats = {
+      same: 0,
+      castle: 0,
+      occupied: 0,
+      empty: 0,
+      neighborCrowns: 0,
+      regionSize: 0,
+      regionCrowns: 0,
+    };
+    const visitedRegions = new Set();
+    for (const neighbor of this.#neighbors(cell.x, cell.y)) {
+      if (!this.#coordInBounds(neighbor.x, neighbor.y)) {
+        stats.empty += 1;
+        continue;
+      }
+      const tile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+      if (!tile) {
+        stats.empty += 1;
+        continue;
+      }
+      stats.occupied += 1;
+      stats.neighborCrowns += tile.crowns;
+      if (tile.terrainPlus === TERRAIN.castle + 1) stats.castle += 1;
+      if (tile.terrainPlus === cell.terrainPlus) {
+        stats.same += 1;
+        const key = `${neighbor.x},${neighbor.y}`;
+        if (!visitedRegions.has(key)) {
+          const region = this.#regionStats(boardState, neighbor.x, neighbor.y, cell.terrainPlus);
+          for (const seenKey of region.seen) visitedRegions.add(seenKey);
+          stats.regionSize += region.size;
+          stats.regionCrowns += region.crowns;
+        }
+      }
+    }
+    return stats;
+  }
+
+  #regionStats(boardState, x, y, terrainPlus) {
+    const stack = [{ x, y }];
+    const seen = new Set([`${x},${y}`]);
+    let size = 0;
+    let crowns = 0;
+    while (stack.length) {
+      const current = stack.pop();
+      const tile = this.#tileAt(boardState, current.x, current.y);
+      if (!tile || tile.terrainPlus !== terrainPlus) continue;
+      size += 1;
+      crowns += tile.crowns;
+      for (const neighbor of this.#neighbors(current.x, current.y)) {
+        const key = `${neighbor.x},${neighbor.y}`;
+        if (seen.has(key) || !this.#coordInBounds(neighbor.x, neighbor.y)) continue;
+        const neighborTile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+        if (!neighborTile || neighborTile.terrainPlus !== terrainPlus) continue;
+        seen.add(key);
+        stack.push(neighbor);
+      }
+    }
+    return { size, crowns, seen };
+  }
+
+  #placementKey(domino, left, right) {
+    const cells = [
+      [left.x, left.y, left.terrainPlus, left.crowns],
+      [right.x, right.y, right.terrainPlus, right.crowns],
+    ].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    return `${domino.number}|${cells.map((cell) => cell.join(',')).join('|')}`;
+  }
+
+  #tileAt(boardState, x, y) {
+    return boardState.tiles.get(`${x},${y}`) ?? null;
+  }
+
+  #coordInBounds(x, y) {
+    return x >= COORD_MIN && x <= COORD_MAX && y >= COORD_MIN && y <= COORD_MAX;
+  }
+
+  #neighbors(x, y) {
+    return [
+      { x: x + 1, y },
+      { x: x - 1, y },
+      { x, y: y + 1 },
+      { x, y: y - 1 },
+    ];
   }
 
   #chooseDraftAction(game, playerIndex) {

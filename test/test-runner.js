@@ -7,3 +7,4 @@ import * as testGameConfiguration from './test-game-configuration.js';
 import * as testWebGameManager from './test-web-game-manager.js';
 import * as testBoardScoring from './test-board-scoring.js';
 import * as testGameAdvisor from './test-game-advisor.js';
+import * as testAiPolicyRunner from './test-ai-policy-runner.js';
