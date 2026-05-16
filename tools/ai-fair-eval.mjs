@@ -277,7 +277,12 @@ function createDiagnostics() {
       legalChoices: 0,
       adjustment: 0,
       ownValue: 0,
+      ownOpportunityGap: 0,
       bestOpponentValue: 0,
+      bestOpponentAlternativeValue: 0,
+      bestOpponentDenialGap: 0,
+      bestOpponentThreat: 0,
+      bestOpponentEase: 0,
       denialPressure: 0,
     },
     placement: {
@@ -343,7 +348,12 @@ function recordPolicyDecision(diagnostics, game, playerIndex, action, trace, com
     diagnostics.draft.legalChoices += legalCount;
     diagnostics.draft.adjustment += chosenCandidate?.adjustment ?? 0;
     diagnostics.draft.ownValue += components.ownValue ?? 0;
+    diagnostics.draft.ownOpportunityGap += components.ownOpportunityGap ?? 0;
     diagnostics.draft.bestOpponentValue += components.bestOpponentValue ?? 0;
+    diagnostics.draft.bestOpponentAlternativeValue += components.bestOpponentAlternativeValue ?? 0;
+    diagnostics.draft.bestOpponentDenialGap += components.bestOpponentDenialGap ?? 0;
+    diagnostics.draft.bestOpponentThreat += components.bestOpponentThreat ?? 0;
+    diagnostics.draft.bestOpponentEase += components.bestOpponentEase ?? 0;
     diagnostics.draft.denialPressure += components.denialPressure ?? 0;
     return;
   }
@@ -386,7 +396,13 @@ function compactTrace(trace, action, compareAction, game, playerIndex) {
       scoreDelta: candidate.components?.scoreDelta,
       raw: candidate.components?.raw,
       ownValue: candidate.components?.ownValue,
+      ownAlternativeValue: candidate.components?.ownAlternativeValue,
+      ownOpportunityGap: candidate.components?.ownOpportunityGap,
       bestOpponentValue: candidate.components?.bestOpponentValue,
+      bestOpponentAlternativeValue: candidate.components?.bestOpponentAlternativeValue,
+      bestOpponentDenialGap: candidate.components?.bestOpponentDenialGap,
+      bestOpponentThreat: candidate.components?.bestOpponentThreat,
+      bestOpponentEase: candidate.components?.bestOpponentEase,
       denialPressure: candidate.components?.denialPressure,
       growthPenalty: candidate.components?.growthPenalty,
       constraintPressure: candidate.components?.constraintPressure,
@@ -522,7 +538,12 @@ function summarizeDiagnostics(items) {
       averageLegalChoices: avg(total.draft.legalChoices, total.draft.count),
       averageAdjustment: avg(total.draft.adjustment, total.draft.count),
       averageOwnValue: avg(total.draft.ownValue, total.draft.count),
+      averageOwnOpportunityGap: avg(total.draft.ownOpportunityGap, total.draft.count),
       averageBestOpponentValue: avg(total.draft.bestOpponentValue, total.draft.count),
+      averageBestOpponentAlternativeValue: avg(total.draft.bestOpponentAlternativeValue, total.draft.count),
+      averageBestOpponentDenialGap: avg(total.draft.bestOpponentDenialGap, total.draft.count),
+      averageBestOpponentThreat: avg(total.draft.bestOpponentThreat, total.draft.count),
+      averageBestOpponentEase: avg(total.draft.bestOpponentEase, total.draft.count),
       averageDenialPressure: avg(total.draft.denialPressure, total.draft.count),
     },
     placement: {

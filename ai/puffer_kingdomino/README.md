@@ -375,10 +375,11 @@ The browser AI has three lobby profiles:
   denial and richer placement-quality shaping.
 
 Draft shaping considers the domino's value on the AI board, the best opponent
-value for that same domino, how hard it is to place, terrain affinity, crowns,
-and future mobility. Placement shaping adds immediate score delta, same-terrain
-contacts, crown-region context, expansion space, board growth, isolated-crown
-penalties, crowded mismatches, distance, and late 7x7 pressure.
+value for that same domino, the opponent's best remaining alternative if the AI
+takes it, how hard it is to place, terrain affinity, crowns, and future
+mobility. Placement shaping adds immediate score delta, same-terrain contacts,
+crown-region context, expansion space, board growth, isolated-crown penalties,
+crowded mismatches, distance, and late 7x7 pressure.
 
 For browser inspection, add `aiTrace=1` to the URL and call:
 
@@ -396,12 +397,13 @@ points`, or `Keeps space`.
 `npm run ai:eval` is the browser-runner fair evaluation harness. It plays each
 seed twice with seats swapped and reports win rate, ties, average scores,
 average margin, illegal/crash count, and an approximate 95% confidence interval.
-It also reports policy-side phase diagnostics: draft value/denial pressure,
-placement immediate-score gap against the best immediate placement, skip rate,
-shape penalties, post-placement mobility for any remaining drafted tile, and
-action differences against a comparison agent. Use the ablation suffixes
-`:model`, `:draft`, and `:placement` on `--policy` or `--opponent` to isolate
-the browser policy, draft shaping, or placement shaping.
+It also reports policy-side phase diagnostics: draft value, opponent
+alternative value, denial gap, denial pressure, placement immediate-score gap
+against the best immediate placement, skip rate, shape penalties,
+post-placement mobility for any remaining drafted tile, and action differences
+against a comparison agent. Use the ablation suffixes `:model`, `:draft`, and
+`:placement` on `--policy` or `--opponent` to isolate the browser policy, draft
+shaping, or placement shaping.
 
 Local reference checks for this browser-side pass:
 
@@ -414,6 +416,12 @@ Local reference checks for this browser-side pass:
   rate, `0.6%` ties, average score `122.0` vs `119.7`, mean margin `+2.3`,
   zero illegal/crash count. This is a measurable improvement, but still inside
   a range where we should validate future placement work with 500+ game evals.
+- After adding opponent alternative-value diagnostics and a conservative
+  scarcity-denial draft bonus, `sharp` vs `challenger`, 300 seat-swapped games,
+  seed `123`: `52.3%` win rate, `1.7%` ties, average score `120.5` vs `118.9`,
+  mean margin `+1.6`, zero illegal/crash count. The scoring impact is
+  deliberately small; the main value is that draft denial is now visible and
+  tunable through trace/eval fields.
 - `sharp` vs `random`, 200 seat-swapped games, seed `123`: `100%` win rate,
   average score `138.9` vs `44.8`, zero illegal/crash count.
 - 100-game ablation check, seed `123`: `sharp:model` landed at `49%` vs

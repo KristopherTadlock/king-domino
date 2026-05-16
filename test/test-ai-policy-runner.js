@@ -92,6 +92,10 @@ it('browser AI decision trace explains draft and placement choices when enabled'
   assert(draftAction?.type === 'pickDraft');
   assert(runner.lastDecisionTrace?.phase === 'draft');
   assert(runner.lastDecisionTrace?.candidates?.length > 0);
+  assert(runner.lastDecisionTrace?.candidates?.some((candidate) =>
+    candidate.components?.ownOpportunityGap != null
+    && candidate.components?.bestOpponentDenialGap != null
+  ));
   game.pickDraft(draftAction.payload.index);
   while (game.state === GameState.DRAFT) {
     const playerIndex = game.currentPickingPlayerIndex;

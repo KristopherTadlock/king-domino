@@ -19,7 +19,11 @@ const DIFFICULTY_PROFILES = Object.freeze({
     draftPressureScale: 0,
     draftPressureCap: 0,
     draftOwnScale: 0,
+    draftOwnGapScale: 0,
     draftPlaceabilityScale: 0,
+    draftDenialGapScale: 0,
+    draftOpponentThreatScale: 0,
+    draftOpponentEaseScale: 0,
     placementBonusScale: 0,
     placementBonusCap: 0,
   }),
@@ -28,7 +32,11 @@ const DIFFICULTY_PROFILES = Object.freeze({
     draftPressureScale: 0.015,
     draftPressureCap: 0.25,
     draftOwnScale: 0.002,
+    draftOwnGapScale: 0.001,
     draftPlaceabilityScale: 0.006,
+    draftDenialGapScale: 0.004,
+    draftOpponentThreatScale: 0.002,
+    draftOpponentEaseScale: 0.002,
     placementBonusScale: 0.004,
     placementBonusCap: 0.15,
   }),
@@ -37,7 +45,11 @@ const DIFFICULTY_PROFILES = Object.freeze({
     draftPressureScale: 0.18,
     draftPressureCap: 3.2,
     draftOwnScale: 0.052,
+    draftOwnGapScale: 0,
     draftPlaceabilityScale: 0.105,
+    draftDenialGapScale: 0.04,
+    draftOpponentThreatScale: 0.006,
+    draftOpponentEaseScale: 0,
     placementBonusScale: 0.11,
     placementBonusCap: 4.8,
   }),
@@ -269,26 +281,65 @@ export class AIPolicyRunner {
     if (!domino) return empty;
 
     const own = this.#draftOpportunityBreakdown(game, playerIndex, domino);
+    const ownAlternative = this.#bestAlternativeDraftOpportunity(game, playerIndex, draftIndex);
+    const ownAlternativeValue = ownAlternative?.score ?? 0;
+    const ownOpportunityGap = own.score - ownAlternativeValue;
     let bestOpponent = null;
     for (let opponentIndex = 0; opponentIndex < (game.players?.length ?? 0); opponentIndex += 1) {
       if (opponentIndex === playerIndex) continue;
       const opponent = this.#draftOpportunityBreakdown(game, opponentIndex, domino);
-      if (!bestOpponent || opponent.score > bestOpponent.score) {
-        bestOpponent = { playerIndex: opponentIndex, ...opponent };
+      const alternative = this.#bestAlternativeDraftOpportunity(game, opponentIndex, draftIndex);
+      const alternativeValue = alternative?.score ?? 0;
+      const denialGap = Math.max(0, opponent.score - alternativeValue);
+      const opponentThreat = opponent.immediateValue
+        + opponent.terrainAffinity * 0.35
+        + opponent.crowns * 0.65
+        + Math.log1p(Math.max(0, opponent.mobilityCount)) * 0.8;
+      const opponentEase = Math.log1p(Math.max(0, opponent.mobilityCount));
+      const denialScore = denialGap * 1.2 + opponentThreat * 0.35 + opponentEase * 0.25;
+      if (!bestOpponent || denialScore > bestOpponent.denialScore) {
+        bestOpponent = {
+          playerIndex: opponentIndex,
+          alternativeValue,
+          alternativeDominoNumber: alternative?.dominoNumber ?? null,
+          denialGap,
+          opponentThreat,
+          opponentEase,
+          denialScore,
+          ...opponent,
+        };
       }
     }
 
     const opponentValue = bestOpponent?.score ?? 0;
-    const denialPressure = Math.max(0, opponentValue - own.score * 0.65);
+    const oldPressure = Math.max(0, opponentValue - own.score * 0.65);
+    const denialGap = bestOpponent?.denialGap ?? 0;
+    const opponentThreat = bestOpponent?.opponentThreat ?? 0;
+    const opponentEase = bestOpponent?.opponentEase ?? 0;
+    const denialPressure = oldPressure;
     const ownBonus = own.score * (profile.draftOwnScale ?? 0);
+    const ownGapBonus = ownOpportunityGap * (profile.draftOwnGapScale ?? 0);
     const denialBonus = denialPressure * (profile.draftPressureScale ?? 0);
+    const denialGapBonus = Math.max(0, denialGap - 3) * (profile.draftDenialGapScale ?? 0);
+    const opponentThreatBonus = Math.max(0, opponentThreat - own.immediateValue - 2)
+      * (profile.draftOpponentThreatScale ?? 0);
+    const opponentEaseBonus = opponentEase * (profile.draftOpponentEaseScale ?? 0);
     const placeabilityBonus = Math.log1p(Math.max(0, own.mobilityCount)) * (profile.draftPlaceabilityScale ?? 0);
     const cap = profile.draftPressureCap ?? 0;
-    const total = ownBonus + denialBonus + placeabilityBonus;
+    const total = ownBonus
+      + ownGapBonus
+      + denialBonus
+      + denialGapBonus
+      + opponentThreatBonus
+      + opponentEaseBonus
+      + placeabilityBonus;
     const score = cap > 0 ? Math.max(-cap, Math.min(cap, total)) : total;
     let reason = 'Flexible draft';
-    if (denialBonus > Math.abs(ownBonus) && denialBonus > placeabilityBonus) {
+    if ((denialBonus + denialGapBonus + opponentThreatBonus) > Math.abs(ownBonus + ownGapBonus)
+      && (denialBonus + denialGapBonus) > placeabilityBonus) {
       reason = 'Blocks opponent';
+    } else if (ownOpportunityGap > 2) {
+      reason = 'Best fit';
     } else if (own.bestScoreDelta > 0) {
       reason = 'Future score';
     } else if (own.mobilityCount <= 2) {
@@ -301,11 +352,22 @@ export class AIPolicyRunner {
       reason,
       components: {
         ownValue: own.score,
+        ownAlternativeValue,
+        ownOpportunityGap,
         bestOpponentValue: opponentValue,
         bestOpponentIndex: bestOpponent?.playerIndex ?? null,
+        bestOpponentAlternativeValue: bestOpponent?.alternativeValue ?? 0,
+        bestOpponentAlternativeDominoNumber: bestOpponent?.alternativeDominoNumber ?? null,
+        bestOpponentDenialGap: denialGap,
+        bestOpponentThreat: opponentThreat,
+        bestOpponentEase: opponentEase,
         denialPressure,
         ownBonus,
+        ownGapBonus,
         denialBonus,
+        denialGapBonus,
+        opponentThreatBonus,
+        opponentEaseBonus,
         placeabilityBonus,
         own,
         bestOpponent,
@@ -335,12 +397,28 @@ export class AIPolicyRunner {
     return this.#draftOpportunityBreakdown(game, playerIndex, domino).score;
   }
 
+  #bestAlternativeDraftOpportunity(game, playerIndex, excludedDraftIndex) {
+    let best = null;
+    (game.currentDraft ?? []).forEach((slot, index) => {
+      if (index === excludedDraftIndex || slot?.player != null || slot?.placed || !slot?.domino) return;
+      const opportunity = this.#draftOpportunityBreakdown(game, playerIndex, slot.domino);
+      if (!best || opportunity.score > best.score) {
+        best = { draftIndex: index, dominoNumber: slot.domino.number, ...opportunity };
+      }
+    });
+    return best;
+  }
+
   #draftOpportunityBreakdown(game, playerIndex, domino) {
     const boardState = this.#boardFeatureState(game, playerIndex);
     const metrics = this.#bestMobilityMetrics(boardState, domino);
     const crowns = (domino.leftEnd?.crowns ?? 0) + (domino.rightEnd?.crowns ?? 0);
     const diversity = terrainKey(domino.leftEnd?.landscape) === terrainKey(domino.rightEnd?.landscape) ? 0 : 1;
     const terrainAffinity = this.#dominoTerrainAffinity(boardState, domino);
+    const immediateValue = metrics.bestScoreDelta
+      + metrics.bestTouchCount * 0.85
+      + terrainAffinity * 0.55
+      + crowns * 0.75;
     const score = metrics.bestScoreDelta
       + metrics.bestTouchCount * 0.75
       + Math.min(24, metrics.count) * 0.12
@@ -354,6 +432,7 @@ export class AIPolicyRunner {
       mobilityCount: metrics.count,
       bestScoreDelta: metrics.bestScoreDelta,
       bestTouchCount: metrics.bestTouchCount,
+      immediateValue,
       crowns,
       diversity,
       terrainAffinity,
