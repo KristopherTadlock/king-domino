@@ -51,6 +51,7 @@ const TERRAIN = Object.freeze({
   forest: 5,
   mine: 6,
 });
+const ABLATION_MODES = Object.freeze(new Set(['full', 'model', 'draft', 'placement']));
 
 function terrainId(landscape) {
   return TERRAIN[landscape?.description ?? String(landscape)] ?? 0;
@@ -65,10 +66,16 @@ function normalizeDifficulty(difficulty) {
   return DIFFICULTY_PROFILES[key] ? key : DEFAULT_DIFFICULTY;
 }
 
+function normalizeAblationMode(mode) {
+  const key = String(mode ?? '').trim().toLowerCase();
+  return ABLATION_MODES.has(key) ? key : 'full';
+}
+
 export class AIPolicyRunner {
   #advisor = new GameAdvisor();
   #artifact = null;
   #difficulty = DEFAULT_DIFFICULTY;
+  #ablationMode = 'full';
   #traceEnabled = false;
   #lastDecisionTrace = null;
   #decisionTraces = [];
@@ -85,6 +92,10 @@ export class AIPolicyRunner {
     return this.#difficulty;
   }
 
+  get ablationMode() {
+    return this.#ablationMode;
+  }
+
   get lastDecisionTrace() {
     return this.#lastDecisionTrace;
   }
@@ -92,6 +103,11 @@ export class AIPolicyRunner {
   setDifficulty(difficulty) {
     this.#difficulty = normalizeDifficulty(difficulty);
     return this.#difficulty;
+  }
+
+  setAblationMode(mode = 'full') {
+    this.#ablationMode = normalizeAblationMode(mode);
+    return this.#ablationMode;
   }
 
   setTraceEnabled(enabled = true) {
@@ -219,13 +235,21 @@ export class AIPolicyRunner {
   }
 
   #candidateActionAdjustmentBreakdown(game, playerIndex, action) {
-    if (game.state === GameState.DRAFT && action >= 0 && action < DRAFT_ACTIONS) {
+    if (this.#draftAdjustmentAllowed() && game.state === GameState.DRAFT && action >= 0 && action < DRAFT_ACTIONS) {
       return this.#draftScoreBreakdown(game, playerIndex, action);
     }
-    if (game.state === GameState.PLACE && action >= DRAFT_ACTIONS && action !== SKIP_ACTION) {
+    if (this.#placementAdjustmentAllowed() && game.state === GameState.PLACE && action >= DRAFT_ACTIONS && action !== SKIP_ACTION) {
       return this.#placementTieBreakBreakdown(game, playerIndex, action);
     }
     return { score: 0, reason: 'Policy score only', components: {} };
+  }
+
+  #draftAdjustmentAllowed() {
+    return this.#ablationMode === 'full' || this.#ablationMode === 'draft';
+  }
+
+  #placementAdjustmentAllowed() {
+    return this.#ablationMode === 'full' || this.#ablationMode === 'placement';
   }
 
   #difficultyProfile() {
@@ -239,6 +263,7 @@ export class AIPolicyRunner {
   #draftScoreBreakdown(game, playerIndex, draftIndex) {
     const profile = this.#difficultyProfile();
     const empty = { score: 0, reason: 'No draft adjustment', components: {} };
+    if (!this.#draftAdjustmentAllowed()) return empty;
     if (game.currentPickingPlayerIndex !== playerIndex) return empty;
     const domino = game.currentDraft?.[draftIndex]?.domino;
     if (!domino) return empty;
@@ -294,6 +319,7 @@ export class AIPolicyRunner {
 
   #placementTieBreakBreakdown(game, playerIndex, action) {
     const profile = this.#difficultyProfile();
+    if (!this.#placementAdjustmentAllowed()) return { score: 0, reason: 'No placement adjustment', components: {} };
     const decoded = this.#decodePlacementAction(action);
     if (!decoded) return { score: 0, reason: 'No placement adjustment', components: {} };
     const domino = game.currentDraft?.[decoded.draftIndex]?.domino;
@@ -1262,6 +1288,7 @@ export class AIPolicyRunner {
     const anchorEnd = option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT;
     const qualityCells = this.#cellsForPlacement(domino, option.orientation, option.x, option.y, anchorEnd);
     const quality = this.#placementScoreBreakdown(boardState, qualityCells);
+    const placementQualityScore = this.#placementAdjustmentAllowed() ? quality.components.raw * 0.45 : 0;
     return scoreDelta * weights[3]
       + placementHeuristic * weights[4]
       + crowns * weights[5]
@@ -1269,7 +1296,7 @@ export class AIPolicyRunner {
       - option.dominoNumber * weights[7]
       - (newArea - oldArea) * weights[8]
       + touches * weights[9]
-      + quality.components.raw * 0.45;
+      + placementQualityScore;
   }
 
   #dominoForOption(game, playerIndex, option) {
@@ -1382,6 +1409,7 @@ export class AIPolicyRunner {
     const normalized = {
       at: Date.now(),
       difficulty: this.#difficulty,
+      ablationMode: this.#ablationMode,
       backend: this.backend,
       ...trace,
     };

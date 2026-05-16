@@ -82,6 +82,7 @@ it('browser AI difficulty modes should each complete legal games', () => {
 
 it('browser AI decision trace explains draft and placement choices when enabled', () => {
   runner.setDifficulty('sharp');
+  runner.setAblationMode('full');
   runner.setTraceEnabled(true);
   const game = new WebGameManager(new GameConfiguration(2, false, true), 125);
   game.setGroupedPlacementTurns(true);
@@ -104,5 +105,22 @@ it('browser AI decision trace explains draft and placement choices when enabled'
   assert(runner.lastDecisionTrace?.phase === 'place');
   assert(runner.lastDecisionTrace?.chosen?.type === placeAction.type);
   assert(runner.drainDecisionTraces().length >= 2);
+  runner.setTraceEnabled(false);
+});
+
+it('browser AI ablation mode can disable tactical adjustments', () => {
+  runner.setDifficulty('sharp');
+  runner.setAblationMode('model');
+  runner.setTraceEnabled(true);
+  const game = new WebGameManager(new GameConfiguration(2, false, true), 126);
+  game.setGroupedPlacementTurns(true);
+  game.start(['Blue', 'Green']);
+
+  const action = runner.chooseAction(game, game.currentPickingPlayerIndex);
+  assert(action?.type === 'pickDraft');
+  assert(runner.ablationMode === 'model');
+  assert(runner.lastDecisionTrace?.candidates?.every((candidate) => candidate.adjustment === 0));
+
+  runner.setAblationMode('full');
   runner.setTraceEnabled(false);
 });

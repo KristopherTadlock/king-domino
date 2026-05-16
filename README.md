@@ -29,6 +29,14 @@ Hotseat can run against the browser AI with `?hotseat=1&players=2&ai=1`. The lob
 
 The AI is quiet by default. Add `aiTrace=1` to keep structured traces available in the console through `kingdominoAiTrace()` and `kingdominoAiTraces()`. Add `aiDebug=1` to also print each decision. Traces include the chosen action, top candidates, model score, heuristic adjustment, score components, and a short reason.
 
+For diagnostics, `npm run ai:eval` supports ablation suffixes:
+
+```sh
+npm run ai:eval -- --policy=sharp:model --opponent=challenger --games=100
+npm run ai:eval -- --policy=sharp:draft --opponent=challenger --games=100
+npm run ai:eval -- --policy=sharp:placement --opponent=challenger --games=100
+```
+
 ## How to run the multiplayer harness
 
 1. Start the multiplayer server with `PORT=8081 npm run start-mp`

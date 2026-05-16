@@ -75,6 +75,9 @@ search over native rollout outcomes.
 .venv/bin/python -m ai.puffer_kingdomino.policy_diagnostic --policy-kind candidate --policy ai/artifacts/distilled_search_teacher_scores_mixed_obs_v2_100k_candidate_dot_hybrid_100000_123.pt --reference-kind greedy --opponent-kind greedy --games 1000 --seed 456
 npm run ai:eval -- --policy=sharp --opponent=challenger --games=500 --seed=123
 npm run ai:eval -- --policy=sharp --opponent=random --games=500 --seed=123 --json
+npm run ai:eval -- --policy=sharp:model --opponent=challenger --games=100 --seed=123 --json
+npm run ai:eval -- --policy=sharp:draft --opponent=challenger --games=100 --seed=123 --json
+npm run ai:eval -- --policy=sharp:placement --opponent=challenger --games=100 --seed=123 --json
 ```
 
 The benchmark reports a recorded pre-optimization native baseline and the
@@ -393,6 +396,13 @@ points`, or `Keeps space`.
 `npm run ai:eval` is the browser-runner fair evaluation harness. It plays each
 seed twice with seats swapped and reports win rate, ties, average scores,
 average margin, illegal/crash count, and an approximate 95% confidence interval.
+It also reports policy-side phase diagnostics: draft value/denial pressure,
+placement immediate-score gap against the best immediate placement, skip rate,
+shape penalties, and action differences against a comparison agent. Use the
+ablation suffixes `:model`, `:draft`, and `:placement` on `--policy` or
+`--opponent` to isolate the browser policy, draft shaping, or placement
+shaping.
+
 Local reference checks for this browser-side pass:
 
 - `sharp` vs `challenger`, 500 seat-swapped games, seed `123`: `50.8%` win
@@ -401,6 +411,11 @@ Local reference checks for this browser-side pass:
   tier, but it confirms the sharper tactical layer is legal and measurable.
 - `sharp` vs `random`, 200 seat-swapped games, seed `123`: `100%` win rate,
   average score `138.9` vs `44.8`, zero illegal/crash count.
+- 100-game ablation check, seed `123`: `sharp:model` landed at `49%` vs
+  `challenger`, `sharp:draft` at `57%`, `sharp:placement` at `51%`, and full
+  `sharp` at `58%`. This points to draft shaping as the useful current lever;
+  placement shaping needs a more targeted improvement before we should increase
+  its weight.
 
 ## Action Space
 
