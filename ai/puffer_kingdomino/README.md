@@ -398,10 +398,10 @@ seed twice with seats swapped and reports win rate, ties, average scores,
 average margin, illegal/crash count, and an approximate 95% confidence interval.
 It also reports policy-side phase diagnostics: draft value/denial pressure,
 placement immediate-score gap against the best immediate placement, skip rate,
-shape penalties, and action differences against a comparison agent. Use the
-ablation suffixes `:model`, `:draft`, and `:placement` on `--policy` or
-`--opponent` to isolate the browser policy, draft shaping, or placement
-shaping.
+shape penalties, post-placement mobility for any remaining drafted tile, and
+action differences against a comparison agent. Use the ablation suffixes
+`:model`, `:draft`, and `:placement` on `--policy` or `--opponent` to isolate
+the browser policy, draft shaping, or placement shaping.
 
 Local reference checks for this browser-side pass:
 
@@ -409,6 +409,11 @@ Local reference checks for this browser-side pass:
   rate, `1.2%` ties, average score `121.1` vs `119.7`, mean margin `+1.4`,
   zero illegal/crash count. This is a small edge rather than a new strategic
   tier, but it confirms the sharper tactical layer is legal and measurable.
+- After adding post-placement mobility scoring for the remaining drafted tile,
+  `sharp` vs `challenger`, 500 seat-swapped games, seed `123`: `52.4%` win
+  rate, `0.6%` ties, average score `122.0` vs `119.7`, mean margin `+2.3`,
+  zero illegal/crash count. This is a measurable improvement, but still inside
+  a range where we should validate future placement work with 500+ game evals.
 - `sharp` vs `random`, 200 seat-swapped games, seed `123`: `100%` win rate,
   average score `138.9` vs `44.8`, zero illegal/crash count.
 - 100-game ablation check, seed `123`: `sharp:model` landed at `49%` vs

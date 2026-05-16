@@ -27,7 +27,7 @@ The performance harness defaults to the `late-placement` scenario. It builds a d
 
 Hotseat can run against the browser AI with `?hotseat=1&players=2&ai=1`. The lobby exposes the same path through Play vs AI, with `casual`, `challenger`, and `sharp` profiles. `casual` uses the in-game advisor, while `challenger` and `sharp` load the browser policy artifact and add difficulty-specific draft and placement heuristics.
 
-The AI is quiet by default. Add `aiTrace=1` to keep structured traces available in the console through `kingdominoAiTrace()` and `kingdominoAiTraces()`. Add `aiDebug=1` to also print each decision. Traces include the chosen action, top candidates, model score, heuristic adjustment, score components, and a short reason.
+The AI is quiet by default. Add `aiTrace=1` to keep structured traces available in the console through `kingdominoAiTrace()` and `kingdominoAiTraces()`. Add `aiDebug=1` to also print each decision. Traces include the chosen action, top candidates, model score, heuristic adjustment, score components, post-placement mobility, and a short reason.
 
 For diagnostics, `npm run ai:eval` supports ablation suffixes:
 

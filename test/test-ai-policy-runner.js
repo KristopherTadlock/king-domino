@@ -104,6 +104,11 @@ it('browser AI decision trace explains draft and placement choices when enabled'
   assert(placeAction?.type === 'place' || placeAction?.type === 'skip');
   assert(runner.lastDecisionTrace?.phase === 'place');
   assert(runner.lastDecisionTrace?.chosen?.type === placeAction.type);
+  if (placeAction.type === 'place') {
+    assert(runner.lastDecisionTrace?.candidates?.some((candidate) =>
+      candidate.components?.remainingMobilityCount != null
+    ));
+  }
   assert(runner.drainDecisionTraces().length >= 2);
   runner.setTraceEnabled(false);
 });

@@ -326,7 +326,9 @@ export class AIPolicyRunner {
     if (!domino) return { score: 0, reason: 'No placement adjustment', components: {} };
     const boardState = this.#boardFeatureState(game, playerIndex);
     const cells = this.#cellsForPlacement(domino, decoded.orientation, decoded.x, decoded.y, decoded.anchorEnd);
-    return this.#placementScoreBreakdown(boardState, cells, profile);
+    const afterBoardState = this.#boardStateAfterPlacement(boardState, cells.left, cells.right);
+    const outlook = this.#remainingPlacementOutlook(game, playerIndex, domino.number, afterBoardState);
+    return this.#placementScoreBreakdown(boardState, cells, profile, outlook);
   }
 
   #draftOpportunityScore(game, playerIndex, domino) {
@@ -358,8 +360,17 @@ export class AIPolicyRunner {
     };
   }
 
-  #placementScoreBreakdown(boardState, cells, profile = this.#difficultyProfile()) {
+  #placementScoreBreakdown(boardState, cells, profile = this.#difficultyProfile(), outlook = null) {
     const metrics = this.#placementMetricsForCells(boardState, cells.left, cells.right);
+    const postPlacementOutlook = outlook ?? {
+      remainingTileCount: 0,
+      remainingMobilityCount: 0,
+      remainingBestScoreDelta: 0,
+      remainingBestTouchCount: 0,
+      remainingDeadTiles: 0,
+      openAnchorCount: 0,
+      valuableAnchorCount: 0,
+    };
     const leftIsIsolatedCrown = cells.left.crowns > 0
       && metrics.leftSameTouches === 0
       && metrics.leftCastleTouches === 0;
@@ -374,12 +385,20 @@ export class AIPolicyRunner {
     const futureSpace = metrics.emptyTouchCount
       + Math.min(8, metrics.regionSizeSum) * 0.25
       + Math.min(6, metrics.regionCrownsSum) * 0.5;
-    const raw = Math.max(0, metrics.scoreDelta) * 1.35
+    const remainingMobilityScore = postPlacementOutlook.remainingTileCount
+      ? Math.log1p(Math.max(0, postPlacementOutlook.remainingMobilityCount)) * 0.45
+        + postPlacementOutlook.remainingBestScoreDelta * 1.15
+        + postPlacementOutlook.remainingBestTouchCount * 0.55
+        + Math.min(8, postPlacementOutlook.valuableAnchorCount) * 0.12
+        - postPlacementOutlook.remainingDeadTiles * 7
+      : 0;
+    const raw = Math.max(0, metrics.scoreDelta) * 1.65
       + metrics.sameTouchCount * 1.25
       + metrics.castleTouchCount * 0.2
-      + futureSpace * 0.28
+      + futureSpace * 0.18
+      + remainingMobilityScore
       - growthPenalty * 1.05
-      - constraintPressure * 1.2
+      - constraintPressure * 1.45
       - isolatedCrownPenalty * 2.0
       - crowdedMismatch * 0.45
       - metrics.distance * 0.045;
@@ -407,8 +426,76 @@ export class AIPolicyRunner {
         isolatedCrownPenalty,
         crowdedMismatch,
         distance: metrics.distance,
+        remainingTileCount: postPlacementOutlook.remainingTileCount,
+        remainingMobilityCount: postPlacementOutlook.remainingMobilityCount,
+        remainingBestScoreDelta: postPlacementOutlook.remainingBestScoreDelta,
+        remainingBestTouchCount: postPlacementOutlook.remainingBestTouchCount,
+        remainingDeadTiles: postPlacementOutlook.remainingDeadTiles,
+        openAnchorCount: postPlacementOutlook.openAnchorCount,
+        valuableAnchorCount: postPlacementOutlook.valuableAnchorCount,
       },
     };
+  }
+
+  #boardStateAfterPlacement(boardState, left, right) {
+    const tiles = new Map(boardState.tiles);
+    tiles.set(`${left.x},${left.y}`, { ...left });
+    tiles.set(`${right.x},${right.y}`, { ...right });
+    return {
+      tiles,
+      minX: Math.min(boardState.minX, left.x, right.x),
+      maxX: Math.max(boardState.maxX, left.x, right.x),
+      minY: Math.min(boardState.minY, left.y, right.y),
+      maxY: Math.max(boardState.maxY, left.y, right.y),
+    };
+  }
+
+  #remainingPlacementOutlook(game, playerIndex, placedDominoNumber, boardState) {
+    const remaining = (game.currentDraft ?? [])
+      .filter((slot) =>
+        slot?.player === playerIndex
+        && !slot?.placed
+        && slot?.domino
+        && slot.domino.number !== placedDominoNumber
+      )
+      .map((slot) => slot.domino);
+    const anchors = this.#candidateAnchors(boardState);
+    let remainingMobilityCount = 0;
+    let remainingBestScoreDelta = 0;
+    let remainingBestTouchCount = 0;
+    let remainingDeadTiles = 0;
+    for (const domino of remaining) {
+      const metrics = this.#bestMobilityMetrics(boardState, domino);
+      remainingMobilityCount += metrics.count;
+      remainingBestScoreDelta = Math.max(remainingBestScoreDelta, metrics.bestScoreDelta);
+      remainingBestTouchCount = Math.max(remainingBestTouchCount, metrics.bestTouchCount);
+      if (metrics.count === 0) remainingDeadTiles += 1;
+    }
+    return {
+      remainingTileCount: remaining.length,
+      remainingMobilityCount,
+      remainingBestScoreDelta,
+      remainingBestTouchCount,
+      remainingDeadTiles,
+      openAnchorCount: anchors.length,
+      valuableAnchorCount: this.#valuableAnchorCount(boardState, anchors),
+    };
+  }
+
+  #valuableAnchorCount(boardState, anchors) {
+    let count = 0;
+    for (const anchor of anchors) {
+      const seenTerrains = new Set();
+      let hasCrownNeighbor = false;
+      for (const neighbor of this.#neighbors(anchor.x, anchor.y)) {
+        const tile = this.#tileAt(boardState, neighbor.x, neighbor.y);
+        if (!tile || tile.terrainPlus <= TERRAIN.castle + 1) continue;
+        seenTerrains.add(tile.terrainPlus);
+        if ((tile.crowns ?? 0) > 0) hasCrownNeighbor = true;
+      }
+      if (hasCrownNeighbor || seenTerrains.size >= 2) count += 1;
+    }
+    return count;
   }
 
   #dominoTerrainAffinity(boardState, domino) {
@@ -1200,18 +1287,28 @@ export class AIPolicyRunner {
       const score = this.#weightedPlacementScore(game, playerIndex, option, weights);
       if (traceCandidates) {
         const domino = this.#dominoForOption(game, playerIndex, option);
-        const quality = domino
-          ? this.#placementScoreBreakdown(
-            this.#boardFeatureState(game, playerIndex),
-            this.#cellsForPlacement(
-              domino,
-              option.orientation,
-              option.x,
-              option.y,
-              option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT,
+        let quality = { score: 0, reason: 'Unknown domino', components: {} };
+        if (domino) {
+          const boardState = this.#boardFeatureState(game, playerIndex);
+          const cells = this.#cellsForPlacement(
+            domino,
+            option.orientation,
+            option.x,
+            option.y,
+            option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT,
+          );
+          quality = this.#placementScoreBreakdown(
+            boardState,
+            cells,
+            this.#difficultyProfile(),
+            this.#remainingPlacementOutlook(
+              game,
+              playerIndex,
+              domino.number,
+              this.#boardStateAfterPlacement(boardState, cells.left, cells.right),
             ),
-          )
-          : { score: 0, reason: 'Unknown domino', components: {} };
+          );
+        }
         traceCandidates.push({
           action: {
             type: 'place',
@@ -1287,7 +1384,17 @@ export class AIPolicyRunner {
     const boardState = this.#boardFeatureState(game, playerIndex);
     const anchorEnd = option.anchorEnd === DominoEnd.RIGHT ? ANCHOR_RIGHT : ANCHOR_LEFT;
     const qualityCells = this.#cellsForPlacement(domino, option.orientation, option.x, option.y, anchorEnd);
-    const quality = this.#placementScoreBreakdown(boardState, qualityCells);
+    const quality = this.#placementScoreBreakdown(
+      boardState,
+      qualityCells,
+      this.#difficultyProfile(),
+      this.#remainingPlacementOutlook(
+        game,
+        playerIndex,
+        domino.number,
+        this.#boardStateAfterPlacement(boardState, qualityCells.left, qualityCells.right),
+      ),
+    );
     const placementQualityScore = this.#placementAdjustmentAllowed() ? quality.components.raw * 0.45 : 0;
     return scoreDelta * weights[3]
       + placementHeuristic * weights[4]

@@ -293,6 +293,11 @@ function createDiagnostics() {
       growthPenalty: 0,
       constraintPressure: 0,
       isolatedCrownPenalty: 0,
+      remainingMobilityCount: 0,
+      remainingDeadTiles: 0,
+      remainingBestScoreDelta: 0,
+      openAnchorCount: 0,
+      valuableAnchorCount: 0,
     },
     comparison: {
       count: 0,
@@ -351,6 +356,11 @@ function recordPolicyDecision(diagnostics, game, playerIndex, action, trace, com
   diagnostics.placement.growthPenalty += components.growthPenalty ?? 0;
   diagnostics.placement.constraintPressure += components.constraintPressure ?? 0;
   diagnostics.placement.isolatedCrownPenalty += components.isolatedCrownPenalty ?? 0;
+  diagnostics.placement.remainingMobilityCount += components.remainingMobilityCount ?? 0;
+  diagnostics.placement.remainingDeadTiles += components.remainingDeadTiles ?? 0;
+  diagnostics.placement.remainingBestScoreDelta += components.remainingBestScoreDelta ?? 0;
+  diagnostics.placement.openAnchorCount += components.openAnchorCount ?? 0;
+  diagnostics.placement.valuableAnchorCount += components.valuableAnchorCount ?? 0;
 
   const chosenDelta = placementDelta(game, playerIndex, action);
   const bestDelta = bestPlacementDelta(game, playerIndex);
@@ -381,6 +391,11 @@ function compactTrace(trace, action, compareAction, game, playerIndex) {
       growthPenalty: candidate.components?.growthPenalty,
       constraintPressure: candidate.components?.constraintPressure,
       isolatedCrownPenalty: candidate.components?.isolatedCrownPenalty,
+      remainingMobilityCount: candidate.components?.remainingMobilityCount,
+      remainingDeadTiles: candidate.components?.remainingDeadTiles,
+      remainingBestScoreDelta: candidate.components?.remainingBestScoreDelta,
+      openAnchorCount: candidate.components?.openAnchorCount,
+      valuableAnchorCount: candidate.components?.valuableAnchorCount,
     },
   }));
   return {
@@ -523,6 +538,11 @@ function summarizeDiagnostics(items) {
       averageGrowthPenalty: avg(total.placement.growthPenalty, total.placement.count),
       averageConstraintPressure: avg(total.placement.constraintPressure, total.placement.count),
       averageIsolatedCrownPenalty: avg(total.placement.isolatedCrownPenalty, total.placement.count),
+      averageRemainingMobilityCount: avg(total.placement.remainingMobilityCount, total.placement.count),
+      averageRemainingDeadTiles: avg(total.placement.remainingDeadTiles, total.placement.count),
+      averageRemainingBestScoreDelta: avg(total.placement.remainingBestScoreDelta, total.placement.count),
+      averageOpenAnchorCount: avg(total.placement.openAnchorCount, total.placement.count),
+      averageValuableAnchorCount: avg(total.placement.valuableAnchorCount, total.placement.count),
     },
     comparison: {
       count: total.comparison.count,
