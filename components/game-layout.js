@@ -4446,10 +4446,76 @@ export class GameLayout extends HTMLElement {
 
   #inviteUrl() {
     const url = new URL('/', location.href);
+    url.searchParams.set('join', '1');
     if (this.#roomId) url.searchParams.set('room', this.#roomId);
     if (this.#game?.seed != null) url.searchParams.set('seed', String(this.#game.seed));
     url.searchParams.set('players', String(this.#playerCount));
     return url.toString();
+  }
+
+  #baseShareUrl() {
+    return new URL('/', location.href).toString();
+  }
+
+  #inviteShareData() {
+    const room = this.#roomId ?? '';
+    const playerCount = this.#normalizePlayerCount(this.#playerCount, 2);
+    return {
+      title: 'Join my King Domino game',
+      text: `Join my ${playerCount}-player King Domino game${room ? ` in room ${room}` : ''}.`,
+      url: this.#inviteUrl(),
+    };
+  }
+
+  #siteShareData() {
+    return {
+      title: 'King Domino',
+      text: 'Play King Domino online.',
+      url: this.#baseShareUrl(),
+    };
+  }
+
+  async #shareLink({ data, button, fallbackField, fallbackInput, fallbackLabel, selectedText = 'Link Selected' }) {
+    const nav = globalThis.navigator;
+    const originalText = button?.textContent ?? '';
+    const resetButton = (delay = 1400) => {
+      if (!button) return;
+      globalThis.setTimeout?.(() => {
+        if (button.isConnected) button.textContent = originalText;
+      }, delay);
+    };
+
+    if (nav?.share) {
+      try {
+        await nav.share(data);
+        if (button?.isConnected) button.textContent = 'Shared';
+        resetButton();
+        return;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          if (button?.isConnected) button.textContent = originalText;
+          return;
+        }
+      }
+    }
+
+    try {
+      if (typeof nav?.clipboard?.writeText !== 'function') throw new Error('Clipboard unavailable');
+      await nav?.clipboard?.writeText(data.url);
+      if (button?.isConnected) button.textContent = 'Copied';
+      resetButton();
+      return;
+    } catch {
+      if (fallbackLabel) fallbackLabel.textContent = 'Share link';
+      if (fallbackInput) {
+        fallbackInput.value = data.url;
+        fallbackField.hidden = false;
+        fallbackInput.focus();
+        fallbackInput.select();
+      }
+      if (button?.isConnected) button.textContent = selectedText;
+      resetButton(1800);
+    }
   }
 
   #enterHomeMode(url = new URL(location.href), preferredName = '') {
@@ -8931,13 +8997,13 @@ export class GameLayout extends HTMLElement {
     roomCode.textContent = this.#roomId ?? '';
 
     copy.textContent = this.#lobbyNotice
-      ? `${this.#lobbyNotice} Send the invite link again, wait for another player, or end this game.`
-      : `Send the invite link or room code. The game will unlock when all ${this.#playerCount} players join.`;
+      ? `${this.#lobbyNotice} Send the game invite again, wait for another player, or end this game.`
+      : `Invite players into this specific room. Share the app link only when you want to send the site without this game.`;
 
     const inviteField = document.createElement('div');
     inviteField.className = 'startField inviteField';
     const inviteLabel = document.createElement('label');
-    inviteLabel.textContent = 'Invite link';
+    inviteLabel.textContent = 'Share link';
     const inviteInput = document.createElement('input');
     inviteInput.type = 'text';
     inviteInput.readOnly = true;
@@ -8967,36 +9033,46 @@ export class GameLayout extends HTMLElement {
     const copyInvite = document.createElement('button');
     copyInvite.type = 'button';
     copyInvite.className = 'startPrimary';
-    copyInvite.textContent = 'Copy Link';
+    copyInvite.textContent = 'Invite Player';
+    const shareSite = document.createElement('button');
+    shareSite.type = 'button';
+    shareSite.className = 'startSecondary';
+    shareSite.textContent = 'Share App';
+    actions.append(copyInvite, shareSite);
+
+    const secondaryActions = document.createElement('div');
+    secondaryActions.className = 'startActions single';
     const leave = document.createElement('button');
     leave.type = 'button';
     leave.className = 'startSecondary';
     leave.textContent = 'End Game';
-    actions.append(copyInvite, leave);
-
-    const resetCopyButton = () => {
-      if (copyInvite.isConnected) copyInvite.textContent = 'Copy Link';
-    };
+    secondaryActions.append(leave);
 
     copyInvite.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(inviteInput.value);
-        copyInvite.textContent = 'Copied';
-        setTimeout(resetCopyButton, 1400);
-      } catch {
-        inviteField.hidden = false;
-        inviteInput.focus();
-        inviteInput.select();
-        copyInvite.textContent = 'Link Selected';
-        setTimeout(resetCopyButton, 1800);
-      }
+      await this.#shareLink({
+        data: this.#inviteShareData(),
+        button: copyInvite,
+        fallbackField: inviteField,
+        fallbackInput: inviteInput,
+        fallbackLabel: inviteLabel,
+      });
+    });
+
+    shareSite.addEventListener('click', async () => {
+      await this.#shareLink({
+        data: this.#siteShareData(),
+        button: shareSite,
+        fallbackField: inviteField,
+        fallbackInput: inviteInput,
+        fallbackLabel: inviteLabel,
+      });
     });
 
     leave.addEventListener('click', () => {
       this.#returnToStartScreen();
     });
 
-    card.append(kicker, title, roomCode, copy, inviteField, players, actions);
+    card.append(kicker, title, roomCode, copy, inviteField, players, actions, secondaryActions);
     this.#startOverlay.append(card);
     return true;
   }
@@ -13386,7 +13462,6 @@ export class GameLayout extends HTMLElement {
   }
 
   #placementGhostAnimationFor(playerIndex, drafted, leftCoord, rightCoord) {
-    const boardOrigin = this.#boardOriginForPlayer(playerIndex);
     const targetX = leftCoord.x;
     const targetZ = leftCoord.y;
     const rightOffset = {
@@ -13407,33 +13482,18 @@ export class GameLayout extends HTMLElement {
       return { animation: this.#placementGhostAnimation, rightOffset };
     }
 
-    const previous = this.#placementGhostAnimation;
-    let sourceX = targetX;
-    let sourceZ = targetZ;
-    if (
-      previous
-      && previous.playerIndex === playerIndex
-      && previous.dominoNumber === drafted.domino.number
-    ) {
-      const current = this.#placementGhostAnimationCurrentPosition(previous);
-      sourceX = current?.x ?? previous.targetX;
-      sourceZ = current?.z ?? previous.targetZ;
-    } else {
-      const rackTarget = this.#canvasPlacementChoiceTargetForDomino(playerIndex, drafted.domino.number);
-      if (rackTarget) {
-        sourceX = rackTarget.leftX - boardOrigin.x;
-        sourceZ = rackTarget.z - boardOrigin.z;
-      }
-    }
-
+    // The ghost is the player's current placement truth. It should occupy the
+    // selected board cells immediately; reserve/return animations already carry
+    // the "piece moved from the rack" story without making confirmation feel
+    // offset from the actual legal placement.
     this.#placementGhostAnimation = {
       key,
       playerIndex,
       dominoNumber: drafted.domino.number,
       startedAt: performance.now(),
-      duration: 380,
-      sourceX,
-      sourceZ,
+      duration: 180,
+      sourceX: targetX,
+      sourceZ: targetZ,
       targetX,
       targetZ,
     };

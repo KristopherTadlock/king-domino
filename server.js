@@ -71,6 +71,90 @@ function contentTypeFor(p) {
   return 'application/octet-stream';
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
+}
+
+function publicOrigin(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const proto = forwardedProto || 'http';
+  const host = forwardedHost || req.headers.host || `127.0.0.1:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+function inviteUrlFor(origin, sourceUrl, roomId, playerCount) {
+  const inviteUrl = new URL('/', origin);
+  inviteUrl.searchParams.set('join', '1');
+  if (roomId) inviteUrl.searchParams.set('room', roomId);
+  const seed = sourceUrl.searchParams.get('seed');
+  if (seed != null && seed !== '') inviteUrl.searchParams.set('seed', String(seed).slice(0, 16));
+  inviteUrl.searchParams.set('players', String(playerCount));
+  return inviteUrl.toString();
+}
+
+function shareMetadataForRequest(req) {
+  const origin = publicOrigin(req);
+  const url = new URL(req.url || '/', origin);
+  const roomId = normalizeRoomId(url.searchParams.get('room') || '');
+  const playerCount = normalizePlayerCount(url.searchParams.get('players') || '');
+  const isInvite = url.searchParams.get('join') === '1' && roomId;
+  const title = isInvite ? 'Join my King Domino game' : 'King Domino';
+  const description = isInvite
+    ? `Room ${roomId} is waiting for you. Join this ${playerCount}-player tabletop kingdom game.`
+    : 'Draft dominoes, build a tiny kingdom, and battle for the high score.';
+  const pageUrl = isInvite ? inviteUrlFor(origin, url, roomId, playerCount) : new URL('/', origin).toString();
+
+  return {
+    title,
+    description,
+    url: pageUrl,
+    image: new URL('/assets/share-card.png', origin).toString(),
+    imageAlt: 'A colorful King Domino tabletop with castles, fields, water, forest, pasture, bog, and mines.',
+  };
+}
+
+function shareMetaHtml(meta) {
+  const title = escapeHtml(meta.title);
+  const description = escapeHtml(meta.description);
+  const url = escapeHtml(meta.url);
+  const image = escapeHtml(meta.image);
+  const imageAlt = escapeHtml(meta.imageAlt);
+  return [
+    '<!-- share-meta:start -->',
+    `    <title>${title}</title>`,
+    `    <meta name="description" content="${description}" />`,
+    '    <meta property="og:type" content="website" />',
+    '    <meta property="og:site_name" content="King Domino" />',
+    `    <meta property="og:title" content="${title}" />`,
+    `    <meta property="og:description" content="${description}" />`,
+    `    <meta property="og:url" content="${url}" />`,
+    `    <meta property="og:image" content="${image}" />`,
+    '    <meta property="og:image:width" content="1200" />',
+    '    <meta property="og:image:height" content="630" />',
+    `    <meta property="og:image:alt" content="${imageAlt}" />`,
+    '    <meta name="twitter:card" content="summary_large_image" />',
+    `    <meta name="twitter:title" content="${title}" />`,
+    `    <meta name="twitter:description" content="${description}" />`,
+    `    <meta name="twitter:image" content="${image}" />`,
+    '    <!-- share-meta:end -->',
+  ].join('\n');
+}
+
+function withShareMetadata(html, req) {
+  const meta = shareMetadataForRequest(req);
+  return html.replace(
+    /<!-- share-meta:start -->[\s\S]*?<!-- share-meta:end -->/,
+    shareMetaHtml(meta),
+  );
+}
+
 function safeResolve(urlPath) {
   const clean = urlPath.split('?')[0].split('#')[0];
   const decoded = decodeURIComponent(clean);
@@ -97,6 +181,11 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', contentTypeFor(filePath));
     // No cache during dev
     res.setHeader('Cache-Control', 'no-store');
+    if (filePath.endsWith('index.html')) {
+      const html = await readFile(filePath, 'utf8');
+      res.end(withShareMetadata(html, req));
+      return;
+    }
     createReadStream(filePath).pipe(res);
   } catch (e) {
     res.writeHead(500);
